@@ -1,0 +1,156 @@
+//! Headless frame-time budgets: a window of 500 controls; the first frame (layout and full
+//! paint), a hover change (one control repaints), a 10 MB document typing. Prints the times
+//! and exits non-zero when a budget is exceeded (release builds only are meaningful).
+
+use std::time::{Duration, Instant};
+
+use appkit::amalfi::button::{PushButton, PushVariant};
+use appkit::amalfi::toggles::Toggle;
+use appkit::core::layout::Alignment;
+use appkit::core::{Event, Grid, Mods, Prop, Ui, Value, WindowKind};
+use appkit::geom::{Point, Size};
+use appkit::text::TextStyle;
+use appkit::text::view::TextView;
+
+fn main() {
+    let mut failures = Vec::new();
+    let mut ui = Ui::new_headless();
+    let win = ui.create_window(WindowKind::Normal, Size::new(1600.0, 1000.0));
+    let grid = ui.create(Grid {
+        columns: 20,
+        column_spacing: 8.0,
+        row_spacing: 8.0,
+        alignment: Alignment::TOP_LEADING,
+    });
+    let mut first = None;
+    for i in 0..500 {
+        let v = if i % 2 == 0 {
+            ui.create(PushButton::new("Button").variant(PushVariant::Secondary))
+        } else {
+            ui.create(Toggle::checkbox().label("Check"))
+        };
+        first.get_or_insert(v);
+        ui.add_child(grid, v);
+    }
+    let _ = ui.set(grid, Prop::Padding, Value::from(16.0));
+    ui.set_content(win, grid);
+    ui.show_window(win);
+    let t = Instant::now();
+    let img = ui.snapshot(win, 1.0);
+    let first_frame = t.elapsed();
+    println!("first frame (500 controls, layout + full raster paint): {first_frame:?}");
+    if img.is_none() || first_frame > Duration::from_millis(400) {
+        failures.push("first frame over 400 ms");
+    }
+    // Hover one control: only it is recorded again; the damage is its bounds.
+    let Some(b) = first else { return };
+    let center = ui.tree.window_rect(b).center();
+    let t = Instant::now();
+    ui.pointer_move(win, center, Mods::empty());
+    let damage = ui.prepare_frame(win);
+    let hover = t.elapsed();
+    println!(
+        "hover change: {hover:?}, damage {damage:?}, control {:?}",
+        ui.tree.window_rect(b)
+    );
+    let t = Instant::now();
+    for _ in 0..30 {
+        ui.advance(1.0 / 60.0);
+        let _ = ui.prepare_frame(win);
+    }
+    println!("hover fade, per frame: {:?}", t.elapsed() / 30);
+    if hover > Duration::from_millis(8) {
+        failures.push("hover over 8 ms");
+    }
+    // An animation beside 500 static controls (a spinner over a busy window), drawn at 2×:
+    // the frame (layout, recording, raster painting) must fit 120 Hz, 8.3 ms. The raster
+    // cache draws the static controls from an image.
+    for cache in [false, true] {
+        let mut ui = Ui::new_headless();
+        ui.set_raster_cache(cache);
+        let win = ui.create_window(WindowKind::Normal, Size::new(1600.0, 1000.0));
+        let col = ui.create(appkit::core::Stack::column(8.0));
+        let grid = ui.create(Grid {
+            columns: 20,
+            column_spacing: 8.0,
+            row_spacing: 8.0,
+            alignment: Alignment::TOP_LEADING,
+        });
+        for i in 0..500 {
+            let v = if i % 2 == 0 {
+                ui.create(PushButton::new("Button").variant(PushVariant::Secondary))
+            } else {
+                ui.create(Toggle::checkbox().label("Check"))
+            };
+            ui.add_child(grid, v);
+        }
+        let spin = ui.create(appkit::amalfi::progress::Spinner::new());
+        ui.add_child(col, spin);
+        ui.add_child(col, grid);
+        ui.set_content(win, col);
+        ui.show_window(win);
+        let Some(mut surface) = skia_safe::surfaces::raster_n32_premul((3200, 2000)) else {
+            return;
+        };
+        let mut worst = Duration::ZERO;
+        let mut total = Duration::ZERO;
+        let frames = 60;
+        for f in 0..frames + 5 {
+            let t = Instant::now();
+            ui.advance(1.0 / 120.0);
+            let _ = ui.prepare_frame(win);
+            let canvas = surface.canvas();
+            canvas.save();
+            canvas.scale((2.0, 2.0));
+            ui.paint_window(win, canvas, None);
+            canvas.restore();
+            let dt = t.elapsed();
+            // The first frames record everything and make the images.
+            if f >= 5 {
+                worst = worst.max(dt);
+                total += dt;
+            }
+        }
+        let label = if cache { "on" } else { "off" };
+        println!(
+            "animation beside 500 controls at 2×, raster cache {label}: {:?} per frame, worst {worst:?}, cache {} KB",
+            total / frames,
+            ui.raster_cache_bytes() / 1024
+        );
+        if cache && worst > Duration::from_micros(8333) {
+            failures.push("animated frame over 8.3 ms (120 Hz)");
+        }
+    }
+    let _ = Event::Activate;
+    let _ = Point::ZERO;
+    // Typing in a 10 MB document.
+    let mut ui = Ui::new_headless();
+    let w = ui.create_window(WindowKind::Normal, Size::new(800.0, 600.0));
+    let text = "The quick brown fox jumps over the lazy dog, again and again, every day! ok\n"
+        .repeat(130_000);
+    let t = Instant::now();
+    let v = ui.create(TextView::new(&text, TextStyle::default()));
+    let _ = ui.set(v, Prop::MaxWidth, Value::from(f32::INFINITY));
+    let _ = ui.set(v, Prop::MaxHeight, Value::from(f32::INFINITY));
+    ui.set_content(w, v);
+    ui.show_window(w);
+    ui.prepare_frame(w);
+    let open = t.elapsed();
+    ui.set_focus(v, false);
+    let t = Instant::now();
+    for _ in 0..50 {
+        ui.text_input(w, "a");
+        ui.prepare_frame(w);
+    }
+    let per_key = t.elapsed() / 50;
+    println!("10 MB document: open {open:?}, typing {per_key:?} per key");
+    if per_key > Duration::from_millis(8) {
+        failures.push("typing over 8 ms");
+    }
+    if failures.is_empty() {
+        println!("budgets met");
+    } else {
+        eprintln!("budgets exceeded: {}", failures.join(", "));
+        std::process::exit(1);
+    }
+}

@@ -1,0 +1,22 @@
+[package]
+name = "appkit-rs"
+description = "AppKit's safe Rust API: the C ABI of libappkit.so wrapped in Rust objects"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[features]
+default = ["static"]
+# Link appkit statically (inside this workspace: tests, examples).
+static = ["dep:appkit"]
+# Link the system's libappkit.so (distribution builds: `--no-default-features --features dynamic`).
+dynamic = ["appkit-sys/dynamic"]
+
+[dependencies]
+appkit-sys = { path = "../appkit-sys" }
+appkit = { path = "../appkit", optional = true }
+
+[lints]
+workspace = true

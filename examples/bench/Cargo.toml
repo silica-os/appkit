@@ -1,0 +1,19 @@
+[package]
+name = "appkit-bench"
+description = "Frame time budgets of AppKit, headless (cargo xtask bench)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "appkit-bench"
+path = "src/main.rs"
+
+[dependencies]
+appkit = { path = "../../crates/appkit" }
+skia-safe.workspace = true
+
+[lints]
+workspace = true

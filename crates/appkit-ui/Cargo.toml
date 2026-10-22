@@ -1,0 +1,19 @@
+[package]
+name = "appkit-ui"
+description = "AppKit's declarative layer (SwiftUI-like): views as values, state, a reconciler onto appkit-rs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[features]
+default = ["static"]
+static = ["appkit-rs/static"]
+dynamic = ["appkit-rs/dynamic"]
+
+[dependencies]
+appkit-rs = { path = "../appkit-rs", default-features = false }
+
+[lints]
+workspace = true

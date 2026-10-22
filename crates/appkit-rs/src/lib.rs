@@ -1,0 +1,1754 @@
+//! AppKit's safe Rust API (the imperative layer, AppKit-like): views, windows, menus, timers
+//! and custom drawing, as Rust objects over the stable C ABI of `libappkit.so`. All real work
+//! happens in the shared library; this crate only translates.
+//!
+//! Handles are reference counted: cloning a [`View`] retains it, dropping releases it.
+//! Callbacks are Rust closures, run on the UI thread, and may use the API.
+
+// The ABI calls are `unsafe` (FFI); each is wrapped with the invariants stated.
+#![allow(unsafe_code)]
+
+mod ids;
+
+#[cfg(feature = "static")]
+use appkit as _;
+
+use std::cell::RefCell;
+use std::ffi::{CString, c_char, c_void};
+use std::ptr::NonNull;
+use std::rc::Rc;
+
+pub use ids::{Kind, Prop, Signal};
+use appkit_sys as sys;
+use appkit_sys::functions as f;
+
+/// An error of the API (the ABI's status).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Error {
+    /// The view or window no longer exists.
+    NoSuchObject,
+    /// The view does not have this property.
+    UnknownProperty,
+    /// The value has the wrong type.
+    BadValue,
+    /// A cycle, or a child with another parent.
+    BadHierarchy,
+    /// Another thread than the UI thread.
+    WrongThread,
+    /// An invalid argument (a string with a NUL byte …).
+    InvalidArgument,
+    /// The platform failed.
+    Platform,
+    /// No runtime: inside [`run`] or after [`Headless::new`] only.
+    NoRuntime,
+    /// Another status.
+    Other(i32),
+}
+
+impl Error {
+    fn from_status(s: i32) -> Error {
+        match s {
+            sys::AK_ERROR_NO_SUCH_OBJECT => Error::NoSuchObject,
+            sys::AK_ERROR_UNKNOWN_PROPERTY => Error::UnknownProperty,
+            sys::AK_ERROR_BAD_VALUE => Error::BadValue,
+            sys::AK_ERROR_BAD_HIERARCHY => Error::BadHierarchy,
+            sys::AK_ERROR_WRONG_THREAD => Error::WrongThread,
+            sys::AK_ERROR_INVALID_ARGUMENT => Error::InvalidArgument,
+            sys::AK_ERROR_PLATFORM => Error::Platform,
+            sys::AK_ERROR_NO_RUNTIME => Error::NoRuntime,
+            other => Error::Other(other),
+        }
+    }
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, fm: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(fm, "{self:?}")
+    }
+}
+
+impl std::error::Error for Error {}
+
+/// A result of the API.
+pub type Result<T> = std::result::Result<T, Error>;
+
+fn check(s: i32) -> Result<()> {
+    if s == sys::AK_OK {
+        Ok(())
+    } else {
+        Err(Error::from_status(s))
+    }
+}
+
+fn last_error() -> Error {
+    // SAFETY: no arguments; reads the thread's last status.
+    Error::from_status(unsafe { f::ak_last_status() })
+}
+
+fn cstring(s: &str) -> Result<CString> {
+    CString::new(s).map_err(|_| Error::InvalidArgument)
+}
+
+/// A colour (straight alpha).
+pub type Color = sys::AKColor;
+
+/// A colour from `0xRRGGBBAA`.
+pub fn rgba(v: u32) -> Color {
+    Color {
+        r: (v >> 24) as u8,
+        g: (v >> 16) as u8,
+        b: (v >> 8) as u8,
+        a: v as u8,
+    }
+}
+
+/// A rectangle.
+pub type Rect = sys::AKRect;
+
+/// A value received with a signal.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum Value {
+    /// None.
+    #[default]
+    None,
+    /// Boolean.
+    Bool(bool),
+    /// Integer.
+    Int(i64),
+    /// Number.
+    Float(f64),
+    /// Text.
+    Str(String),
+    /// Colour.
+    Color(Color),
+    /// Point.
+    Point(f32, f32),
+    /// Size.
+    Size(f32, f32),
+    /// Rectangle.
+    Rect(Rect),
+    /// Byte range.
+    Range(usize, usize),
+    /// List of strings.
+    List(Vec<String>),
+    /// A table cell: row key (row index, or node id in an outline), column, text.
+    Cell {
+        /// Row key.
+        row: u64,
+        /// Column.
+        column: u32,
+        /// Text (an in-place edit's result).
+        text: String,
+    },
+}
+
+impl Value {
+    /// The value as an integer, if it is a number.
+    pub fn as_int(&self) -> Option<i64> {
+        match self {
+            Value::Int(i) => Some(*i),
+            Value::Float(f) => Some(*f as i64),
+            Value::Bool(b) => Some(i64::from(*b)),
+            _ => None,
+        }
+    }
+
+    /// The value as a number.
+    pub fn as_f64(&self) -> Option<f64> {
+        match self {
+            Value::Int(i) => Some(*i as f64),
+            Value::Float(f) => Some(*f),
+            _ => None,
+        }
+    }
+
+    /// The text.
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            Value::Str(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// The value as a boolean.
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            Value::Bool(b) => Some(*b),
+            Value::Int(i) => Some(*i != 0),
+            _ => None,
+        }
+    }
+
+    fn from_c(v: &sys::AKValue) -> Value {
+        let text = || -> String {
+            if v.text.is_null() || v.text_len == 0 {
+                return String::new();
+            }
+            // SAFETY: appkit hands `text_len` valid bytes for the callback's duration.
+            let bytes = unsafe { std::slice::from_raw_parts(v.text.cast::<u8>(), v.text_len) };
+            String::from_utf8_lossy(bytes).into_owned()
+        };
+        match v.kind {
+            sys::AK_VALUE_BOOL => Value::Bool(v.b != 0),
+            sys::AK_VALUE_INT => Value::Int(v.i),
+            sys::AK_VALUE_FLOAT => Value::Float(v.f),
+            sys::AK_VALUE_STRING => Value::Str(text()),
+            sys::AK_VALUE_COLOR => Value::Color(v.color),
+            sys::AK_VALUE_POINT => Value::Point(v.rect.x, v.rect.y),
+            sys::AK_VALUE_SIZE => Value::Size(v.rect.width, v.rect.height),
+            sys::AK_VALUE_RECT => Value::Rect(v.rect),
+            sys::AK_VALUE_RANGE => {
+                Value::Range(usize::try_from(v.i).unwrap_or(0), v.f.max(0.0) as usize)
+            }
+            sys::AK_VALUE_CELL => Value::Cell {
+                row: v.i as u64,
+                column: v.f.clamp(0.0, f64::from(u32::MAX)) as u32,
+                text: text(),
+            },
+            sys::AK_VALUE_STRING_LIST => {
+                let t = text();
+                if t.is_empty() {
+                    Value::List(Vec::new())
+                } else {
+                    Value::List(t.split('\0').map(str::to_string).collect())
+                }
+            }
+            _ => Value::None,
+        }
+    }
+}
+
+type RowCb = Box<dyn FnMut(usize) -> Option<View>>;
+type CellCb = Box<dyn FnMut(u64, u32) -> Option<View>>;
+
+/// A made view handed to appkit, which takes over its reference.
+fn hand_over(v: Option<View>) -> *mut sys::AKView {
+    match v {
+        Some(v) => {
+            let p = v.as_ptr();
+            std::mem::forget(v);
+            p
+        }
+        None => std::ptr::null_mut(),
+    }
+}
+
+unsafe extern "C" fn call_row(index: u64, user: *mut c_void) -> *mut sys::AKView {
+    // SAFETY: `user` is a boxed `RowCb`, alive until destroy.
+    let cb = unsafe { &mut *(user.cast::<RowCb>()) };
+    hand_over(usize::try_from(index).ok().and_then(cb))
+}
+
+unsafe extern "C" fn call_cell(key: u64, column: u32, user: *mut c_void) -> *mut sys::AKView {
+    // SAFETY: `user` is a boxed `CellCb`, alive until destroy.
+    let cb = unsafe { &mut *(user.cast::<CellCb>()) };
+    hand_over(cb(key, column))
+}
+
+/// A column of a table or an outline.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Column {
+    /// Title.
+    pub title: String,
+    /// Width.
+    pub width: f32,
+    /// Narrowest by resizing (0: the default).
+    pub min_width: f32,
+    /// Widest by resizing (0: no limit).
+    pub max_width: f32,
+    /// Cells can be edited in place.
+    pub editable: bool,
+    /// Clicking the title sorts.
+    pub sortable: bool,
+    /// The right edge can be dragged.
+    pub resizable: bool,
+    /// Title alignment: 0 leading, 1 centre, 2 trailing.
+    pub align: u8,
+}
+
+impl Column {
+    /// A sortable, resizable column.
+    pub fn new(title: &str, width: f32) -> Column {
+        Column {
+            title: title.to_string(),
+            width,
+            min_width: 0.0,
+            max_width: 0.0,
+            editable: false,
+            sortable: true,
+            resizable: true,
+            align: 0,
+        }
+    }
+
+    /// Cells can be edited.
+    pub fn editable(mut self) -> Self {
+        self.editable = true;
+        self
+    }
+
+    /// Not sortable.
+    pub fn unsortable(mut self) -> Self {
+        self.sortable = false;
+        self
+    }
+
+    /// Fixed width.
+    pub fn fixed(mut self) -> Self {
+        self.resizable = false;
+        self
+    }
+
+    /// Title alignment: 0 leading, 1 centre, 2 trailing.
+    pub fn align(mut self, align: u8) -> Self {
+        self.align = align;
+        self
+    }
+
+    fn flags(&self) -> u32 {
+        let mut f = 0;
+        if self.editable {
+            f |= sys::AK_COLUMN_EDITABLE;
+        }
+        if !self.sortable {
+            f |= sys::AK_COLUMN_NOT_SORTABLE;
+        }
+        if !self.resizable {
+            f |= sys::AK_COLUMN_FIXED_WIDTH;
+        }
+        match self.align {
+            1 => f |= sys::AK_COLUMN_ALIGN_CENTER,
+            2 => f |= sys::AK_COLUMN_ALIGN_TRAILING,
+            _ => {}
+        }
+        f
+    }
+}
+
+/// The tree an outline shows (node ids are the app's; `None` is the root).
+pub trait Tree: 'static {
+    /// Number of children of `parent`.
+    fn child_count(&mut self, parent: Option<u64>) -> u64;
+    /// Id of child `index` of `parent`.
+    fn child(&mut self, parent: Option<u64>, index: u64) -> u64;
+    /// Whether `node` can be expanded.
+    fn is_expandable(&mut self, node: u64) -> bool;
+    /// The view of `node`'s cell in `column`.
+    fn cell(&mut self, node: u64, column: u32) -> Option<View>;
+}
+
+/// Boxed closure data handed to the ABI with a destroy trampoline.
+fn boxed<T>(value: T) -> *mut c_void {
+    Box::into_raw(Box::new(value)).cast()
+}
+
+unsafe extern "C" fn destroy<T>(user: *mut c_void) {
+    if !user.is_null() {
+        // SAFETY: `user` came from `boxed::<T>` and appkit calls destroy once.
+        drop(unsafe { Box::from_raw(user.cast::<T>()) });
+    }
+}
+
+// ----- Runtime ------------------------------------------------------------------------------
+
+/// Runs the app: connects to the display, calls `setup`, and runs the event loop until the
+/// app quits.
+pub fn run(app_id: &str, setup: impl FnOnce() + 'static) -> Result<()> {
+    type Setup = Option<Box<dyn FnOnce()>>;
+    unsafe extern "C" fn call(user: *mut c_void) {
+        // SAFETY: `user` is the `Setup` below, alive during ak_app_run.
+        let s = unsafe { &mut *(user.cast::<Setup>()) };
+        if let Some(f) = s.take() {
+            f();
+        }
+    }
+    let id = cstring(app_id)?;
+    let mut s: Setup = Some(Box::new(setup));
+    // SAFETY: `s` outlives the call; the callback is called at most once.
+    check(unsafe { f::ak_app_run(id.as_ptr(), Some(call), (&mut s as *mut Setup).cast()) })
+}
+
+/// Leaves the event loop.
+pub fn quit() {
+    // SAFETY: no arguments.
+    unsafe { f::ak_quit() };
+}
+
+/// A headless runtime for tests and offscreen rendering; shut down when dropped.
+pub struct Headless(());
+
+impl Headless {
+    /// Starts it (one per thread).
+    pub fn new() -> Result<Headless> {
+        // SAFETY: no arguments.
+        check(unsafe { f::ak_headless_init() })?;
+        Ok(Headless(()))
+    }
+
+    /// Advances time (animations, timers).
+    pub fn advance(&self, seconds: f64) {
+        // SAFETY: plain value.
+        unsafe { f::ak_advance(seconds) };
+    }
+}
+
+impl Drop for Headless {
+    fn drop(&mut self) {
+        // SAFETY: no arguments.
+        unsafe { f::ak_headless_shutdown() };
+    }
+}
+
+/// A timer; cancelled with [`Timer::cancel`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Timer(u64);
+
+impl Timer {
+    /// Cancels it.
+    pub fn cancel(self) {
+        // SAFETY: a plain id; unknown ids are ignored.
+        unsafe { f::ak_cancel(self.0) };
+    }
+}
+
+/// Runs `cb` after `seconds`.
+pub fn after(seconds: f64, cb: impl FnOnce() + 'static) -> Result<Timer> {
+    type Cb = Option<Box<dyn FnOnce()>>;
+    unsafe extern "C" fn call(user: *mut c_void) {
+        // SAFETY: `user` is a boxed `Cb`, alive until destroy.
+        let c = unsafe { &mut *(user.cast::<Cb>()) };
+        if let Some(f) = c.take() {
+            f();
+        }
+    }
+    let data: Cb = Some(Box::new(cb));
+    // SAFETY: the data is freed by `destroy::<Cb>` exactly once.
+    let id = unsafe { f::ak_after(seconds, Some(call), boxed(data), Some(destroy::<Cb>)) };
+    if id == 0 {
+        Err(last_error())
+    } else {
+        Ok(Timer(id))
+    }
+}
+
+/// Sets the dark appearance (the platform follows the system otherwise).
+pub fn set_dark(dark: bool) -> Result<()> {
+    // SAFETY: plain value.
+    check(unsafe { f::ak_set_dark(u8::from(dark)) })
+}
+
+/// Whether the appearance is dark.
+pub fn is_dark() -> bool {
+    // SAFETY: no arguments.
+    unsafe { f::ak_is_dark() != 0 }
+}
+
+// ----- Views --------------------------------------------------------------------------------
+
+/// A view (one reference).
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct View {
+    ptr: NonNull<sys::AKView>,
+}
+
+impl Clone for View {
+    fn clone(&self) -> Self {
+        // SAFETY: a handle of a view; a stale one is reported and ignored.
+        unsafe { f::ak_view_retain(self.ptr.as_ptr()) };
+        View { ptr: self.ptr }
+    }
+}
+
+impl Drop for View {
+    fn drop(&mut self) {
+        // SAFETY: drops this handle's reference.
+        unsafe { f::ak_view_release(self.ptr.as_ptr()) };
+    }
+}
+
+/// A connected signal handler.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Connection(u64);
+
+impl Connection {
+    /// Disconnects the handler.
+    pub fn disconnect(self) {
+        // SAFETY: a plain id; unknown ids are ignored.
+        unsafe { f::ak_disconnect(self.0) };
+    }
+}
+
+impl View {
+    /// A new view of `kind`.
+    pub fn new(kind: Kind) -> Result<View> {
+        // SAFETY: plain value.
+        let p = unsafe { f::ak_view_new(kind.0) };
+        View::owned(p)
+    }
+
+    /// A handle owning the new reference `p` (null: the last error).
+    fn owned(p: *mut sys::AKView) -> Result<View> {
+        NonNull::new(p)
+            .map(|ptr| View { ptr })
+            .ok_or_else(last_error)
+    }
+
+    /// A handle for a borrowed pointer (retained).
+    fn borrowed(p: *mut sys::AKView) -> Option<View> {
+        let ptr = NonNull::new(p)?;
+        // SAFETY: a live handle returned by the ABI; retaining makes this one own a reference.
+        unsafe { f::ak_view_retain(ptr.as_ptr()) };
+        Some(View { ptr })
+    }
+
+    /// The raw handle (for the C API).
+    pub fn as_ptr(&self) -> *mut sys::AKView {
+        self.ptr.as_ptr()
+    }
+
+    /// Appends a child.
+    pub fn add(&self, child: &View) -> Result<()> {
+        // SAFETY: two handles.
+        check(unsafe { f::ak_view_add_child(self.as_ptr(), child.as_ptr()) })
+    }
+
+    /// Inserts a child at `index`.
+    pub fn insert(&self, index: usize, child: &View) -> Result<()> {
+        // SAFETY: two handles.
+        check(unsafe { f::ak_view_insert_child(self.as_ptr(), index, child.as_ptr()) })
+    }
+
+    /// Removes this view from its parent.
+    pub fn remove_from_parent(&self) -> Result<()> {
+        // SAFETY: a handle.
+        check(unsafe { f::ak_view_remove(self.as_ptr()) })
+    }
+
+    /// Removes every child.
+    pub fn clear(&self) -> Result<()> {
+        // SAFETY: a handle.
+        check(unsafe { f::ak_view_clear_children(self.as_ptr()) })
+    }
+
+    /// The children.
+    pub fn children(&self) -> Vec<View> {
+        // SAFETY: a handle.
+        let n = unsafe { f::ak_view_child_count(self.as_ptr()) };
+        (0..usize::try_from(n).unwrap_or(0))
+            // SAFETY: a handle and an index; null is skipped.
+            .filter_map(|i| View::borrowed(unsafe { f::ak_view_child_at(self.as_ptr(), i) }))
+            .collect()
+    }
+
+    /// The parent.
+    pub fn parent(&self) -> Option<View> {
+        // SAFETY: a handle.
+        View::borrowed(unsafe { f::ak_view_parent(self.as_ptr()) })
+    }
+
+    /// Clears a property (back to its default).
+    pub fn unset(&self, prop: Prop) -> Result<()> {
+        // SAFETY: a handle and an id.
+        check(unsafe { f::ak_view_set_none(self.as_ptr(), prop.0) })
+    }
+
+    /// Sets a boolean property.
+    pub fn set_bool(&self, prop: Prop, v: bool) -> Result<()> {
+        // SAFETY: a handle and plain values.
+        check(unsafe { f::ak_view_set_bool(self.as_ptr(), prop.0, u8::from(v)) })
+    }
+
+    /// Sets an integer property.
+    pub fn set_int(&self, prop: Prop, v: i64) -> Result<()> {
+        // SAFETY: a handle and plain values.
+        check(unsafe { f::ak_view_set_int(self.as_ptr(), prop.0, v) })
+    }
+
+    /// Sets a number property.
+    pub fn set_float(&self, prop: Prop, v: f64) -> Result<()> {
+        // SAFETY: a handle and plain values.
+        check(unsafe { f::ak_view_set_float(self.as_ptr(), prop.0, v) })
+    }
+
+    /// Sets a text property.
+    pub fn set_str(&self, prop: Prop, v: &str) -> Result<()> {
+        let s = cstring(v)?;
+        // SAFETY: a handle and a NUL-terminated string alive for the call.
+        check(unsafe { f::ak_view_set_string(self.as_ptr(), prop.0, s.as_ptr()) })
+    }
+
+    /// Sets a colour property.
+    pub fn set_color(&self, prop: Prop, v: Color) -> Result<()> {
+        // SAFETY: a handle and plain values.
+        check(unsafe { f::ak_view_set_color(self.as_ptr(), prop.0, v) })
+    }
+
+    /// Sets insets (top, left, bottom, right).
+    pub fn set_insets(
+        &self,
+        prop: Prop,
+        top: f32,
+        left: f32,
+        bottom: f32,
+        right: f32,
+    ) -> Result<()> {
+        let v = sys::AKInsets {
+            top,
+            left,
+            bottom,
+            right,
+        };
+        // SAFETY: a handle and plain values.
+        check(unsafe { f::ak_view_set_insets(self.as_ptr(), prop.0, v) })
+    }
+
+    /// Sets a size property.
+    pub fn set_size(&self, prop: Prop, w: f32, h: f32) -> Result<()> {
+        // SAFETY: a handle and plain values.
+        check(unsafe { f::ak_view_set_size(self.as_ptr(), prop.0, w, h) })
+    }
+
+    /// Sets a point property.
+    pub fn set_point(&self, prop: Prop, x: f32, y: f32) -> Result<()> {
+        // SAFETY: a handle and plain values.
+        check(unsafe { f::ak_view_set_point(self.as_ptr(), prop.0, x, y) })
+    }
+
+    /// Sets a list of strings.
+    pub fn set_strings<S: AsRef<str>>(&self, prop: Prop, items: &[S]) -> Result<()> {
+        let owned: Vec<CString> = items
+            .iter()
+            .map(|s| cstring(s.as_ref()))
+            .collect::<Result<_>>()?;
+        let ptrs: Vec<*const c_char> = owned.iter().map(|c| c.as_ptr()).collect();
+        // SAFETY: `ptrs` holds `len` strings alive for the call.
+        check(unsafe {
+            f::ak_view_set_strings(self.as_ptr(), prop.0, ptrs.as_ptr(), ptrs.len())
+        })
+    }
+
+    /// Sets a list of integers (selected rows, column widths, expanded nodes).
+    pub fn set_ints(&self, prop: Prop, items: &[i64]) -> Result<()> {
+        let s: Vec<String> = items.iter().map(i64::to_string).collect();
+        self.set_strings(prop, &s)
+    }
+
+    /// Reads a list of integers.
+    pub fn get_ints(&self, prop: Prop) -> Result<Vec<i64>> {
+        let s = self.get_str(prop)?;
+        Ok(s.lines().filter_map(|l| l.trim().parse().ok()).collect())
+    }
+
+    /// Reads a boolean property.
+    pub fn get_bool(&self, prop: Prop) -> Result<bool> {
+        let mut v = 0u8;
+        // SAFETY: a handle and a valid out pointer.
+        check(unsafe { f::ak_view_get_bool(self.as_ptr(), prop.0, &mut v) })?;
+        Ok(v != 0)
+    }
+
+    /// Reads an integer property.
+    pub fn get_int(&self, prop: Prop) -> Result<i64> {
+        let mut v = 0i64;
+        // SAFETY: a handle and a valid out pointer.
+        check(unsafe { f::ak_view_get_int(self.as_ptr(), prop.0, &mut v) })?;
+        Ok(v)
+    }
+
+    /// Reads a number property.
+    pub fn get_float(&self, prop: Prop) -> Result<f64> {
+        let mut v = 0f64;
+        // SAFETY: a handle and a valid out pointer.
+        check(unsafe { f::ak_view_get_float(self.as_ptr(), prop.0, &mut v) })?;
+        Ok(v)
+    }
+
+    /// Reads a text property.
+    pub fn get_str(&self, prop: Prop) -> Result<String> {
+        let mut len = 0usize;
+        // SAFETY: a null buffer asks for the length.
+        let s = unsafe {
+            f::ak_view_get_string(self.as_ptr(), prop.0, std::ptr::null_mut(), 0, &mut len)
+        };
+        if s != sys::AK_ERROR_BUFFER_TOO_SMALL && s != sys::AK_OK {
+            return Err(Error::from_status(s));
+        }
+        let mut buf = vec![0u8; len + 1];
+        // SAFETY: the buffer holds `len + 1` bytes.
+        check(unsafe {
+            f::ak_view_get_string(
+                self.as_ptr(),
+                prop.0,
+                buf.as_mut_ptr().cast(),
+                buf.len(),
+                &mut len,
+            )
+        })?;
+        buf.truncate(len);
+        String::from_utf8(buf).map_err(|_| Error::BadValue)
+    }
+
+    /// Calls `cb` whenever the view emits `signal`.
+    pub fn on(
+        &self,
+        signal: Signal,
+        cb: impl FnMut(&View, &Value) + 'static,
+    ) -> Result<Connection> {
+        type Cb = Box<dyn FnMut(&View, &Value)>;
+        unsafe extern "C" fn call(
+            view: *mut sys::AKView,
+            _signal: u32,
+            value: *const sys::AKValue,
+            user: *mut c_void,
+        ) {
+            // SAFETY: `user` is a boxed `Cb`, alive until destroy; `value` is valid for the call.
+            let cb = unsafe { &mut *(user.cast::<Cb>()) };
+            let v = if value.is_null() {
+                Value::None
+            } else {
+                // SAFETY: as above.
+                Value::from_c(unsafe { &*value })
+            };
+            if let Some(view) = View::borrowed(view) {
+                cb(&view, &v);
+            }
+        }
+        let data: Cb = Box::new(cb);
+        // SAFETY: the data is freed by `destroy::<Cb>` exactly once.
+        let id = unsafe {
+            f::ak_view_connect(
+                self.as_ptr(),
+                signal.0,
+                Some(call),
+                boxed(data),
+                Some(destroy::<Cb>),
+            )
+        };
+        if id == 0 {
+            Err(last_error())
+        } else {
+            Ok(Connection(id))
+        }
+    }
+
+    /// Sets the rows of a list (`Kind::LIST`): count, height, and `row` that makes the view
+    /// of a row when it scrolls into sight (rows out of sight are dropped).
+    pub fn set_rows(
+        &self,
+        rows: usize,
+        row_height: f32,
+        row: impl FnMut(usize) -> Option<View> + 'static,
+    ) -> Result<()> {
+        let data: RowCb = Box::new(row);
+        // SAFETY: the data is freed by `destroy::<RowCb>` exactly once.
+        check(unsafe {
+            f::ak_list_set_rows(
+                self.as_ptr(),
+                rows as u64,
+                row_height,
+                Some(call_row),
+                boxed(data),
+                Some(destroy::<RowCb>),
+            )
+        })
+    }
+
+    /// Adds a column to a table or an outline (`Kind::TABLE`, `Kind::OUTLINE`).
+    pub fn add_column(&self, column: &Column) -> Result<()> {
+        let t = cstring(&column.title)?;
+        // SAFETY: a handle, a string alive for the call and plain values.
+        check(unsafe {
+            f::ak_table_add_column(
+                self.as_ptr(),
+                t.as_ptr(),
+                column.width,
+                column.min_width,
+                column.max_width,
+                column.flags(),
+            )
+        })
+    }
+
+    /// Removes every column of a table or an outline.
+    pub fn clear_columns(&self) -> Result<()> {
+        // SAFETY: a handle.
+        check(unsafe { f::ak_table_clear_columns(self.as_ptr()) })
+    }
+
+    /// Table mode: `rows` rows of `row_height`; `cell(row, column)` makes a cell's view when
+    /// its row scrolls into sight.
+    pub fn set_cells(
+        &self,
+        rows: usize,
+        row_height: f32,
+        cell: impl FnMut(u64, u32) -> Option<View> + 'static,
+    ) -> Result<()> {
+        let data: CellCb = Box::new(cell);
+        // SAFETY: the data is freed by `destroy::<CellCb>` exactly once.
+        check(unsafe {
+            f::ak_table_set_cells(
+                self.as_ptr(),
+                rows as u64,
+                row_height,
+                Some(call_cell),
+                boxed(data),
+                Some(destroy::<CellCb>),
+            )
+        })
+    }
+
+    /// Outline mode: the rows are the visible nodes of `tree`; its cells are made by
+    /// [`Tree::cell`].
+    pub fn set_tree<T: Tree>(&self, row_height: f32, tree: T) -> Result<()> {
+        unsafe extern "C" fn count<T: Tree>(parent: u64, user: *mut c_void) -> u64 {
+            // SAFETY: `user` is the boxed `T`, alive until destroy.
+            let t = unsafe { &mut *(user.cast::<T>()) };
+            t.child_count((parent != sys::AK_OUTLINE_ROOT).then_some(parent))
+        }
+        unsafe extern "C" fn child<T: Tree>(parent: u64, index: u64, user: *mut c_void) -> u64 {
+            // SAFETY: as above.
+            let t = unsafe { &mut *(user.cast::<T>()) };
+            t.child((parent != sys::AK_OUTLINE_ROOT).then_some(parent), index)
+        }
+        unsafe extern "C" fn expandable<T: Tree>(node: u64, user: *mut c_void) -> u8 {
+            // SAFETY: as above.
+            let t = unsafe { &mut *(user.cast::<T>()) };
+            u8::from(t.is_expandable(node))
+        }
+        unsafe extern "C" fn cell<T: Tree>(
+            node: u64,
+            column: u32,
+            user: *mut c_void,
+        ) -> *mut sys::AKView {
+            // SAFETY: as above.
+            let t = unsafe { &mut *(user.cast::<T>()) };
+            hand_over(t.cell(node, column))
+        }
+        // SAFETY: the data is freed by `destroy::<T>` exactly once.
+        check(unsafe {
+            f::ak_outline_set_tree(
+                self.as_ptr(),
+                row_height,
+                Some(count::<T>),
+                Some(child::<T>),
+                Some(expandable::<T>),
+                Some(cell::<T>),
+                boxed(tree),
+                Some(destroy::<T>),
+            )
+        })
+    }
+
+    /// Grid (`Kind::GRID_VIEW`): `count` tiles of `tile` (0 × 0: the kit's 104 × 104);
+    /// `item` makes a tile's view when it scrolls into sight.
+    pub fn set_items(
+        &self,
+        count: usize,
+        tile: (f32, f32),
+        item: impl FnMut(usize) -> Option<View> + 'static,
+    ) -> Result<()> {
+        let data: RowCb = Box::new(item);
+        // SAFETY: the data is freed by `destroy::<RowCb>` exactly once.
+        check(unsafe {
+            f::ak_grid_set_items(
+                self.as_ptr(),
+                count as u64,
+                tile.0,
+                tile.1,
+                Some(call_row),
+                boxed(data),
+                Some(destroy::<RowCb>),
+            )
+        })
+    }
+
+    /// Shows `content` in a popover against this view (`side`: `appkit_sys::AK_SIDE_*`,
+    /// flipped when it does not fit). `closed` runs when the user dismisses it.
+    pub fn present_popover(
+        &self,
+        content: &View,
+        side: u32,
+        closed: impl FnOnce() + 'static,
+    ) -> Result<Window> {
+        type Cb = Option<Box<dyn FnOnce()>>;
+        unsafe extern "C" fn call(user: *mut c_void) {
+            // SAFETY: a boxed `Cb` alive until destroy.
+            let c = unsafe { &mut *(user.cast::<Cb>()) };
+            if let Some(f) = c.take() {
+                f();
+            }
+        }
+        let data: Cb = Some(Box::new(closed));
+        // SAFETY: handles; the data is freed by `destroy::<Cb>` exactly once.
+        Window::from(unsafe {
+            f::ak_view_present_popover(
+                self.as_ptr(),
+                content.as_ptr(),
+                side,
+                Some(call),
+                boxed(data),
+                Some(destroy::<Cb>),
+            )
+        })
+    }
+
+    /// An alert (`ak_alert_new`): title, message, buttons in visual order, flags
+    /// (`appkit_sys::AK_ALERT_*`) and an optional symbol as its icon.
+    pub fn alert(
+        title: &str,
+        message: Option<&str>,
+        buttons: &[&str],
+        flags: u32,
+        icon: Option<&str>,
+    ) -> Result<View> {
+        let t = cstring(title)?;
+        let m = message.map(cstring).transpose()?;
+        let i = icon.map(cstring).transpose()?;
+        let owned: Vec<CString> = buttons.iter().map(|b| cstring(b)).collect::<Result<_>>()?;
+        let ptrs: Vec<*const c_char> = owned.iter().map(|c| c.as_ptr()).collect();
+        // SAFETY: strings alive for the call.
+        let p = unsafe {
+            f::ak_alert_new(
+                t.as_ptr(),
+                m.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()),
+                ptrs.as_ptr(),
+                ptrs.len(),
+                flags,
+                i.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()),
+            )
+        };
+        View::owned(p)
+    }
+
+    /// Adds an accessory view to an alert, above its buttons.
+    pub fn add_accessory(&self, view: &View) -> Result<()> {
+        // SAFETY: handles.
+        check(unsafe { f::ak_alert_add_accessory(self.as_ptr(), view.as_ptr()) })
+    }
+
+    /// A menu panel view of `menu` (consumed); `chosen` gets an item's id.
+    pub fn menu_view(menu: Menu, chosen: impl FnMut(u32) + 'static) -> Result<View> {
+        type Cb = Box<dyn FnMut(u32)>;
+        unsafe extern "C" fn call(id: u32, user: *mut c_void) {
+            // SAFETY: a boxed `Cb` alive until destroy.
+            let c = unsafe { &mut *(user.cast::<Cb>()) };
+            c(id);
+        }
+        let data: Cb = Box::new(chosen);
+        // SAFETY: the menu handle moves to appkit; the data is freed by destroy once.
+        let p = unsafe {
+            f::ak_menu_view_new(
+                menu.into_raw(),
+                Some(call),
+                boxed(data),
+                Some(destroy::<Cb>),
+            )
+        };
+        View::owned(p)
+    }
+
+    /// Makes the rows, cells or tiles of a collection again (the data changed).
+    pub fn reload(&self) -> Result<()> {
+        // SAFETY: a handle.
+        check(unsafe { f::ak_collection_reload(self.as_ptr()) })
+    }
+
+    /// Records the drawing again.
+    pub fn request_paint(&self) {
+        // SAFETY: a handle.
+        unsafe { f::ak_view_request_paint(self.as_ptr()) };
+    }
+
+    /// Lays the view out again.
+    pub fn request_layout(&self) {
+        // SAFETY: a handle.
+        unsafe { f::ak_view_request_layout(self.as_ptr()) };
+    }
+
+    /// Gives it the keyboard focus.
+    pub fn focus(&self) -> Result<()> {
+        // SAFETY: a handle.
+        check(unsafe { f::ak_view_focus(self.as_ptr()) })
+    }
+
+    /// Performs an accessibility action (`appkit_sys::AK_ACTION_*`): a click activates a
+    /// control.
+    pub fn perform(&self, action: u32) -> Result<()> {
+        // SAFETY: a handle and a plain value.
+        check(unsafe { f::ak_view_perform(self.as_ptr(), action) })
+    }
+
+    /// The window the view is shown in.
+    pub fn window(&self) -> Option<Window> {
+        // SAFETY: a handle.
+        let p = unsafe { f::ak_view_window(self.as_ptr()) };
+        NonNull::new(p).map(|ptr| Window { ptr })
+    }
+
+    /// Clicks it (the accessibility action).
+    pub fn click(&self) -> Result<()> {
+        self.perform(sys::AK_ACTION_CLICK)
+    }
+
+    /// Its rectangle in window coordinates.
+    pub fn frame(&self) -> Result<Rect> {
+        let mut r = Rect::default();
+        // SAFETY: a handle and a valid out pointer.
+        check(unsafe { f::ak_view_frame(self.as_ptr(), &mut r) })?;
+        Ok(r)
+    }
+
+    /// The descendant with `identifier`.
+    pub fn find(&self, identifier: &str) -> Option<View> {
+        let s = cstring(identifier).ok()?;
+        // SAFETY: a handle and a string alive for the call.
+        View::borrowed(unsafe { f::ak_view_find(self.as_ptr(), s.as_ptr()) })
+    }
+
+    /// A pop-up menu anchored at `anchor` (view coordinates); `done` gets the chosen id
+    /// (0: dismissed).
+    pub fn popup_menu(
+        &self,
+        menu: Menu,
+        anchor: Rect,
+        popup: bool,
+        selected: u32,
+        done: impl FnOnce(u32) + 'static,
+    ) -> Result<()> {
+        type Cb = Option<Box<dyn FnOnce(u32)>>;
+        unsafe extern "C" fn call(id: u32, user: *mut c_void) {
+            // SAFETY: a boxed `Cb` alive until destroy.
+            let c = unsafe { &mut *(user.cast::<Cb>()) };
+            if let Some(f) = c.take() {
+                f(id);
+            }
+        }
+        let data: Cb = Some(Box::new(done));
+        let kind = if popup {
+            sys::AK_POPUP_POP_UP
+        } else {
+            sys::AK_POPUP_CONTEXT
+        };
+        let raw = menu.into_raw();
+        // SAFETY: the menu is consumed; the data freed by destroy once.
+        check(unsafe {
+            f::ak_view_popup_menu(
+                self.as_ptr(),
+                raw,
+                anchor,
+                kind,
+                selected,
+                Some(call),
+                boxed(data),
+                Some(destroy::<Cb>),
+            )
+        })
+    }
+}
+
+/// A font for custom drawing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Font {
+    /// Family (`None`: Inter).
+    pub family: Option<String>,
+    /// Size in points.
+    pub size: f32,
+    /// CSS weight.
+    pub weight: u32,
+}
+
+impl Font {
+    /// Inter at `size`, regular.
+    pub fn ui(size: f32) -> Font {
+        Font {
+            family: None,
+            size,
+            weight: 400,
+        }
+    }
+}
+
+/// A canvas inside a custom view's draw callback.
+pub struct Canvas {
+    ptr: *mut sys::AKCanvas,
+}
+
+impl Canvas {
+    /// Fills a rectangle.
+    pub fn fill_rect(&self, r: Rect, c: Color) {
+        // SAFETY: the canvas is valid during the draw callback.
+        unsafe { f::ak_canvas_fill_rect(self.ptr, r, c) };
+    }
+
+    /// Fills a smooth rounded rectangle.
+    pub fn fill_rounded_rect(&self, r: Rect, radius: f32, c: Color) {
+        // SAFETY: as above.
+        unsafe { f::ak_canvas_fill_rounded_rect(self.ptr, r, radius, c) };
+    }
+
+    /// Strokes a rectangle.
+    pub fn stroke_rect(&self, r: Rect, width: f32, c: Color) {
+        // SAFETY: as above.
+        unsafe { f::ak_canvas_stroke_rect(self.ptr, r, width, c) };
+    }
+
+    /// Fills an ellipse.
+    pub fn fill_ellipse(&self, r: Rect, c: Color) {
+        // SAFETY: as above.
+        unsafe { f::ak_canvas_fill_ellipse(self.ptr, r, c) };
+    }
+
+    /// Draws a line.
+    pub fn line(&self, x0: f32, y0: f32, x1: f32, y1: f32, width: f32, c: Color) {
+        // SAFETY: as above.
+        unsafe { f::ak_canvas_line(self.ptr, x0, y0, x1, y1, width, c) };
+    }
+
+    /// Draws text with its top left at `origin`.
+    pub fn text(&self, origin: (f32, f32), text: &str, font: &Font, c: Color) {
+        let Ok(t) = cstring(text) else { return };
+        let fam = match font.family.as_deref().map(cstring) {
+            Some(Ok(s)) => Some(s),
+            Some(Err(_)) => return,
+            None => None,
+        };
+        let fp = fam.as_ref().map_or(std::ptr::null(), |s| s.as_ptr());
+        // SAFETY: as above; the strings live for the call.
+        unsafe {
+            f::ak_canvas_text(
+                self.ptr,
+                origin.0,
+                origin.1,
+                t.as_ptr(),
+                fp,
+                font.size,
+                font.weight,
+                c,
+            )
+        };
+    }
+
+    /// Draws a Silica Symbols glyph in a box (font size = box height).
+    pub fn glyph(&self, r: Rect, symbol: &str, weight: u32, c: Color) {
+        let Ok(s) = cstring(symbol) else { return };
+        // SAFETY: as above.
+        unsafe { f::ak_canvas_glyph(self.ptr, r, s.as_ptr(), weight, c) };
+    }
+
+    /// Saves the state.
+    pub fn save(&self) {
+        // SAFETY: as above.
+        unsafe { f::ak_canvas_save(self.ptr) };
+    }
+
+    /// Restores the state.
+    pub fn restore(&self) {
+        // SAFETY: as above.
+        unsafe { f::ak_canvas_restore(self.ptr) };
+    }
+
+    /// Moves the origin.
+    pub fn translate(&self, x: f32, y: f32) {
+        // SAFETY: as above.
+        unsafe { f::ak_canvas_translate(self.ptr, x, y) };
+    }
+
+    /// Clips to a rectangle.
+    pub fn clip(&self, r: Rect) {
+        // SAFETY: as above.
+        unsafe { f::ak_canvas_clip_rect(self.ptr, r) };
+    }
+}
+
+/// The width and height of `text` in a font.
+pub fn measure_text(
+    text: &str,
+    family: Option<&str>,
+    size: f32,
+    weight: u32,
+) -> Option<(f32, f32)> {
+    let t = cstring(text).ok()?;
+    let fam = match family {
+        Some(f) => Some(cstring(f).ok()?),
+        None => None,
+    };
+    let (mut w, mut h) = (0.0, 0.0);
+    // SAFETY: strings alive for the call; valid out pointers.
+    let s = unsafe {
+        f::ak_measure_text(
+            t.as_ptr(),
+            fam.as_ref().map_or(std::ptr::null(), |s| s.as_ptr()),
+            size,
+            weight,
+            &mut w,
+            &mut h,
+        )
+    };
+    (s == sys::AK_OK).then_some((w, h))
+}
+
+/// A custom view's behaviour.
+pub trait Custom: 'static {
+    /// Draws in a box of `width × height`.
+    fn draw(&mut self, canvas: &Canvas, width: f32, height: f32);
+    /// The size for a proposal (`None`: unspecified).
+    fn measure(&mut self, proposed: (Option<f32>, Option<f32>)) -> (f32, f32) {
+        (proposed.0.unwrap_or(0.0), proposed.1.unwrap_or(0.0))
+    }
+    /// Handles an event; true when handled.
+    fn event(&mut self, _view: &View, _event: &sys::AKEvent) -> bool {
+        false
+    }
+}
+
+impl View {
+    /// A view drawn by `custom`.
+    pub fn custom(custom: impl Custom) -> Result<View> {
+        type Data = RefCell<Box<dyn Custom>>;
+        unsafe extern "C" fn draw(c: *mut sys::AKCanvas, w: f32, h: f32, user: *mut c_void) {
+            // SAFETY: `user` is the boxed `Data`, alive until destroy.
+            let d = unsafe { &*(user.cast::<Data>()) };
+            if let Ok(mut b) = d.try_borrow_mut() {
+                b.draw(&Canvas { ptr: c }, w, h);
+            }
+        }
+        unsafe extern "C" fn measure(
+            pw: f32,
+            ph: f32,
+            ow: *mut f32,
+            oh: *mut f32,
+            user: *mut c_void,
+        ) {
+            // SAFETY: as above; out pointers valid.
+            let d = unsafe { &*(user.cast::<Data>()) };
+            let opt = |v: f32| (!v.is_nan()).then_some(v);
+            let (w, h) = match d.try_borrow_mut() {
+                Ok(mut b) => b.measure((opt(pw), opt(ph))),
+                Err(_) => (0.0, 0.0),
+            };
+            // SAFETY: valid out pointers from appkit.
+            unsafe {
+                *ow = w;
+                *oh = h;
+            }
+        }
+        unsafe extern "C" fn event(
+            v: *mut sys::AKView,
+            e: *const sys::AKEvent,
+            user: *mut c_void,
+        ) -> u8 {
+            // SAFETY: as above; the event is valid for the call.
+            let d = unsafe { &*(user.cast::<Data>()) };
+            let (Some(view), false) = (View::borrowed(v), e.is_null()) else {
+                return 0;
+            };
+            match d.try_borrow_mut() {
+                // SAFETY: checked non-null.
+                Ok(mut b) => u8::from(b.event(&view, unsafe { &*e })),
+                Err(_) => 0,
+            }
+        }
+        let data: Data = RefCell::new(Box::new(custom));
+        // SAFETY: the data is freed by destroy once.
+        let p = unsafe {
+            f::ak_custom_view_new(
+                Some(draw),
+                Some(measure),
+                Some(event),
+                boxed(data),
+                Some(destroy::<Data>),
+            )
+        };
+        NonNull::new(p)
+            .map(|ptr| View { ptr })
+            .ok_or_else(last_error)
+    }
+}
+
+// ----- Windows ------------------------------------------------------------------------------
+
+/// A window handle (windows live until closed; the handle is a plain id).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Window {
+    ptr: NonNull<sys::AKWindow>,
+}
+
+/// A shell surface's layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Layer {
+    /// Background.
+    Background,
+    /// Bottom.
+    Bottom,
+    /// Top.
+    Top,
+    /// Overlay.
+    Overlay,
+}
+
+impl Window {
+    fn from(p: *mut sys::AKWindow) -> Result<Window> {
+        NonNull::new(p)
+            .map(|ptr| Window { ptr })
+            .ok_or_else(last_error)
+    }
+
+    /// An app window.
+    pub fn new(width: f32, height: f32) -> Result<Window> {
+        // SAFETY: plain values.
+        Window::from(unsafe { f::ak_window_new(sys::AK_WINDOW_NORMAL, width, height) })
+    }
+
+    /// A utility panel.
+    pub fn panel(width: f32, height: f32) -> Result<Window> {
+        // SAFETY: plain values.
+        Window::from(unsafe { f::ak_window_new(sys::AK_WINDOW_PANEL, width, height) })
+    }
+
+    /// A popup anchored to a rectangle of `parent`.
+    pub fn popup(parent: Window, anchor: Rect, width: f32, height: f32) -> Result<Window> {
+        // SAFETY: a handle and plain values.
+        Window::from(unsafe {
+            f::ak_window_new_popup(parent.ptr.as_ptr(), anchor, width, height)
+        })
+    }
+
+    /// Shows `alert` (made by [`View::alert`]) as a sheet of `parent`, or in a panel of
+    /// its own; `response` gets the button's index, or -1 for Escape, and the window
+    /// closes.
+    pub fn present_alert(
+        parent: Option<&Window>,
+        alert: &View,
+        response: impl FnOnce(i64) + 'static,
+    ) -> Result<Window> {
+        type Cb = Option<Box<dyn FnOnce(i64)>>;
+        unsafe extern "C" fn call(r: i64, user: *mut c_void) {
+            // SAFETY: a boxed `Cb` alive until destroy.
+            let c = unsafe { &mut *(user.cast::<Cb>()) };
+            if let Some(f) = c.take() {
+                f(r);
+            }
+        }
+        let data: Cb = Some(Box::new(response));
+        // SAFETY: handles; the data is freed by `destroy::<Cb>` exactly once.
+        Window::from(unsafe {
+            f::ak_window_present_alert(
+                parent.map_or(std::ptr::null_mut(), |p| p.ptr.as_ptr()),
+                alert.as_ptr(),
+                Some(call),
+                boxed(data),
+                Some(destroy::<Cb>),
+            )
+        })
+    }
+
+    /// Gives the window an autosave name: its size and its identified views' state are
+    /// restored now and kept when it closes or the app quits.
+    pub fn set_autosave(&self, name: &str) -> Result<()> {
+        let n = cstring(name)?;
+        // SAFETY: a handle and a string alive for the call.
+        check(unsafe { f::ak_window_set_autosave(self.ptr.as_ptr(), n.as_ptr()) })
+    }
+
+    /// A sheet attached to `parent`.
+    pub fn sheet(parent: Window, width: f32, height: f32) -> Result<Window> {
+        // SAFETY: a handle and plain values.
+        Window::from(unsafe { f::ak_window_new_sheet(parent.ptr.as_ptr(), width, height) })
+    }
+
+    /// A shell surface.
+    pub fn shell(
+        layer: Layer,
+        edges: u32,
+        exclusive: i32,
+        keyboard: u32,
+        namespace: &str,
+        width: f32,
+        height: f32,
+    ) -> Result<Window> {
+        let ns = cstring(namespace)?;
+        let l = match layer {
+            Layer::Background => sys::AK_LAYER_BACKGROUND,
+            Layer::Bottom => sys::AK_LAYER_BOTTOM,
+            Layer::Top => sys::AK_LAYER_TOP,
+            Layer::Overlay => sys::AK_LAYER_OVERLAY,
+        };
+        // SAFETY: plain values and a string alive for the call.
+        Window::from(unsafe {
+            f::ak_window_new_shell(l, edges, exclusive, keyboard, ns.as_ptr(), width, height)
+        })
+    }
+
+    /// The raw handle.
+    pub fn as_ptr(&self) -> *mut sys::AKWindow {
+        self.ptr.as_ptr()
+    }
+
+    /// Sets the title.
+    pub fn set_title(&self, title: &str) -> Result<()> {
+        let t = cstring(title)?;
+        // SAFETY: a handle and a string alive for the call.
+        check(unsafe { f::ak_window_set_title(self.as_ptr(), t.as_ptr()) })
+    }
+
+    /// Sets the content view.
+    pub fn set_content(&self, view: &View) -> Result<()> {
+        // SAFETY: two handles.
+        check(unsafe { f::ak_window_set_content(self.as_ptr(), view.as_ptr()) })
+    }
+
+    /// The root view.
+    pub fn root(&self) -> Option<View> {
+        // SAFETY: a handle.
+        View::borrowed(unsafe { f::ak_window_root(self.as_ptr()) })
+    }
+
+    /// Shows it.
+    pub fn show(&self) -> Result<()> {
+        // SAFETY: a handle.
+        check(unsafe { f::ak_window_show(self.as_ptr()) })
+    }
+
+    /// Closes it.
+    pub fn close(&self) -> Result<()> {
+        // SAFETY: a handle.
+        check(unsafe { f::ak_window_close(self.as_ptr()) })
+    }
+
+    /// Resizes it.
+    pub fn set_size(&self, w: f32, h: f32) -> Result<()> {
+        // SAFETY: a handle and plain values.
+        check(unsafe { f::ak_window_set_size(self.as_ptr(), w, h) })
+    }
+
+    /// Minimum and maximum size (0: none).
+    pub fn set_size_limits(&self, min: (f32, f32), max: (f32, f32)) -> Result<()> {
+        // SAFETY: a handle and plain values.
+        check(unsafe { f::ak_window_set_size_limits(self.as_ptr(), min.0, min.1, max.0, max.1) })
+    }
+
+    /// Appearance: `None` system, `Some(true)` always dark, `Some(false)` always light.
+    pub fn set_dark(&self, dark: Option<bool>) -> Result<()> {
+        let v = match dark {
+            None => 0,
+            Some(false) => 1,
+            Some(true) => 2,
+        };
+        // SAFETY: a handle and plain values.
+        check(unsafe { f::ak_window_set_appearance(self.as_ptr(), v) })
+    }
+
+    /// Full-size content with a toolbar of `height` (0: Ossido's title bar).
+    pub fn set_toolbar_height(&self, height: f32) -> Result<()> {
+        // SAFETY: a handle and plain values.
+        check(unsafe { f::ak_window_set_toolbar_height(self.as_ptr(), height) })
+    }
+
+    /// Keeps the window open on a close request (the app handles `CLOSE_REQUESTED`).
+    pub fn set_keep_on_close_request(&self, keep: bool) -> Result<()> {
+        // SAFETY: a handle and plain values.
+        check(unsafe { f::ak_window_set_keep_on_close_request(self.as_ptr(), u8::from(keep)) })
+    }
+
+    /// A PNG of the window at `scale`.
+    pub fn snapshot_png(&self, scale: f32) -> Result<Vec<u8>> {
+        unsafe extern "C" fn keep(data: *const u8, len: usize, user: *mut c_void) {
+            // SAFETY: `user` is the Vec below; `data` holds `len` bytes for the call.
+            unsafe {
+                let out = &mut *(user.cast::<Vec<u8>>());
+                out.extend_from_slice(std::slice::from_raw_parts(data, len));
+            }
+        }
+        let mut out: Vec<u8> = Vec::new();
+        // SAFETY: `out` outlives the call.
+        check(unsafe {
+            f::ak_window_snapshot_png(
+                self.as_ptr(),
+                scale,
+                Some(keep),
+                (&mut out as *mut Vec<u8>).cast(),
+            )
+        })?;
+        Ok(out)
+    }
+}
+
+// ----- Menus --------------------------------------------------------------------------------
+
+/// A menu being built.
+#[derive(Debug)]
+pub struct Menu {
+    ptr: *mut sys::AKMenu,
+}
+
+/// Alert flags (`View::alert`).
+pub mod alert_flags {
+    use appkit_sys as sys;
+    /// A warning badge on the icon.
+    pub const CRITICAL: u32 = sys::AK_ALERT_CRITICAL;
+    /// The glass panel.
+    pub const GLASS: u32 = sys::AK_ALERT_GLASS;
+    /// Buttons in a column (the first is the default).
+    pub const STACKED: u32 = sys::AK_ALERT_STACKED;
+    /// The default button is destructive.
+    pub const DESTRUCTIVE: u32 = sys::AK_ALERT_DESTRUCTIVE;
+}
+
+/// Where a popover sits against its anchor (`View::present_popover`).
+pub mod side {
+    use appkit_sys as sys;
+    /// Below.
+    pub const BELOW: u32 = sys::AK_SIDE_BELOW;
+    /// Above.
+    pub const ABOVE: u32 = sys::AK_SIDE_ABOVE;
+    /// After (right).
+    pub const AFTER: u32 = sys::AK_SIDE_AFTER;
+    /// Before (left).
+    pub const BEFORE: u32 = sys::AK_SIDE_BEFORE;
+}
+
+/// Menu item flags.
+pub mod menu_flags {
+    use appkit_sys as sys;
+    /// Disabled.
+    pub const DISABLED: u32 = sys::AK_MENU_DISABLED;
+    /// Checked.
+    pub const CHECKED: u32 = sys::AK_MENU_CHECKED;
+    /// Mixed.
+    pub const MIXED: u32 = sys::AK_MENU_MIXED;
+    /// Destructive.
+    pub const DESTRUCTIVE: u32 = sys::AK_MENU_DESTRUCTIVE;
+    /// A section heading.
+    pub const HEADING: u32 = sys::AK_MENU_HEADING;
+}
+
+impl Menu {
+    /// A menu titled `title` with an optional role (`app`, `window`, `help`).
+    pub fn new(title: &str, role: Option<&str>) -> Result<Menu> {
+        let t = cstring(title)?;
+        let r = role.map(cstring).transpose()?;
+        // SAFETY: strings alive for the call.
+        let p = unsafe {
+            f::ak_menu_new(
+                t.as_ptr(),
+                r.as_ref().map_or(std::ptr::null(), |s| s.as_ptr()),
+            )
+        };
+        if p.is_null() {
+            Err(last_error())
+        } else {
+            Ok(Menu { ptr: p })
+        }
+    }
+
+    /// Adds an item with an id (and a key equivalent like `cmd+s`).
+    pub fn item(self, title: &str, shortcut: Option<&str>, id: u32, flags: u32) -> Result<Menu> {
+        let t = cstring(title)?;
+        let s = shortcut.map(cstring).transpose()?;
+        // SAFETY: the menu is ours; strings alive for the call.
+        check(unsafe {
+            f::ak_menu_add_item(
+                self.ptr,
+                t.as_ptr(),
+                s.as_ref().map_or(std::ptr::null(), |x| x.as_ptr()),
+                id,
+                flags,
+            )
+        })?;
+        Ok(self)
+    }
+
+    /// Adds a separator.
+    pub fn separator(self) -> Result<Menu> {
+        // SAFETY: the menu is ours.
+        check(unsafe { f::ak_menu_add_separator(self.ptr) })?;
+        Ok(self)
+    }
+
+    /// Adds a submenu.
+    pub fn submenu(self, sub: Menu) -> Result<Menu> {
+        let raw = sub.into_raw();
+        // SAFETY: the submenu is consumed.
+        check(unsafe { f::ak_menu_add_submenu(self.ptr, raw) })?;
+        Ok(self)
+    }
+
+    fn into_raw(self) -> *mut sys::AKMenu {
+        let p = self.ptr;
+        std::mem::forget(self);
+        p
+    }
+}
+
+impl Drop for Menu {
+    fn drop(&mut self) {
+        // SAFETY: an unconsumed menu of ours.
+        unsafe { f::ak_menu_free(self.ptr) };
+    }
+}
+
+/// Sets the app's menu bar; `chosen` gets the id of an activated item.
+pub fn set_menu_bar(menus: Vec<Menu>, chosen: impl FnMut(u32) + 'static) -> Result<()> {
+    type Cb = Box<dyn FnMut(u32)>;
+    unsafe extern "C" fn call(id: u32, user: *mut c_void) {
+        // SAFETY: a boxed `Cb` alive until destroy.
+        let c = unsafe { &mut *(user.cast::<Cb>()) };
+        c(id);
+    }
+    let raws: Vec<*mut sys::AKMenu> = menus.into_iter().map(Menu::into_raw).collect();
+    let data: Cb = Box::new(chosen);
+    // SAFETY: the menus are consumed; the data freed by destroy once (it is shared by every
+    // item and lives as long as the menu bar).
+    check(unsafe {
+        f::ak_app_set_menu_bar(
+            raws.as_ptr(),
+            raws.len(),
+            Some(call),
+            boxed(data),
+            Some(destroy::<Cb>),
+        )
+    })
+}
+
+/// A shared, mutable value for closures (a convenience for callbacks).
+pub type Shared<T> = Rc<RefCell<T>>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn views_signals_and_snapshot() {
+        let h = Headless::new().unwrap();
+        let w = Window::new(240.0, 120.0).unwrap();
+        let col = View::new(Kind::COLUMN).unwrap();
+        let b = View::new(Kind::PUSH_BUTTON).unwrap();
+        b.set_str(Prop::TITLE, "Press").unwrap();
+        assert_eq!(b.get_str(Prop::TITLE).unwrap(), "Press");
+        assert_eq!(b.set_str(Prop(9999), "x"), Err(Error::UnknownProperty));
+        col.add(&b).unwrap();
+        assert_eq!(b.add(&col), Err(Error::BadHierarchy));
+        assert_eq!(col.children().len(), 1);
+        assert_eq!(b.parent().unwrap(), col);
+        w.set_content(&col).unwrap();
+        w.show().unwrap();
+        let hits: Shared<u32> = Rc::default();
+        let h2 = hits.clone();
+        b.on(Signal::RESIZED, move |_, v| {
+            assert!(matches!(v, Value::Size(..)));
+            *h2.borrow_mut() += 1;
+        })
+        .unwrap();
+        let png = w.snapshot_png(1.0).unwrap();
+        assert_eq!(png.get(1..4), Some(&b"PNG"[..]));
+        assert!(*hits.borrow() >= 1);
+        let fired: Shared<bool> = Rc::default();
+        let f2 = fired.clone();
+        after(0.5, move || *f2.borrow_mut() = true).unwrap();
+        h.advance(0.6);
+        assert!(*fired.borrow());
+        struct Dot;
+        impl Custom for Dot {
+            fn draw(&mut self, c: &Canvas, w: f32, h: f32) {
+                c.fill_ellipse(
+                    Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: w,
+                        height: h,
+                    },
+                    rgba(0xff0000ff),
+                );
+            }
+            fn measure(&mut self, _p: (Option<f32>, Option<f32>)) -> (f32, f32) {
+                (10.0, 10.0)
+            }
+        }
+        let dot = View::custom(Dot).unwrap();
+        col.add(&dot).unwrap();
+        let png = w.snapshot_png(1.0).unwrap();
+        assert!(png.len() > 100);
+        let menu = Menu::new("File", None)
+            .unwrap()
+            .item("New", Some("cmd+n"), 1, 0)
+            .unwrap()
+            .separator()
+            .unwrap();
+        set_menu_bar(vec![menu], |_| {}).unwrap();
+        w.close().unwrap();
+        assert_eq!(b.set_bool(Prop::HIDDEN, true), Err(Error::NoSuchObject));
+    }
+
+    #[test]
+    fn alerts_popovers_menus_tabs_and_status_items() {
+        let _h = Headless::new().unwrap();
+        let w = Window::new(500.0, 400.0).unwrap();
+        let col = View::new(Kind::COLUMN).unwrap();
+        w.set_content(&col).unwrap();
+        w.show().unwrap();
+        // An alert as a sheet: the response comes from a button.
+        let a = View::alert(
+            "Delete the file?",
+            Some("It cannot be undone."),
+            &["Cancel", "Delete"],
+            sys::AK_ALERT_DESTRUCTIVE,
+            Some("trash"),
+        )
+        .unwrap();
+        let check = View::new(Kind::CHECKBOX).unwrap();
+        check.set_str(Prop::TITLE, "Do not ask again").unwrap();
+        a.add_accessory(&check).unwrap();
+        let got: Shared<i64> = Rc::new(RefCell::new(99));
+        let g2 = got.clone();
+        let sheet = Window::present_alert(Some(&w), &a, move |r| *g2.borrow_mut() = r).unwrap();
+        let png = sheet.snapshot_png(1.0).unwrap();
+        assert!(png.len() > 100);
+        let delete = a.find("Delete").unwrap();
+        delete.perform(sys::AK_ACTION_CLICK).unwrap();
+        assert_eq!(*got.borrow(), 1);
+        assert_eq!(sheet.show(), Err(Error::NoSuchObject), "closed");
+        // A popover against a button.
+        let b = View::new(Kind::PUSH_BUTTON).unwrap();
+        b.set_str(Prop::TITLE, "Info").unwrap();
+        col.add(&b).unwrap();
+        w.snapshot_png(1.0).unwrap();
+        let content = View::new(Kind::LABEL).unwrap();
+        content.set_str(Prop::TEXT, "Details").unwrap();
+        let pop = b
+            .present_popover(&content, sys::AK_SIDE_BELOW, || {})
+            .unwrap();
+        assert!(pop.snapshot_png(1.0).unwrap().len() > 100);
+        pop.close().unwrap();
+        // A menu as a view.
+        let menu = Menu::new("", None)
+            .unwrap()
+            .item("Open", Some("cmd+o"), 7, 0)
+            .unwrap()
+            .separator()
+            .unwrap()
+            .item("Close", None, 8, 0)
+            .unwrap();
+        let chosen: Shared<u32> = Rc::default();
+        let c2 = chosen.clone();
+        let mv = View::menu_view(menu, move |id| *c2.borrow_mut() = id).unwrap();
+        col.add(&mv).unwrap();
+        w.snapshot_png(1.0).unwrap();
+        let rows = mv.children();
+        assert_eq!(rows.len(), 3);
+        rows[2].perform(sys::AK_ACTION_CLICK).unwrap();
+        assert_eq!(*chosen.borrow(), 8);
+        // Tabs and a status item made by kind.
+        let tabs = View::new(Kind::TAB_VIEW).unwrap();
+        tabs.set_strings(Prop::ITEMS, &["One", "Two"]).unwrap();
+        tabs.set_int(Prop::SELECTED_INDEX, 1).unwrap();
+        assert_eq!(tabs.get_int(Prop::SELECTED_INDEX).unwrap(), 1);
+        let item = View::new(Kind::STATUS_ITEM).unwrap();
+        item.set_int(Prop::STYLE, 2).unwrap();
+        item.set_str(Prop::SYMBOL, "battery-75").unwrap();
+        item.set_str(Prop::TEXT, "84%").unwrap();
+        assert_eq!(item.get_str(Prop::TEXT).unwrap(), "84%");
+        col.add(&item).unwrap();
+        w.snapshot_png(1.0).unwrap();
+        w.close().unwrap();
+    }
+}

@@ -1,0 +1,15 @@
+[package]
+name = "appkit-inspector"
+description = "Inspects a running AppKit process: windows, view tree, layers, accessibility"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "appkit-inspector"
+path = "src/main.rs"
+
+[lints]
+workspace = true

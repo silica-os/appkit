@@ -1,0 +1,19 @@
+[package]
+name = "appkit-sys"
+description = "The C ABI of AppKit (libappkit.so): types and function declarations, one list shared by the library and its Rust users"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+links = "appkit"
+build = "build.rs"
+
+[features]
+default = []
+# Link libappkit.so dynamically (distribution builds); without it, the user links appkit's
+# rlib statically (appkit-rs's `static` feature, the default inside this workspace).
+dynamic = []
+
+[lints]
+workspace = true

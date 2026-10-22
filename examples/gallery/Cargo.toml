@@ -1,0 +1,18 @@
+[package]
+name = "appkit-gallery"
+description = "Every AppKit component, in a window"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "appkit-gallery"
+path = "src/main.rs"
+
+[dependencies]
+appkit-ui = { path = "../../crates/appkit-ui" }
+
+[lints]
+workspace = true
