@@ -27,7 +27,15 @@ fn put_in_state(scene: &mut Scene, state: &str) {
         center_of(&scene.master, "Thumb").or_else(|| center_of(&scene.master, "Slider/Thumb"));
     match (state, thumb) {
         ("Hover", Some(p)) => scene.hover_at(p),
-        ("Pressed", Some(p)) => scene.press_at(p),
+        // With a pointer the thumb is the lens at once (ui-kit `onDown`); the kit's Pressed
+        // master is the pressed thumb, `force="pressed"`.
+        ("Pressed", Some(p)) => {
+            scene.hover_at(p);
+            if let Some(v) = scene.view {
+                let _ = scene.ui.set(v, Prop::Pressed, Value::Bool(true));
+            }
+            scene.settle();
+        }
         ("Rest", _) => {}
         _ => scene.set_state(state),
     }

@@ -18,6 +18,10 @@ impl Component for Page {
                 "Disabled",
                 slider(&b.binding(), 0.0, 1.0).width(240.0).disabled(true),
             ),
+            captioned(
+                "Dragging: the thumb is the lens",
+                slider(&b.binding(), 0.0, 1.0).width(240.0).dragging(true),
+            ),
             label(format!("{:.0} %", b.get() * 100.0)).color("Text/Secondary"),
         ))
         .spacing(12.0)

@@ -103,6 +103,7 @@ impl Prop {
     pub const EXPANDED_ITEMS: Prop = Prop(sys::AK_PROP_EXPANDED_ITEMS);
     pub const TILE_SIZE: Prop = Prop(sys::AK_PROP_TILE_SIZE);
     pub const PRESSED: Prop = Prop(sys::AK_PROP_PRESSED);
+    pub const DRAGGING: Prop = Prop(sys::AK_PROP_DRAGGING);
 }
 
 /// A signal id.

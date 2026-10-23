@@ -552,6 +552,12 @@ impl Element {
         self.prop(Prop::PRESSED, PValue::Bool(p))
     }
 
+    /// The glass lens of a slider or a switch without a pointer (the showcase's
+    /// `force="drag"`).
+    pub fn dragging(self, d: bool) -> Self {
+        self.prop(Prop::DRAGGING, PValue::Bool(d))
+    }
+
     /// An identifier for tests and the inspector.
     pub fn id(self, ident: &str) -> Self {
         self.prop(Prop::IDENTIFIER, PValue::Str(Rc::from(ident)))

@@ -420,6 +420,9 @@ numbered_enum! {
         /// Held down without a pointer (`Bool`): the pressed look, as the ui-kit showcase's
         /// `force="pressed"`.
         Pressed = 169,
+        /// Dragging without a pointer (`Bool`): the glass lens of a slider or a switch, as the
+        /// ui-kit showcase's `force="drag"`.
+        Dragging = 170,
     }
 }
 

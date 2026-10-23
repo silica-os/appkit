@@ -10,6 +10,7 @@ use crate::amalfi::tokens;
 use crate::core::a11y::{A11y, Action, Role};
 use crate::core::event::{Button, Event, Handled, Key};
 use crate::core::layout::Proposal;
+use crate::core::tree::NodeFlags;
 use crate::core::value::{Prop, Signal, Value};
 use crate::core::widget::{EventCx, FocusKind, Interaction, LayoutCx, PaintCx, PropChange, Widget};
 use crate::geom::{Point, Rect, Size};
@@ -185,6 +186,14 @@ impl Core {
             cx.emit(Signal::ValueChanged, Value::Float(f64::from(v)));
             cx.request_paint();
         }
+    }
+
+    /// Holds the lens up (or lets it go) without a pointer: `Prop::Dragging`.
+    fn force_lens(&mut self, on: bool) {
+        self.dragged = on;
+        let v = if on { 1.0 } else { 0.0 };
+        self.growth.jump(v);
+        self.opacity.jump(v);
     }
 
     fn lens_growth(&self) -> f32 {
@@ -687,17 +696,13 @@ impl Widget for Slider {
                     Signal::EditingBegan,
                     Value::Float(f64::from(self.core.value)),
                 );
-                let from_thumb = Point::new(
-                    p.x - self.thumb_rect().center().x,
-                    p.y - self.thumb_rect().center().y,
-                );
-                if from_thumb.length() <= metrics::GRAB_RADIUS {
-                    self.core.grab = from_thumb;
-                } else {
-                    self.core.grab = Point::ZERO;
-                    let f = self.fraction_at(p);
-                    self.core.emit(cx, f);
-                }
+                // ui-kit `onDown`: the thumb jumps under the pointer (its centre on it) and
+                // turns into the lens at once.
+                self.core.grab = Point::ZERO;
+                let f = self.fraction_at(p);
+                self.core.emit(cx, f);
+                self.core.start_drag(reduce);
+                cx.animate();
                 cx.request_paint();
                 Handled::Yes
             }
@@ -736,6 +741,15 @@ impl Widget for Slider {
 
     fn tick(&mut self, _cx: &mut EventCx<'_>, dt: f32) -> bool {
         self.core.tick(dt)
+    }
+
+    fn state_changed(&mut self, cx: &mut EventCx<'_>, _old: NodeFlags, new: NodeFlags) {
+        // `Prop::Pressed`: the pressed thumb without a pointer (ui-kit `force="pressed"`; with a
+        // pointer the thumb is the lens at once).
+        if !self.core.active && self.core.pressed != new.contains(NodeFlags::PRESSED) {
+            self.core.pressed = new.contains(NodeFlags::PRESSED);
+            cx.request_paint();
+        }
     }
 
     fn interaction(&self) -> Interaction {
@@ -783,12 +797,20 @@ impl Widget for Slider {
                 }
                 None => PropChange::Unknown,
             },
+            Prop::Dragging => match value.as_bool() {
+                Some(d) => {
+                    self.core.force_lens(d);
+                    PropChange::Paint
+                }
+                None => PropChange::Unknown,
+            },
             other => self.core.set_common(other, value),
         }
     }
 
     fn prop(&self, prop: Prop) -> Option<Value> {
         match prop {
+            Prop::Dragging => Some(Value::Bool(self.core.dragged)),
             Prop::Vertical => Some(Value::Bool(self.vertical)),
             Prop::TickMarks => Some(Value::Int(self.ticks_count() as i64)),
             other => self.core.get_common(other),
@@ -1022,6 +1044,13 @@ impl Widget for Dial {
         self.core.tick(dt)
     }
 
+    fn state_changed(&mut self, cx: &mut EventCx<'_>, _old: NodeFlags, new: NodeFlags) {
+        if !self.core.active && self.core.pressed != new.contains(NodeFlags::PRESSED) {
+            self.core.pressed = new.contains(NodeFlags::PRESSED);
+            cx.request_paint();
+        }
+    }
+
     fn interaction(&self) -> Interaction {
         Interaction::Hover
     }
@@ -1136,6 +1165,44 @@ mod tests {
     fn at(ui: &Ui, id: crate::core::ViewId, x: f32, y: f32) -> Point {
         let r = ui.tree.window_rect(id);
         Point::new(r.x + x, r.y + y)
+    }
+
+    #[test]
+    fn the_thumb_becomes_the_lens_at_once_under_the_pointer() {
+        let (mut ui, win, id, log) = scene(Slider::new().value(0.0));
+        // Pressed on the thumb's edge: the thumb's centre goes under the pointer (ui-kit
+        // `fromPointer`), and the lens is up without moving first.
+        let p = at(&ui, id, 18.0, 10.0);
+        ui.pointer_move(win, p, Mods::empty());
+        ui.pointer_down(win, p, Button::Left, Mods::empty());
+        assert!(
+            log.borrow()
+                .last()
+                .is_some_and(|v| (*v - 8.0 / 180.0).abs() < 0.01)
+        );
+        assert_eq!(ui.get(id, Prop::Dragging), Some(Value::Bool(true)));
+        for _ in 0..60 {
+            ui.advance(0.02);
+        }
+        let shown = ui.widget::<Slider>(id).is_some_and(|s| s.core.shows_lens());
+        assert!(shown);
+        ui.pointer_up(win, p, Button::Left, Mods::empty());
+        for _ in 0..60 {
+            ui.advance(0.02);
+        }
+        assert_eq!(ui.get(id, Prop::Dragging), Some(Value::Bool(false)));
+    }
+
+    #[test]
+    fn dragging_can_be_held_without_a_pointer() {
+        let (mut ui, _win, id, _log) = scene(Slider::new().value(0.5));
+        let _ = ui.set(id, Prop::Dragging, Value::Bool(true));
+        assert!(ui.widget::<Slider>(id).is_some_and(|s| s.core.shows_lens()));
+        let _ = ui.set(id, Prop::Dragging, Value::Bool(false));
+        assert!(
+            ui.widget::<Slider>(id)
+                .is_some_and(|s| !s.core.shows_lens())
+        );
     }
 
     #[test]
