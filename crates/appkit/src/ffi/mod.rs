@@ -434,8 +434,9 @@ impl Widget for CustomView {
         let data = self.data.clone();
         let draw: crate::core::display::CustomDraw = std::rc::Rc::new(move |canvas, rect| {
             canvas.translate((rect.x, rect.y));
-            let c = canvas as *mut crate::render::canvas::Canvas as *mut AKCanvas;
-            // SAFETY: the canvas lives for the call; the callback is the caller's.
+            let mut surface = canvas::Surface(canvas);
+            let c = &mut surface as *mut canvas::Surface<'_> as *mut AKCanvas;
+            // SAFETY: the surface lives for the call; the callback is the caller's.
             unsafe { f(c, rect.width, rect.height, data.user) };
         });
         let b = cx.bounds();

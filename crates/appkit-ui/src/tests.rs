@@ -773,3 +773,24 @@ fn a_swatch_row_selects_the_chip_that_is_clicked() {
     );
     assert!(chips[2].get_bool(Prop::STATE).unwrap());
 }
+
+#[test]
+fn a_canvas_element_is_drawn_by_its_closure() {
+    let _rt = Headless::new().unwrap();
+    let drawn = Rc::new(Cell::new(0u32));
+    let d2 = drawn.clone();
+    struct Plot(Rc<Cell<u32>>);
+    impl Component for Plot {
+        fn body(&self, _cx: &mut Cx) -> Element {
+            let n = self.0.clone();
+            canvas(120.0, 60.0, 1, move |c, w, h| {
+                n.set(n.get() + 1);
+                c.line(0.0, h, w, 0.0, 2.0, rgba(0x0E77E6FF));
+            })
+            .id("plot")
+        }
+    }
+    let png = preview((200.0, 100.0), 1.0, false, move || Plot(d2.clone())).unwrap();
+    assert_eq!(png.get(1..4), Some(&b"PNG"[..]));
+    assert!(drawn.get() >= 1, "the closure drew");
+}

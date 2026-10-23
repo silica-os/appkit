@@ -1213,3 +1213,36 @@ pub(crate) fn same_what(a: &What, b: &What) -> bool {
 
 #[allow(dead_code)]
 fn _assert_any(_: &dyn Any) {}
+
+/// A drawing closure of [`canvas`].
+type DrawFn = Rc<dyn Fn(&appkit_rs::Canvas, f32, f32)>;
+
+/// A view drawn by a closure: `draw(canvas, width, height)` over the ABI's canvas
+/// (rectangles, rounded rectangles, ellipses, lines, text and symbols). The view has the given
+/// size. It is drawn once per `version`: pass a new one (a hash of the data drawn) when what
+/// the closure draws has changed.
+pub fn canvas(
+    width: f32,
+    height: f32,
+    version: u64,
+    draw: impl Fn(&appkit_rs::Canvas, f32, f32) + 'static,
+) -> Element {
+    struct Drawn {
+        draw: DrawFn,
+        size: (f32, f32),
+    }
+    impl appkit_rs::Custom for Drawn {
+        fn draw(&mut self, canvas: &appkit_rs::Canvas, width: f32, height: f32) {
+            (self.draw)(canvas, width, height);
+        }
+        fn measure(&mut self, _proposed: (Option<f32>, Option<f32>)) -> (f32, f32) {
+            self.size
+        }
+    }
+    let draw: DrawFn = Rc::new(draw);
+    custom(move || Drawn {
+        draw: draw.clone(),
+        size: (width, height),
+    })
+    .key(version as i64)
+}

@@ -9,14 +9,14 @@ use std::rc::Rc;
 
 use crate::color::Color;
 use crate::geom::{Point, Rect, Transform};
-use crate::render::canvas::Canvas;
+
 use crate::render::image::Image;
 use crate::shape::Shape;
 use crate::style::{PaintOptions, Style, paint_style};
 use crate::text::TextLayout;
 
 /// A custom drawing callback (terminal grids, canvases): draws in the view's coordinates.
-pub type CustomDraw = Rc<dyn Fn(&mut Canvas, Rect)>;
+pub type CustomDraw = Rc<dyn Fn(&mut dyn crate::render::Painter, Rect)>;
 
 /// One item of a display list. Rectangles are in the view's own coordinates.
 #[derive(Clone)]
@@ -258,9 +258,7 @@ impl DisplayList {
                 }
                 DisplayItem::Custom { rect, draw, .. } => {
                     canvas.save();
-                    if let Some(c) = canvas.as_canvas() {
-                        draw(c, *rect);
-                    }
+                    draw(canvas, *rect);
                     canvas.restore();
                 }
             }
@@ -606,8 +604,24 @@ mod tests {
         assert_eq!(layers.len(), 2);
         assert_eq!(layers[0].path, "Button/Surface");
         assert_eq!(layers[0].frame, Rect::new(5.0, 5.0, 40.0, 20.0));
-        let mut c = Canvas::new(50, 30);
+        let mut c = crate::render::canvas::Canvas::new(50, 30);
         list.paint(&mut c, PaintOptions::default());
         assert_eq!(c.finish().pixel(20, 15), [10, 20, 30, 255]);
+    }
+
+    #[test]
+    fn custom_drawing_goes_through_the_painter_of_any_backend() {
+        let mut r = Recorder::new();
+        let draw: CustomDraw = Rc::new(|p, rect| {
+            // Only the Painter trait: no CPU canvas needed.
+            p.fill_rect(Rect::new(rect.x, rect.y, 10.0, 10.0), Color::rgb(200, 0, 0));
+        });
+        r.custom("Probe", Rect::new(5.0, 5.0, 20.0, 20.0), draw);
+        let list = r.finish();
+        let mut c = crate::render::canvas::Canvas::new(40, 40);
+        list.paint(&mut c, PaintOptions::default());
+        let img = c.finish();
+        assert_eq!(img.pixel(8, 8), [200, 0, 0, 255]);
+        assert_eq!(img.pixel(30, 30)[3], 0);
     }
 }

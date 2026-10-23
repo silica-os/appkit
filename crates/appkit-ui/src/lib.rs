@@ -43,8 +43,8 @@ pub use appkit_rs as kit;
 pub use appkit_rs::Column;
 pub use element::{
     AlertSpec, Animation, Component, Element, Handler, IntoChildren, Key, MenuEntry, PValue,
-    Transition, button, collection, column, component, custom, for_each, grid, group, host, label,
-    list, made, outline, overlay, row, spacer, symbol, table, tabs, text_view, view,
+    Transition, button, canvas, collection, column, component, custom, for_each, grid, group, host,
+    label, list, made, outline, overlay, row, spacer, symbol, table, tabs, text_view, view,
 };
 
 /// Everything an app needs.
@@ -52,8 +52,8 @@ pub mod prelude {
     pub use crate::controls::*;
     pub use crate::{
         AlertSpec, Animation, Binding, Column, Component, Cx, Element, MenuEntry, Model, State,
-        Transition, button, collection, column, component, custom, for_each, grid, group, host,
-        label, list, outline, overlay, row, spacer, symbol, table, tabs, text_view, view,
+        Transition, button, canvas, collection, column, component, custom, for_each, grid, group,
+        host, label, list, outline, overlay, row, spacer, symbol, table, tabs, text_view, view,
     };
     pub use appkit_rs::{Color, Signal, Value, rgba};
 }
