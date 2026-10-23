@@ -1219,8 +1219,8 @@ fn named(ui: &mut Ui, v: ViewId, name: &str) -> ViewId {
 }
 
 /// Makes the open or save panel of `spec`. The primary and Cancel buttons, "New Folder", the
-/// navigation arrows and the compact / expanded switch all work: the first four emit on the
-/// panel, the last rebuilds it (`ExpandedChanged` is emitted on the panel).
+/// navigation arrows and the compact / expanded switch all work: they emit on the panel, and
+/// the owner builds the panel again at the new form on `ExpandedChanged`.
 pub fn file_panel(ui: &mut Ui, spec: &FilePanelSpec) -> FilePanelParts {
     let root = ui.create(FilePanel {
         mode: spec.mode,
@@ -1234,12 +1234,7 @@ pub fn file_panel(ui: &mut Ui, spec: &FilePanelSpec) -> FilePanelParts {
         let top = if spec.mode == Mode::Save { 48.0 } else { 12.0 };
         let col = ui.create(PlacesColumn { top });
         let _ = ui.set(col, Prop::MaxHeight, Value::from(f32::INFINITY));
-        if spec.mode == Mode::Save {
-            let lights = crate::amalfi::titlebars::window_controls_view(ui);
-            let _ = ui.set(lights, Prop::Hidden, Value::Bool(false));
-            // Positioned by the column's padding: the lights sit at (16, 16).
-            let _ = lights;
-        }
+        // The save form leaves the column's top 48 pt to the window's own controls.
         for (title, items) in &spec.places {
             let hd = ui.create(sidebars::Header::new(title));
             ui.add_child(col, hd);
@@ -1456,7 +1451,8 @@ fn location_menu(spec: &FilePanelSpec) -> MenuButton {
 }
 
 /// Expands or collapses a save panel (what the chevron beside "Where:" and the one in the
-/// toolbar do): the panel is built again at the other form and emits `ExpandedChanged`.
+/// toolbar do): the panel records the form and emits `ExpandedChanged`, on which its owner
+/// builds it again.
 pub fn set_expanded(ui: &mut Ui, panel: ViewId, expanded: bool) {
     let changed = ui
         .with_widget::<FilePanel, _>(panel, |p| {
