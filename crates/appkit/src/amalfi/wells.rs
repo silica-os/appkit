@@ -741,6 +741,15 @@ pub struct ImageWell {
     /// An image is being dragged over it.
     pub drag_over: bool,
     label: Label,
+    /// The clear button's opacity: hover or focus, `fade.quick` (`.s-imagewell__clear`).
+    clear_t: Animated<f32>,
+    /// Where the press that is being released began.
+    down_at: Option<Point>,
+}
+
+/// The clear button of a filled well: 20 pt, 6 pt from the top and right edges.
+fn clear_rect(size: Size) -> Rect {
+    Rect::new(size.width - 26.0, 6.0, 20.0, 20.0)
 }
 
 impl ImageWell {
@@ -752,6 +761,8 @@ impl ImageWell {
             drop_hint: "Release to add".to_string(),
             drag_over: false,
             label: Label::default(),
+            clear_t: Animated::new(0.0),
+            down_at: None,
         }
     }
 
@@ -877,10 +888,50 @@ impl Widget for ImageWell {
         if focused {
             focus_halo_named(cx.rec, "Focus Halo", r, shape, &theme);
         }
+        let t = self.clear_t.get().clamp(0.0, 1.0);
+        if t > 0.0 && !cx.is_disabled() {
+            let rect = clear_rect(r.size());
+            cx.rec.push_opacity(t);
+            crate::amalfi::fields::paint_clear(
+                cx,
+                "Clear button/",
+                Rect::new(r.x + rect.x, r.y + rect.y, rect.width, rect.height),
+                false,
+            );
+            cx.rec.pop();
+        }
     }
 
     fn event(&mut self, cx: &mut EventCx<'_>, event: &Event) -> Handled {
+        let id = cx.id();
+        let filled = !cx.ui().tree.children(id).is_empty();
         match event {
+            Event::PointerDown { pos, .. } => {
+                self.down_at = Some(*pos);
+                Handled::No
+            }
+            // A filled well's clear button empties it; the rest of the well chooses an image.
+            Event::Activate
+                if filled
+                    && self
+                        .down_at
+                        .take()
+                        .is_some_and(|p| clear_rect(cx.size()).contains(p)) =>
+            {
+                cx.emit(Signal::ValueChanged, Value::None);
+                Handled::Yes
+            }
+            Event::Key(k)
+                if filled
+                    && k.pressed
+                    && matches!(
+                        k.key,
+                        crate::core::event::Key::Delete | crate::core::event::Key::Backspace
+                    ) =>
+            {
+                cx.emit(Signal::ValueChanged, Value::None);
+                Handled::Yes
+            }
             Event::Drop { items, .. } => {
                 self.drag_over = false;
                 cx.emit(Signal::Dropped, Value::StrList(items.clone()));
@@ -893,6 +944,27 @@ impl Widget for ImageWell {
             }
             _ => Handled::No,
         }
+    }
+
+    fn state_changed(&mut self, cx: &mut EventCx<'_>, _old: NodeFlags, new: NodeFlags) {
+        // The ui-kit also shows it on keyboard focus; the kit's `Filled/*/Focused` masters
+        // have no clear button, so only the hover reveals it (Delete clears either way).
+        let on = new.contains(NodeFlags::HOVERED);
+        let target = if on { 1.0 } else { 0.0 };
+        if self.clear_t.target() != target {
+            let timing = if cx.theme().appearance.reduce_motion {
+                Timing::None
+            } else {
+                Timing::curve(tokens::motion::FADE_QUICK_CURVE, tokens::motion::FADE_QUICK)
+            };
+            self.clear_t.animate_to(target, timing);
+            cx.animate();
+        }
+    }
+
+    fn tick(&mut self, cx: &mut EventCx<'_>, dt: f32) -> bool {
+        cx.request_paint();
+        self.clear_t.tick(dt)
     }
 
     fn interaction(&self) -> Interaction {
@@ -953,6 +1025,88 @@ mod tests {
     use crate::core::window::WindowKind;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    fn filled_well() -> (Ui, WindowId, ViewId) {
+        let mut ui = Ui::new_headless();
+        let win = ui.create_window(WindowKind::Normal, Size::new(300.0, 300.0));
+        let well = ui.create(ImageWell::new());
+        let content = ui.create(Stack::column(0.0));
+        ui.add_child(well, content);
+        let holder = ui.create(Stack::column(0.0));
+        ui.add_child(holder, well);
+        ui.set_content(win, holder);
+        ui.show_window(win);
+        ui.prepare_frame(win);
+        (ui, win, well)
+    }
+
+    #[test]
+    fn a_filled_well_shows_its_clear_button_on_hover_and_clears() {
+        let (mut ui, win, well) = filled_well();
+        let r = ui.tree.window_rect(well);
+        let clear = Rect::new(r.right() - 26.0, r.y + 6.0, 20.0, 20.0).center();
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let l = log.clone();
+        ui.connect(well, Signal::ValueChanged, move |_, _, v| {
+            l.borrow_mut().push(v.clone())
+        });
+        let chose = Rc::new(RefCell::new(0));
+        let c = chose.clone();
+        ui.connect(well, Signal::Activated, move |_, _, _| *c.borrow_mut() += 1);
+        let opacity = |ui: &mut Ui| {
+            ui.with_widget::<ImageWell, _>(well, |w| w.clear_t.get())
+                .unwrap_or(-1.0)
+        };
+        assert_eq!(opacity(&mut ui), 0.0);
+        ui.pointer_move(win, r.center(), Mods::empty());
+        ui.advance(0.05);
+        let mid = opacity(&mut ui);
+        assert!(mid > 0.0 && mid < 1.0, "fading in: {mid}");
+        ui.advance(0.3);
+        assert_eq!(opacity(&mut ui), 1.0);
+        // A click on the rest of the well chooses an image ...
+        ui.pointer_down(win, r.center(), Button::Left, Mods::empty());
+        ui.pointer_up(win, r.center(), Button::Left, Mods::empty());
+        assert_eq!((*chose.borrow(), log.borrow().len()), (1, 0));
+        // ... the one on the clear button empties it.
+        ui.pointer_move(win, clear, Mods::empty());
+        ui.pointer_down(win, clear, Button::Left, Mods::empty());
+        ui.pointer_up(win, clear, Button::Left, Mods::empty());
+        assert_eq!(
+            (*chose.borrow(), log.borrow().clone()),
+            (1, vec![Value::None])
+        );
+        // Delete clears too.
+        ui.set_focus(well, true);
+        ui.key(
+            win,
+            crate::core::event::KeyEvent::press(Key::Delete, Mods::empty()),
+        );
+        assert_eq!(log.borrow().len(), 2);
+        ui.pointer_leave(win);
+        ui.advance(0.3);
+    }
+
+    #[test]
+    fn an_empty_well_has_no_clear_button() {
+        let mut ui = Ui::new_headless();
+        let win = ui.create_window(WindowKind::Normal, Size::new(300.0, 300.0));
+        let well = ui.create(ImageWell::new());
+        ui.set_content(win, well);
+        ui.show_window(win);
+        ui.prepare_frame(win);
+        let log = Rc::new(RefCell::new(0));
+        let l = log.clone();
+        ui.connect(well, Signal::ValueChanged, move |_, _, _| {
+            *l.borrow_mut() += 1
+        });
+        ui.set_focus(well, true);
+        ui.key(
+            win,
+            crate::core::event::KeyEvent::press(Key::Delete, Mods::empty()),
+        );
+        assert_eq!(*log.borrow(), 0);
+    }
 
     #[test]
     fn a_swatch_row_is_192_wide() {

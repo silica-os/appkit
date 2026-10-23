@@ -872,7 +872,7 @@ fn paint_token(
     );
 }
 
-fn paint_clear(cx: &mut PaintCx<'_>, prefix: &str, rect: Rect, pressed: bool) {
+pub(crate) fn paint_clear(cx: &mut PaintCx<'_>, prefix: &str, rect: Rect, pressed: bool) {
     let c = cx.theme().colors;
     cx.rec.layer(
         &format!("{prefix}Disc"),
