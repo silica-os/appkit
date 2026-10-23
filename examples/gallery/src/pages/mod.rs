@@ -1,5 +1,6 @@
 //! The pages of the gallery, one module per family, in the order of the sidebar.
 
+use appkit_ui::kit;
 use appkit_ui::prelude::*;
 
 mod alerts;
@@ -189,15 +190,21 @@ pub fn card(content: Element) -> Element {
 /// control centred), the card of controls 300 beside it.
 pub fn playground(live: Element, controls: Element) -> Element {
     row((
-        boxed(
+        overlay((
+            {
+                // Read here: during paint the UI is borrowed and `is_dark` answers false.
+                let dark = kit::is_dark();
+                custom(move || GlassBackdrop { dark }).key(i64::from(dark))
+            },
             column((spacer(), live, spacer()))
                 .alignment(1)
                 .padding(48.0)
                 .min_height(200.0)
                 .fill_width(),
-            "Surface/Window",
-            14.0,
-        ),
+        ))
+        .corner_radius(14.0)
+        .clipped()
+        .fill_width(),
         column((card(controls.spacing(14.0)),))
             .alignment(0)
             .width(300.0),
@@ -245,4 +252,95 @@ pub fn matrix(cols: &[&str], rows: Vec<(&str, Vec<Element>)>) -> Element {
 /// A page: its sections, top to bottom (the window adds the title and the 36 pt margins).
 pub fn page(sections: Vec<Element>) -> Element {
     column(sections).spacing(12.0).alignment(0).fill_width()
+}
+
+/// Stage.vue's glass backdrop: a 135° wash of four colours under 45° stripes, so the glass of
+/// the controls has something to refract and tint.
+struct GlassBackdrop {
+    dark: bool,
+}
+
+impl kit::Custom for GlassBackdrop {
+    fn draw(&mut self, canvas: &kit::Canvas, width: f32, height: f32) {
+        let (wash, stripes): (&[(f32, u32)], (u32, u32)) = if self.dark {
+            (
+                &[(0.0, 0x3A1D6EFF), (0.5, 0x0B2A55FF), (1.0, 0x064B4AFF)],
+                (0x00000044, 0xFFFFFF11),
+            )
+        } else {
+            (
+                &[
+                    (0.0, 0xFFD29CFF),
+                    (0.4, 0xF7A6CBFF),
+                    (0.7, 0x8EC2F5FF),
+                    (1.0, 0x9FE0B5FF),
+                ],
+                (0x0000000D, 0xFFFFFF40),
+            )
+        };
+        canvas.save();
+        canvas.clip(kit::Rect {
+            x: 0.0,
+            y: 0.0,
+            width,
+            height,
+        });
+        // At 135° a point's place on the gradient is (x + y) / (w + h): bands along x + y = c.
+        let span = (width + height).max(1.0);
+        let mut c = 0.0;
+        while c <= span {
+            let color = sample(wash, c / span);
+            canvas.line(c + 2.0, -2.0, -2.0, c + 2.0, 2.5, color);
+            c += 1.5;
+        }
+        // 45° stripes 12 wide every 24, along x − y = c (a step of 24·√2 in c).
+        let step = 24.0 * std::f32::consts::SQRT_2;
+        let mut c = -height - step;
+        let mut i = 0usize;
+        while c <= width + step {
+            let color = rgba(if i.is_multiple_of(2) {
+                stripes.0
+            } else {
+                stripes.1
+            });
+            canvas.line(
+                c - 24.0,
+                -24.0,
+                c + height + 24.0,
+                height + 24.0,
+                12.0,
+                color,
+            );
+            c += step / 2.0;
+            i += 1;
+        }
+        canvas.restore();
+    }
+}
+
+/// The colour at `t` of a gradient with stops `(offset, 0xRRGGBBAA)`.
+fn sample(stops: &[(f32, u32)], t: f32) -> Color {
+    let mut prev = stops.first().copied().unwrap_or((0.0, 0));
+    for &(o, c) in stops {
+        if t <= o {
+            let k = if o > prev.0 {
+                (t - prev.0) / (o - prev.0)
+            } else {
+                1.0
+            };
+            return mix(rgba(prev.1), rgba(c), k.clamp(0.0, 1.0));
+        }
+        prev = (o, c);
+    }
+    rgba(prev.1)
+}
+
+fn mix(a: Color, b: Color, k: f32) -> Color {
+    let l = |x: u8, y: u8| (f32::from(x) + (f32::from(y) - f32::from(x)) * k).round() as u8;
+    Color {
+        r: l(a.r, b.r),
+        g: l(a.g, b.g),
+        b: l(a.b, b.b),
+        a: l(a.a, b.a),
+    }
 }
