@@ -11,7 +11,7 @@ use crate::amalfi::theme::Theme;
 use crate::amalfi::tokens::{self, TypeStyle, typography};
 use crate::color::Color;
 use crate::core::a11y::{A11y, Action, Role};
-use crate::core::event::{Button, Event, Handled, Key};
+use crate::core::event::{Button, Event, Handled, Key, Mods};
 use crate::core::layout::Proposal;
 use crate::core::tree::ViewId;
 use crate::core::ui::{Cursor, Request, Ui};
@@ -19,6 +19,7 @@ use crate::core::value::{Prop, Signal, Value};
 use crate::core::widget::{EventCx, FocusKind, Interaction, LayoutCx, PaintCx, PropChange, Widget};
 use crate::core::window::WindowId;
 use crate::geom::{Point, Rect, Size};
+use crate::motion::{Animated, Timing};
 use crate::shape::Shape;
 use crate::style::{Border, BorderPosition, Style};
 use crate::text::edit::{EditAction, Editor, Selection};
@@ -166,6 +167,9 @@ pub struct TextField {
     dragging: bool,
     selected_token: Option<usize>,
     clear_pressed: bool,
+    clear_hover: bool,
+    /// The focus ring and the accent border fade in and out (`fade.quick`).
+    focus_t: Animated<f32>,
     combo_pressed: bool,
     open: bool,
     /// The popup that shows the list of a combo box while it is open.
@@ -203,6 +207,8 @@ impl TextField {
             dragging: false,
             selected_token: None,
             clear_pressed: false,
+            clear_hover: false,
+            focus_t: Animated::new(0.0),
             combo_pressed: false,
             open: false,
             popup: None,
@@ -570,6 +576,11 @@ impl TextField {
             return;
         }
         self.editor.set_text("");
+        // A token that is there already is not added twice.
+        if self.tokens.contains(&text) {
+            self.changed(cx);
+            return;
+        }
         self.tokens.push(text);
         cx.emit(Signal::ValueChanged, Value::StrList(self.tokens.clone()));
         self.changed(cx);
@@ -617,9 +628,43 @@ impl TextField {
                     return Handled::Yes;
                 }
                 (Key::Modifier, _) => {}
+                (Key::Left, Some(i)) => {
+                    self.selected_token = Some(i.saturating_sub(1));
+                    cx.request_paint();
+                    return Handled::Yes;
+                }
+                (Key::Right, Some(i)) => {
+                    self.selected_token = (i + 1 < self.tokens.len()).then_some(i + 1);
+                    cx.request_paint();
+                    return Handled::Yes;
+                }
                 (_, Some(_)) => {
                     self.selected_token = None;
                     cx.request_paint();
+                }
+                _ => {}
+            }
+        }
+        if self.kind == FieldKind::Tokens && k.pressed {
+            let typed = !self.editor.text().trim().is_empty();
+            let plain = !k.mods.intersects(Mods::CTRL | Mods::LOGO | Mods::ALT);
+            match &k.key {
+                // A comma, or Tab with text, adds the token (Tab without text moves on).
+                Key::Char(',') if plain => {
+                    self.commit_token(cx);
+                    return Handled::Yes;
+                }
+                Key::Tab if typed => {
+                    self.commit_token(cx);
+                    return Handled::Yes;
+                }
+                // The arrows walk the tokens from an empty text.
+                Key::Left if !self.tokens.is_empty() && self.editor.text().is_empty() => {
+                    let last = self.tokens.len() - 1;
+                    self.selected_token =
+                        Some(self.selected_token.map_or(last, |i| i.saturating_sub(1)));
+                    cx.request_paint();
+                    return Handled::Yes;
                 }
                 _ => {}
             }
@@ -787,18 +832,23 @@ impl TextField {
     fn colors_for(&self, theme: &Theme, enabled: bool) -> (Color, f32, bool, bool) {
         let c = &theme.colors;
         let error = enabled && self.error.is_some();
-        let strong = enabled && (error || self.focused);
-        let border = if !strong {
-            c.line_border
-        } else if error {
+        let t = if enabled {
+            self.focus_t.get().clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let strong = error || t > 0.0;
+        let border = if error {
             c.palette_terracotta
         } else {
-            c.accent_amalfi
+            c.line_border.lerp(c.accent_amalfi, t)
         };
-        let width = if strong && !self.value_field {
+        let width = if self.value_field {
+            metrics::BORDER
+        } else if error {
             metrics::STRONG_BORDER
         } else {
-            metrics::BORDER
+            metrics::BORDER + (metrics::STRONG_BORDER - metrics::BORDER) * t
         };
         (border, width, strong, error)
     }
@@ -870,6 +920,14 @@ fn paint_token(
         400,
         ink,
     );
+}
+
+fn fade_quick(theme: &Theme) -> Timing {
+    if theme.appearance.reduce_motion {
+        Timing::None
+    } else {
+        Timing::curve(tokens::motion::FADE_QUICK_CURVE, tokens::motion::FADE_QUICK)
+    }
 }
 
 pub(crate) fn paint_clear(cx: &mut PaintCx<'_>, prefix: &str, rect: Rect, pressed: bool) {
@@ -986,8 +1044,11 @@ impl Widget for TextField {
                 shape.clone(),
                 theme.material_style("Glass/Regular"),
             );
-            if self.focused && enabled {
+            let t = self.focus_t.get().clamp(0.0, 1.0);
+            if t > 0.0 && enabled {
+                cx.rec.push_opacity(t);
                 focus_halo_named(cx.rec, "Focus Halo", field, shape, &theme);
+                cx.rec.pop();
             }
         } else {
             let mut style = Style::fill(c.surface_raised);
@@ -1006,6 +1067,8 @@ impl Widget for TextField {
                 ));
                 if error {
                     halo.opacity = metrics::ERROR_HALO_OPACITY;
+                } else {
+                    halo.opacity = self.focus_t.get().clamp(0.0, 1.0);
                 }
                 cx.rec.layer("Focus Halo", field, shape, halo);
             }
@@ -1181,7 +1244,12 @@ impl Widget for TextField {
             }
         }
         if let Some(r) = row.clear {
-            paint_clear(cx, "Clear button/", r.translate(o), self.clear_pressed);
+            paint_clear(
+                cx,
+                "Clear button/",
+                r.translate(o),
+                self.clear_pressed || self.clear_hover,
+            );
         }
         if let Some(r) = row.combo {
             paint_combo(
@@ -1214,6 +1282,7 @@ impl Widget for TextField {
             Event::FocusIn => {
                 self.focused = true;
                 self.blink = 0.0;
+                self.focus_t.animate_to(1.0, fade_quick(&theme));
                 cx.emit(Signal::EditingBegan, Value::None);
                 cx.animate();
                 cx.request_paint();
@@ -1221,6 +1290,12 @@ impl Widget for TextField {
             }
             Event::FocusOut => {
                 self.focused = false;
+                self.focus_t.animate_to(0.0, fade_quick(&theme));
+                cx.animate();
+                if self.kind == FieldKind::Tokens {
+                    // Leaving the field adds what was typed.
+                    self.commit_token(cx);
+                }
                 self.dragging = false;
                 self.selected_token = None;
                 self.editor.set_preedit("", None);
@@ -1243,6 +1318,19 @@ impl Widget for TextField {
                 dragging: false, ..
             } => {
                 cx.set_cursor(Cursor::Text);
+                if let Event::PointerMove { pos, .. } = event {
+                    let over = row.clear.is_some_and(|r| r.contains(local(pos)));
+                    if over != self.clear_hover {
+                        self.clear_hover = over;
+                        cx.request_paint();
+                    }
+                }
+                Handled::No
+            }
+            Event::PointerLeave => {
+                if std::mem::take(&mut self.clear_hover) {
+                    cx.request_paint();
+                }
                 Handled::No
             }
             Event::PointerDown {
@@ -1382,8 +1470,12 @@ impl Widget for TextField {
     }
 
     fn tick(&mut self, cx: &mut EventCx<'_>, dt: f32) -> bool {
+        let fading = self.focus_t.tick(dt);
+        if fading {
+            cx.request_paint();
+        }
         if !self.focused {
-            return false;
+            return fading;
         }
         let before = self.caret_visible();
         self.blink += dt;
@@ -1749,6 +1841,66 @@ mod tests {
             Some(Value::StrList(vec!["Travel".into()]))
         );
         assert!(log.borrow().iter().any(|l| l == "tokens:Travel|Coast"));
+    }
+
+    #[test]
+    fn token_field_commas_tab_arrows_duplicates_and_blur() {
+        let mut ui = Ui::new_headless();
+        let win = ui.create_window(WindowKind::Normal, Size::new(300.0, 100.0));
+        let f = ui.create(TextField::new(FieldKind::Tokens));
+        ui.set_content(win, f);
+        ui.show_window(win);
+        ui.prepare_frame(win);
+        ui.set_focus(f, true);
+        let tokens = |ui: &Ui| ui.get(f, Prop::Tokens);
+        ui.text_input(win, "red");
+        key(&mut ui, win, Key::Char(','), Mods::empty());
+        ui.text_input(win, "blue");
+        key(&mut ui, win, Key::Tab, Mods::empty());
+        ui.text_input(win, "red");
+        key(&mut ui, win, Key::Enter, Mods::empty());
+        assert_eq!(
+            tokens(&ui),
+            Some(Value::StrList(vec!["red".into(), "blue".into()])),
+            "the duplicate is ignored"
+        );
+        // Left walks from the end, Right comes back, Backspace removes the selected one.
+        key(&mut ui, win, Key::Left, Mods::empty());
+        key(&mut ui, win, Key::Left, Mods::empty());
+        key(&mut ui, win, Key::Right, Mods::empty());
+        key(&mut ui, win, Key::Backspace, Mods::empty());
+        assert_eq!(tokens(&ui), Some(Value::StrList(vec!["red".into()])));
+        // Leaving the field adds what was typed.
+        ui.text_input(win, "green");
+        ui.clear_focus(win);
+        assert_eq!(
+            tokens(&ui),
+            Some(Value::StrList(vec!["red".into(), "green".into()]))
+        );
+    }
+
+    #[test]
+    fn the_focus_ring_fades_in() {
+        let mut ui = Ui::new_headless();
+        let win = ui.create_window(WindowKind::Normal, Size::new(300.0, 100.0));
+        let f = ui.create(TextField::text());
+        ui.set_content(win, f);
+        ui.show_window(win);
+        ui.prepare_frame(win);
+        let halo = |ui: &mut Ui| {
+            ui.prepare_frame(win);
+            ui.inspect_layers(f)
+                .iter()
+                .any(|l| l.path.ends_with("Focus Halo"))
+        };
+        assert!(!halo(&mut ui));
+        ui.set_focus(f, true);
+        ui.advance(0.03);
+        assert!(halo(&mut ui), "on its way in");
+        for _ in 0..20 {
+            ui.advance(1.0 / 60.0);
+        }
+        assert!(halo(&mut ui));
     }
 
     #[test]
