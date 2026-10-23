@@ -62,6 +62,8 @@ pub struct Text {
     /// Wraps onto several lines in the width it is given (a paragraph) instead of one line
     /// with an ellipsis.
     pub wraps: bool,
+    /// The most lines a paragraph shows (an ellipsis ends the last); `None`: all of them.
+    pub max_lines: Option<usize>,
     label: Label,
 }
 
@@ -77,6 +79,7 @@ impl Text {
             step: 0.0,
             trailing: 0.0,
             wraps: false,
+            max_lines: None,
             label: Label::default(),
         }
     }
@@ -112,6 +115,13 @@ impl Text {
         self
     }
 
+    /// A paragraph of at most `n` lines.
+    pub fn lines(mut self, n: usize) -> Text {
+        self.wraps = true;
+        self.max_lines = Some(n.max(1));
+        self
+    }
+
     /// With an alignment.
     pub fn align(mut self, align: Align) -> Text {
         self.align = align;
@@ -144,9 +154,13 @@ impl Widget for Text {
             && let Some(avail) = p.width.filter(|w| w.is_finite())
         {
             let style = theme.text(self.token, self.role.color(&theme));
-            let layout = self
-                .label
-                .layout(&self.text, &style, self.align, avail.max(0.0), None);
+            let layout = self.label.layout(
+                &self.text,
+                &style,
+                self.align,
+                avail.max(0.0),
+                self.max_lines,
+            );
             return Size::new(avail.max(0.0), layout.size().height);
         }
         let natural = self.natural(&theme);
@@ -168,7 +182,7 @@ impl Widget for Text {
             &style,
             self.align,
             width,
-            if self.wraps { None } else { Some(1) },
+            if self.wraps { self.max_lines } else { Some(1) },
         );
         cx.rec.text(
             &self.layer,
