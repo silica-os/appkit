@@ -224,53 +224,12 @@ costs the rows it covers; backdrops dominate glass scenes.
 
 1. GPU backend (`render::gpu`, wgpu: Vulkan, GLES fallback) with the same formulas as the CPU
    canvas and a GPU-vs-CPU agreement test.
-2. The ui-kit families Vetro lacked (materials, callouts, notifications, Control Centre,
-   Dock, menu bar, colour and file panels) and a Kit Gallery mirroring the ui-kit Library.
-3. The shell on AppKit, migrated from the archived silica-desktop `appkit` branch
-   (summary kept for the migration): silica-desktop branch `appkit` (worktree ~/build/wt-appkit-shell,
-   crate `crates/shell`, binary `silica-shell`; appkit from the sibling `../appkit`
-   checkout, the workspace patches appkit's git dependency on silica-desktop's protocols to
-   the local crates). `cargo xtask os deploy --toolkit=appkit` runs it as the dev session's
-   kept shell (verified in the VM with Vulkan/Venus: wallpaper from silica.assets, menu bar,
-   status items, Control Center, Dock with magnification and bounce, Faro, Launcher,
-   banners, the screenshot thumbnail). Done:
-   - lock screen (session lock per output, wallpaper, clock, user block, password states and
-     shake, unlock through System1, Wi-Fi and battery status items);
-   - desktop wallpaper (Background layer; images, colour, the Amalfi set or silica.assets);
-   - menu bar (system menu, the focused app's menus, submenus, status items over System1:
-     Bluetooth, Wi-Fi, Sound, Battery, Search, Clock, Control Center);
-   - Control Center (Wi-Fi, Bluetooth, Do Not Disturb, Dark Mode, Screen Capture, Display
-     and Sound sliders through silica-daemon);
-   - Dock (pinned and running apps, Silica icons for Silica's apps, the kit's Missing tile,
-     magnification with the measured profile and curve, grow/shrink of unpinned apps,
-     launch bounce, context menus with Keep in Dock/Remove, Show All Windows, Hide, Quit,
-     the separator's magnification toggle, Trash full/empty with the Empty Trash alert, the
-     Downloads stack as a pile and a grid, `dock.icons` for the minimise effect);
-   - Faro and the Launcher (one morphing panel: apps, home files, calculations, web search;
-     grid with categories, recents, search, scroll bar);
-   - notifications (banners with the measured timings, Notification Center with stacks,
-     Clear All, the empty state, Do Not Disturb);
-   - app switcher (switcher.* from Ossido), screenshot thumbnail, selection and bar;
-   - Gatekeeper, administrator authentication and Force Quit dialogs.
-   Ossido on that branch: xdg-dialog sheets, parentless modal dialogs centred on screen.
-   Then (toolkit4): Dock drag to reorder, drag out and onto the Trash, folders in and out,
-   files dropped from other apps with spring-loading, auto-hide, badges and progress
-   (LauncherEntry), attention, minimised windows with thumbnails, stack fan/grid/list views
-   and options, piles 4% smaller per depth; notification actions, Details and inline
-   replies; the Flutter shell's Dock tests ported. Platform fixes found in the VM: the seat
-   present at startup is adopted (popups now grab and close on a press outside; the data
-   device and text input exist), unchanged input regions are not sent again.
-   The shell runs as one process per role (`silica-shell --role`: wallpaper, menubar,
-   controlcenter, dock, faro, notifications, lock, screenshot; silica-desktop#261), each
-   kept running by Ossido; the lock role takes the lock over after a restart. Memory in the
-   VM: about 112 MB PSS for the eight processes (the wallpaper role 39 MB, its Vulkan
-   swapchain at the output's size; the idle roles about 8 MB each).
-   Next: the screenshot editor stays an app (#154, not in the shell); recording (#153);
-   Notification Center widgets need a kit design first.
-4. Collections: type-select, column reordering, drag and drop of rows, rubber-band
-   selection in grids.
-5. Open kit problems: app icons (bitmaps in the kit), `Open` button masters, menu bar family.
-6. `appkit-terminal` (port `crates/embedder/src/termgrid.rs` + `pty.rs`) with the apps phase.
-7. Keep AppKit free of distribution-specific assumptions (Silica OS moves to a
-   BuildStream/freedesktop-sdk image): fonts are bundled, fontconfig and the services are
-   optional at run time.
+2. Behaviour with no ui-kit source yet: collections (selection, keyboard, type-select),
+   tooltips' enter fade.
+3. Touchpad tuning on real hardware (kinetic decay, navigation swipe distance); the VM only
+   has a mouse.
+
+Scope: AppKit is the public toolkit only. The Dock, Control Centre, Notification Centre,
+menu bar, Faro and the lock screen are system apps built on AppKit in their own processes,
+not part of this crate. Values come from the ui-kit tokens (`crates/appkit/data/tokens.json`),
+or from the ui-kit `.vue`/CSS where no token exists; never from Vetro.
