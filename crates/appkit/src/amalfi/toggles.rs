@@ -103,15 +103,15 @@ impl BoxMetrics {
 /// The labelled row's measures (`AmalfiToggleRowMetrics`).
 pub mod row {
     /// Horizontal padding.
-    pub const PADDING: f32 = 4.0;
+    pub const PADDING: f32 = crate::amalfi::tokens::spacing::XS;
     /// Gap between box and label.
-    pub const GAP: f32 = 8.0;
+    pub const GAP: f32 = crate::amalfi::tokens::spacing::S;
     /// Row height.
-    pub const HEIGHT: f32 = 20.0;
+    pub const HEIGHT: f32 = crate::amalfi::tokens::control_heights::MINI;
     /// Space after the label text inside its box.
-    pub const LABEL_TRAILING: f32 = 8.0;
+    pub const LABEL_TRAILING: f32 = crate::amalfi::tokens::spacing::S;
     /// The label box's width is a multiple of this (the 4 pt grid).
-    pub const STEP: f32 = 4.0;
+    pub const STEP: f32 = crate::amalfi::tokens::grid::BASE;
 }
 
 /// Records a toggle box at `origin`: `Box`, `State`, `Focus Halo` and the mark, their names
