@@ -153,12 +153,12 @@ pub fn lens_glass(theme: &Theme, t: f32, tier: Tier) -> Blur {
         Tier::Clear => {
             let m = theme.material("Glass/Clear");
             Glass {
-                radius: t,
+                radius: m.map_or(1.0, |m| m.blur) * t,
                 saturation: k(1.2),
                 brightness: 1.0,
                 distortion: m.map_or(0.3, |m| m.distortion) * t,
                 depth: m.map_or(0.5, |m| m.depth),
-                chromatic_aberration: m.map_or(0.08, |m| m.chromatic_aberration) * t,
+                chromatic_aberration: m.map_or(0.06, |m| m.chromatic_aberration) * t,
                 specular: false,
                 magnification: k(m.map_or(1.1, |m| m.magnification)),
             }
@@ -192,7 +192,7 @@ fn faded(c: Color, k: f32) -> Color {
 /// `.s-switch__thumb`, `.s-segmented__thumb`). The lens: a 1 pt `Glass/Rim Dark` ring,
 /// `Glass/Rim Light` (0 1 1) and a white 25 % glow (0 0 3) inside and the [`lens_glass`] of
 /// `lens`; a Regular lens also takes the Regular tint and the glass drop shadow
-/// (`shadows.glass`), a Clear one stays transparent with no shadow.
+/// (`shadows.glass`), a Clear one stays transparent over the soft lens shadow (`shadows.lens`).
 pub fn morph_style(theme: &Theme, t: f32, rest: ThumbRest, lens: Tier) -> Style {
     let t = t.clamp(0.0, 1.0);
     let c = theme.colors;
@@ -204,7 +204,7 @@ pub fn morph_style(theme: &Theme, t: f32, rest: ThumbRest, lens: Tier) -> Style 
     {
         style.fills.push(faded(tint, t).into());
     }
-    let lens_drop = theme.shadow(4).filter(|_| regular);
+    let lens_drop = theme.shadow(if regular { 4 } else { 5 });
     let ring = match rest.border {
         Some(b) => b.lerp(c.glass_rim_dark, t),
         None => faded(c.glass_rim_dark, t),
@@ -1267,14 +1267,14 @@ mod tests {
     fn the_lens_is_clear_glass_with_the_css_rims() {
         let t = Theme::light();
         let lens = morph_style(&t, 1.0, rest(&t), Tier::Clear);
-        // The thumb's fill is gone, no tint and no glass drop shadow, only the rims inside,
+        // The thumb's fill is gone, no tint, the rims inside, the soft lens shadow under it,
         // and Clear glass behind (`blur(1px) saturate(1.2)`, bent at the rim).
         assert!(
             lens.fills
                 .iter()
                 .all(|f| f.solid().is_some_and(|c| c.a == 0))
         );
-        assert!(lens.shadows.iter().all(|s| s.color.a == 0));
+        assert_eq!(lens.shadows.last().copied(), t.shadow(5));
         assert_eq!(lens.borders.len(), 1);
         assert_eq!(lens.inner_shadows.len(), 2);
         let Some(Blur::Glass(g)) = lens.blurs.first().copied() else {

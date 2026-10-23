@@ -205,8 +205,10 @@ mod tests {
             _ => 0.0,
         };
         assert!(blur(&clear) < blur(&regular));
-        // Clear has no tint and no drop shadow; Regular has both (`shadows.glass`).
-        assert!(clear.fills.is_empty() && clear.shadows.is_empty());
+        // Clear has no tint and the soft lens shadow (`shadows.lens`); Regular has its tint
+        // and the glass shadow (`shadows.glass`).
+        assert!(clear.fills.is_empty());
+        assert_eq!(clear.shadows.last().copied(), t.shadow(5));
         assert_eq!(regular.fills.len(), 1);
         assert_eq!(regular.shadows.len(), 1);
     }

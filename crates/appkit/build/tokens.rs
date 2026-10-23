@@ -241,16 +241,17 @@ fn shadow_lit(v: &Value) -> Result<String> {
 
 fn shadows(code: &mut String, t: &Value) -> Result<()> {
     let s = &t["shadows"];
-    code.push_str("/// The shadow levels (`shadows`): 1 small raised controls, 2 raised objects, 3 windows, 4 the Glass/Regular drop shadow (`shadows.glass`).\npub mod shadows {\n    use super::{Color, Shadow};\n\n");
+    code.push_str("/// The shadow levels (`shadows`): 1 small raised controls, 2 raised objects, 3 windows, 4 the Glass/Regular drop shadow (`shadows.glass`), 5 the lens shadow (`shadows.lens`).\npub mod shadows {\n    use super::{Color, Shadow};\n\n");
     for app in ["light", "dark"] {
         let _ = writeln!(
             code,
-            "    /// Levels 1–3 and the glass shadow (level 4), {app}.\n    pub const {}: [Shadow; 4] = [{}, {}, {}, {}];",
+            "    /// Levels 1–3, the glass shadow (level 4) and the lens shadow (5), {app}.\n    pub const {}: [Shadow; 5] = [{}, {}, {}, {}, {}];",
             app.to_ascii_uppercase(),
             shadow_lit(&s[app]["1"])?,
             shadow_lit(&s[app]["2"])?,
             shadow_lit(&s[app]["3"])?,
-            shadow_lit(&s[app]["glass"])?
+            shadow_lit(&s[app]["glass"])?,
+            shadow_lit(&s[app]["lens"])?
         );
     }
     let _ = writeln!(
@@ -366,12 +367,10 @@ fn materials(code: &mut String, t: &Value) -> Result<()> {
             let shadow_level = v["shadow"]
                 .as_str()
                 .and_then(|s| s.strip_prefix("shadows."))
-                .and_then(|s| {
-                    if s == "glass" {
-                        Some(4)
-                    } else {
-                        s.parse::<u8>().ok()
-                    }
+                .and_then(|s| match s {
+                    "glass" => Some(4),
+                    "lens" => Some(5),
+                    _ => s.parse::<u8>().ok(),
                 })
                 .unwrap_or(0);
             let _ = writeln!(

@@ -247,7 +247,7 @@ impl ItemLook {
 /// The thumb at `t` = 0 and the glass lens at `t` = 1: one element whose every property moves
 /// together (ui-kit `.s-segmented__thumb` and `.is-lens`). At rest: `Surface/Control`, a 1 pt
 /// `Line/Border` ring and `0 1 2` shadow, corners `item / 2`. As the lens: `Glass/Clear`
-/// (rims and glow only: no tint, no shadow), corners `item * 1.1`. Always under the labels.
+/// (rims, glow and `shadows.lens`; no tint), corners `item * 1.1`. Always under the labels.
 fn paint_thumb(cx: &mut PaintCx<'_>, theme: &Theme, rect: Rect, item_h: f32, t: f32) {
     let c = &theme.colors;
     let rest = ThumbRest {
@@ -2404,7 +2404,7 @@ mod tests {
         ui.prepare_frame(win);
         let (i, n, lens, radii) = thumb_layer(&mut ui, id);
         let item_h = 20.0;
-        // Settled: Clear glass (the rims inside, no tint, no shadow, `blur(1px)` behind),
+        // Settled: Clear glass (the rims inside, no tint, the lens shadow, `blur(1px)` behind),
         // corners 1.1 x the item's height, and below the items' labels.
         assert!(
             lens.fills
@@ -2412,7 +2412,7 @@ mod tests {
                 .all(|f| f.solid().is_some_and(|c| c.a == 0))
         );
         assert_eq!(lens.inner_shadows.len(), 2);
-        assert!(lens.shadows.iter().all(|s| s.color.a == 0));
+        assert_eq!(lens.shadows.last().copied(), Theme::light().shadow(5));
         assert!(matches!(
             lens.blurs.first(),
             Some(crate::style::Blur::Glass(g)) if (g.radius - 1.0).abs() < 1e-3
