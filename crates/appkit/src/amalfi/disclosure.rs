@@ -22,27 +22,27 @@ use crate::text::Align;
 /// Fixed measures (silica_ui's `AmalfiDisclosureMetrics`, `AmalfiDisclosureGroupMetrics`).
 pub mod metrics {
     /// The control's side.
-    pub const SIDE: f32 = 24.0;
+    pub const SIDE: f32 = crate::amalfi::tokens::control_heights::SMALL;
     /// The chevron's size.
     pub const GLYPH: f32 = 12.0;
     /// The triangle's corner radius.
-    pub const TRIANGLE_RADIUS: f32 = 7.0;
+    pub const TRIANGLE_RADIUS: f32 = crate::amalfi::tokens::radii::SMALL_CONTROL;
     /// The button's corner radius.
     pub const BUTTON_RADIUS: f32 = 11.0;
     /// A group header's height.
-    pub const HEADER_HEIGHT: f32 = 28.0;
+    pub const HEADER_HEIGHT: f32 = crate::amalfi::tokens::control_heights::REGULAR;
     /// A group header's left padding.
-    pub const HEADER_LEFT: f32 = 4.0;
+    pub const HEADER_LEFT: f32 = crate::amalfi::tokens::spacing::XS;
     /// A group header's right padding.
-    pub const HEADER_RIGHT: f32 = 12.0;
+    pub const HEADER_RIGHT: f32 = crate::amalfi::tokens::spacing::M;
     /// Gap between the triangle and the title.
-    pub const TITLE_GAP: f32 = 4.0;
+    pub const TITLE_GAP: f32 = crate::amalfi::tokens::spacing::XS;
     /// A group header's corner radius.
-    pub const HEADER_RADIUS: f32 = 9.0;
+    pub const HEADER_RADIUS: f32 = crate::amalfi::tokens::radii::REGULAR_CONTROL;
     /// The content's indent.
     pub const CONTENT_INDENT: f32 = 32.0;
     /// Space above and below the content.
-    pub const CONTENT_GAP: f32 = 4.0;
+    pub const CONTENT_GAP: f32 = crate::amalfi::tokens::spacing::XS;
     /// A group's default width.
     pub const GROUP_WIDTH: f32 = 280.0;
 }

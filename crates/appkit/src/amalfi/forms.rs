@@ -22,33 +22,38 @@ pub mod metrics {
     /// The label column's width.
     pub const LABEL_WIDTH: f32 = 112.0;
     /// Gap between the label and the control.
-    pub const LABEL_GAP: f32 = 12.0;
+    pub const LABEL_GAP: f32 = crate::amalfi::tokens::spacing::M;
     /// The value column's width.
     pub const VALUE_WIDTH: f32 = 204.0;
     /// A row's width.
     pub const ROW_WIDTH: f32 = LABEL_WIDTH + LABEL_GAP + VALUE_WIDTH;
     /// A row's line height.
-    pub const LINE_HEIGHT: f32 = 28.0;
+    pub const LINE_HEIGHT: f32 = crate::amalfi::tokens::control_heights::REGULAR;
     /// Gap between a control and its message.
-    pub const MESSAGE_GAP: f32 = 4.0;
+    pub const MESSAGE_GAP: f32 = crate::amalfi::tokens::spacing::XS;
     /// Space between rows.
-    pub const ROW_GAP: f32 = 12.0;
+    pub const ROW_GAP: f32 = crate::amalfi::tokens::spacing::M;
     /// A section's padding.
-    pub const SECTION_PADDING: f32 = 12.0;
+    pub const SECTION_PADDING: f32 = crate::amalfi::tokens::spacing::M;
     /// A section's width.
     pub const SECTION_WIDTH: f32 = ROW_WIDTH + 2.0 * SECTION_PADDING;
     /// Gap between the footer's buttons.
-    pub const FOOTER_GAP: f32 = 8.0;
+    pub const FOOTER_GAP: f32 = crate::amalfi::tokens::spacing::S;
     /// The footer's buttons are at least this wide.
     pub const BUTTON_MIN_WIDTH: f32 = 72.0;
     /// The layout's padding: left, top, right, bottom.
-    pub const LAYOUT_PADDING: (f32, f32, f32, f32) = (24.0, 26.0, 24.0, 24.0);
+    pub const LAYOUT_PADDING: (f32, f32, f32, f32) = (
+        crate::amalfi::tokens::spacing::XXL,
+        26.0,
+        crate::amalfi::tokens::spacing::XXL,
+        crate::amalfi::tokens::spacing::XXL,
+    );
     /// Space between the layout's parts.
-    pub const LAYOUT_GAP: f32 = 20.0;
+    pub const LAYOUT_GAP: f32 = crate::amalfi::tokens::spacing::XL;
     /// The layout's width.
     pub const LAYOUT_WIDTH: f32 = 400.0;
     /// The layout's corner radius.
-    pub const LAYOUT_RADIUS: f32 = 18.0;
+    pub const LAYOUT_RADIUS: f32 = crate::amalfi::tokens::radii::WINDOW;
     /// The layout title's height.
     pub const LAYOUT_TITLE: f32 = 22.0;
 }

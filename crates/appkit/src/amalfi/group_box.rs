@@ -20,11 +20,11 @@ pub mod metrics {
     /// Space between the title and the box.
     pub const TITLE_GAP: f32 = 6.0;
     /// The box's padding.
-    pub const PADDING: f32 = 12.0;
+    pub const PADDING: f32 = crate::amalfi::tokens::spacing::M;
     /// Space between the controls.
-    pub const SPACING: f32 = 8.0;
+    pub const SPACING: f32 = crate::amalfi::tokens::spacing::S;
     /// The box's corner radius.
-    pub const RADIUS: f32 = 12.0;
+    pub const RADIUS: f32 = crate::amalfi::tokens::radii::MENU;
     /// The title's height.
     pub const TITLE_HEIGHT: f32 = 18.0;
 }
