@@ -235,12 +235,7 @@ fn action_segments_match_the_kit() {
                 }
             }
         }
-        // Kit defect: the Dark/Glass/Regular shared style blurs 10 where materials.md gives 6.
-        let devs: &[&str] = if scene.master.dark() {
-            &["Glass#blurs"]
-        } else {
-            &[]
-        };
+        let devs: &[&str] = &[];
         let tol = if scene.master.dark() {
             DARK_GLASS
         } else {
@@ -317,10 +312,6 @@ fn segmented_controls_match_the_kit() {
         let pressed = state == "Pressed";
         let mut skip: Vec<&str> = Vec::new();
         let mut devs: Vec<&str> = thr.iter().map(String::as_str).collect();
-        // Kit defect: the Dark/Glass/Regular shared style blurs 10 where materials.md gives 6.
-        if scene.master.dark() {
-            devs.push("Track#blurs");
-        }
         if pressed {
             // Room for the lens: 8 beside the item, 12 above and below it.
             scene.mount(|ui| {
@@ -341,7 +332,6 @@ fn segmented_controls_match_the_kit() {
             if count == 6 {
                 skip.extend(["Track", "Lens"]);
                 scene.png_margin = true;
-                devs.retain(|d| *d != "Track#blurs");
                 if let Some(r) = scene.master.rect_in_master("Track") {
                     scene.extra_mask.push(r.inflate(2.0, 2.0));
                 }
@@ -438,7 +428,7 @@ fn icon_label_controls_match_the_kit() {
         // Dark/Fill/Glass/Tint), a darker body than materials.md: only the geometry is
         // compared there.
         if scene.master.dark() {
-            let report = scene.auto_geometry(&["Track#blurs"]);
+            let report = scene.auto_geometry(&[]);
             if !report.is_empty() {
                 failures.push(format!("{name}:\n    {}", report.join("\n    ")));
             }

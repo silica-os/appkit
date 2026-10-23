@@ -6,7 +6,7 @@ use crate::amalfi::button::{PushButton, PushVariant};
 use crate::amalfi::buttons::{IconButton, MenuButton};
 use crate::amalfi::fields::TextField;
 use crate::amalfi::forms::form_row;
-use crate::amalfi::foundation::{Interaction as Transitions, Label, focus_halo_named};
+use crate::amalfi::foundation::{ControlSize, Interaction as Transitions, Label, focus_halo_named};
 use crate::amalfi::segments::{ActionSegments, Segment, SegmentedControl};
 use crate::amalfi::sidebars;
 use crate::amalfi::sliders::Slider;
@@ -49,7 +49,7 @@ pub mod metrics {
     /// Where the Name, Kind and Date Modified columns start.
     pub const COLUMNS: (f32, f32, f32) = (44.0, 300.0, 396.0);
     /// The file panel's places column.
-    pub const SIDEBAR: f32 = 177.0;
+    pub const SIDEBAR: f32 = 176.0;
     /// A file panel's width, expanded and compact.
     pub const PANEL_WIDTH: (f32, f32) = (720.0, 440.0);
     /// The file panel's corner radius.
@@ -746,13 +746,17 @@ impl Widget for FileBrowser {
         cx.rec.push_clip(view, Shape::RECT);
         let first = (self.scroll / metrics::ROW).floor().max(0.0) as usize;
         let last = ((self.scroll + view.height) / metrics::ROW).ceil() as usize + 1;
-        let stripe = c.line_separator.with_opacity(0.55);
+        let stripe = c.line_separator;
         for i in first..last {
             let y = view.y + i as f32 * metrics::ROW - self.scroll;
             let row = Rect::new(r.x, y, r.width, metrics::ROW);
             if i % 2 == 1 {
-                cx.rec
-                    .layer("Stripe", row, Shape::RECT, Style::fill(stripe));
+                cx.rec.layer(
+                    &format!("Stripe {}", i + 1),
+                    row,
+                    Shape::RECT,
+                    Style::fill(stripe).with_opacity(0.55),
+                );
             }
             let Some(f) = self.files.get(i).cloned() else {
                 continue;
@@ -772,7 +776,7 @@ impl Widget for FileBrowser {
                     (fill, c.text_secondary, c.text_secondary)
                 };
                 cx.rec.layer(
-                    "Selection",
+                    &format!("{}/Selection", f.label),
                     inner,
                     Shape::rounded(sidebars::metrics::ROW_RADIUS),
                     Style::fill(fill),
@@ -781,7 +785,7 @@ impl Widget for FileBrowser {
             } else {
                 if self.hover == Some(i) {
                     cx.rec.layer(
-                        "Hover",
+                        &format!("{}/Hover", f.label),
                         inner,
                         Shape::rounded(sidebars::metrics::ROW_RADIUS),
                         Style::fill(c.line_separator).with_opacity(self.transitions.hover()),
@@ -790,7 +794,7 @@ impl Widget for FileBrowser {
                 (c.text_primary, c.text_secondary)
             };
             cx.rec.glyph(
-                "Icon",
+                &format!("{}/Icon", f.label),
                 Rect::new(inner.x + 12.0, inner.y + 6.0, 20.0, 20.0),
                 &f.icon,
                 400,
@@ -800,19 +804,29 @@ impl Widget for FileBrowser {
             let mut put =
                 |cache: &mut Label, name: &str, text: &str, x: f32, w: f32, col: Color| {
                     let style = theme.text(&typography::BODY, col);
-                    let layout = cache.layout(text, &style, Align::Start, w.max(0.0), Some(1));
+                    let tw = crate::amalfi::foundation::whole(cache.width(text, &style), 1.0)
+                        .min(w.max(0.0));
+                    let layout = cache.layout(text, &style, Align::Start, tw, Some(1));
+                    // The kit sets the kind and date 4 below the row's top.
                     cx.rec.text(
                         name,
-                        Rect::new(r.x + x, row.y + 7.0, w.max(0.0), 18.0),
+                        Rect::new(r.x + x, row.y + 4.0, tw, 18.0),
                         layout,
                         Some(typography::BODY.name),
                         style.color,
                     );
                 };
-            put(&mut self.cache, "Name", &f.label, nx, kx - nx - 8.0, label);
             put(
                 &mut self.cache,
-                "Kind",
+                &format!("{}/Label", f.label),
+                &f.label,
+                nx,
+                kx - nx - 8.0,
+                label,
+            );
+            put(
+                &mut self.cache,
+                &format!("Kind {}", i + 1),
                 &f.kind,
                 kx,
                 dx - kx - 8.0,
@@ -820,7 +834,7 @@ impl Widget for FileBrowser {
             );
             put(
                 &mut self.cache,
-                "Date",
+                &format!("Date {}", i + 1),
                 &f.date,
                 dx,
                 r.width - dx - 8.0,
@@ -829,9 +843,6 @@ impl Widget for FileBrowser {
         }
         cx.rec.pop();
         // The header and the hairlines.
-        let head = Rect::new(r.x, r.y, r.width, metrics::HEADER);
-        cx.rec
-            .layer("Header", head, Shape::RECT, Style::fill(c.surface_raised));
         let (nx, kx, dx) = metrics::COLUMNS;
         for (name, text, x) in [
             ("Name", "Name", nx),
@@ -839,16 +850,13 @@ impl Widget for FileBrowser {
             ("Date", "Date Modified", dx),
         ] {
             let style = theme.text(&typography::CAPTION, c.text_secondary);
-            let layout = Label::default().layout(
-                text,
-                &style,
-                Align::Start,
-                (r.width - x).max(0.0),
-                Some(1),
-            );
+            let mut cache = Label::default();
+            let tw = crate::amalfi::foundation::whole(cache.width(text, &style), 1.0)
+                .min((r.width - x).max(0.0));
+            let layout = cache.layout(text, &style, Align::Start, tw, Some(1));
             cx.rec.text(
-                &format!("Header {name}"),
-                Rect::new(r.x + x, r.y + 6.0, (r.width - x).max(0.0), 14.0),
+                &format!("Column {name}"),
+                Rect::new(r.x + x, r.y + 7.0, tw, 14.0),
                 layout,
                 Some(typography::CAPTION.name),
                 style.color,
@@ -1036,6 +1044,8 @@ pub struct FilePanelSpec {
     pub locations: Vec<String>,
     /// The files.
     pub files: Vec<FileEntry>,
+    /// The selected file's value.
+    pub selected: Option<String>,
 }
 
 impl FilePanelSpec {
@@ -1049,6 +1059,7 @@ impl FilePanelSpec {
             places: Vec::new(),
             locations: Vec::new(),
             files: Vec::new(),
+            selected: None,
         }
     }
 }
@@ -1144,6 +1155,8 @@ impl Widget for FilePanel {
 #[derive(Debug)]
 struct PlacesColumn {
     top: f32,
+    /// The children that begin a group (a header): 8 pt apart from what precedes them.
+    group_starts: Vec<usize>,
 }
 
 impl Widget for PlacesColumn {
@@ -1153,7 +1166,10 @@ impl Widget for PlacesColumn {
 
     fn measure(&mut self, cx: &mut LayoutCx<'_>, p: Proposal) -> Size {
         let mut h = self.top;
-        for c in cx.children() {
+        for (i, c) in cx.children().into_iter().enumerate() {
+            if i > 0 && self.group_starts.contains(&i) {
+                h += 8.0;
+            }
             h += cx
                 .measure(c, Proposal::new(Some(metrics::SIDEBAR - 16.0), None))
                 .height;
@@ -1166,9 +1182,19 @@ impl Widget for PlacesColumn {
 
     fn place(&mut self, cx: &mut LayoutCx<'_>, _size: Size) {
         let mut y = self.top;
-        for c in cx.children() {
+        for (i, c) in cx.children().into_iter().enumerate() {
+            let header = self.group_starts.contains(&i);
+            if i > 0 && header {
+                y += 8.0;
+            }
             let s = cx.measure(c, Proposal::new(Some(metrics::SIDEBAR - 16.0), None));
-            cx.place(c, Rect::new(8.0, y, metrics::SIDEBAR - 16.0, s.height));
+            // Headers span the column; rows sit 8 in.
+            let (x, w) = if header {
+                (0.0, metrics::SIDEBAR)
+            } else {
+                (8.0, metrics::SIDEBAR - 16.0)
+            };
+            cx.place(c, Rect::new(x, y, w, s.height));
             y += s.height;
         }
     }
@@ -1176,11 +1202,21 @@ impl Widget for PlacesColumn {
     fn paint(&mut self, cx: &mut PaintCx<'_>) {
         let c = cx.theme().colors;
         let r = cx.bounds();
-        cx.rec
-            .layer("Surface", r, Shape::RECT, Style::fill(c.surface_sidebar));
         cx.rec.layer(
-            "Edge",
-            Rect::new(r.right() - 1.0, r.y, 1.0, r.height),
+            "Sidebar surface",
+            r,
+            Shape::rounded_corners(crate::geom::Corners {
+                top_left: metrics::PANEL_RADIUS,
+                top_right: 0.0,
+                bottom_right: 0.0,
+                bottom_left: metrics::PANEL_RADIUS,
+            }),
+            Style::fill(c.surface_sidebar),
+        );
+        // The rule is the first point of the main column (the kit draws it there).
+        cx.rec.layer(
+            "Sidebar rule",
+            Rect::new(r.right(), r.y, 1.0, r.height),
             Shape::RECT,
             Style::fill(c.line_separator),
         );
@@ -1232,28 +1268,38 @@ pub fn file_panel(ui: &mut Ui, spec: &FilePanelSpec) -> FilePanelParts {
     let mut places = Vec::new();
     if !compact {
         let top = if spec.mode == Mode::Save { 48.0 } else { 12.0 };
-        let col = ui.create(PlacesColumn { top });
+        let col = ui.create(PlacesColumn {
+            top,
+            group_starts: Vec::new(),
+        });
+        let mut starts = Vec::new();
+        let mut n = 0usize;
         let _ = ui.set(col, Prop::MaxHeight, Value::from(f32::INFINITY));
         // The save form leaves the column's top 48 pt to the window's own controls.
         for (title, items) in &spec.places {
             let hd = ui.create(sidebars::Header::new(title));
+            named(ui, hd, &format!("Header {title}"));
             ui.add_child(col, hd);
+            starts.push(n);
+            n += 1;
             for (value, label, icon) in items {
                 let r = sidebars::row(ui, icon, label, None, false);
                 named(ui, r, value);
                 ui.add_child(col, r);
                 places.push(r);
+                n += 1;
             }
         }
+        let _ = ui.with_widget::<PlacesColumn, _>(col, |c| c.group_starts = starts);
         ui.add_child(row, col);
     }
     // The main column.
     let main = ui.create(Stack::column(12.0).aligned(Alignment::LEADING));
     let _ = ui.set(main, Prop::MaxWidth, Value::from(f32::INFINITY));
     let pad = if compact {
-        Insets::new(14.0, 20.0, 20.0, 20.0)
+        Insets::new(11.0, 20.0, 20.0, 20.0)
     } else if spec.mode == Mode::Save {
-        Insets::new(14.0, 0.0, 12.0, 0.0)
+        Insets::new(11.0, 0.0, 12.0, 0.0)
     } else {
         Insets::new(16.0, 0.0, 12.0, 0.0)
     };
@@ -1288,7 +1334,9 @@ pub fn file_panel(ui: &mut Ui, spec: &FilePanelSpec) -> FilePanelParts {
         let tags = ui.create(TextField::text());
         let _ = ui.set(tags, Prop::Width, Value::from(204.0));
         let a = form_row(ui, "Save As:", f, None, false);
+        named(ui, a, "Save as");
         let b = form_row(ui, "Tags:", tags, None, false);
+        named(ui, b, "Tags");
         let fields = ui.create(Stack::column(8.0).aligned(Alignment::LEADING));
         ui.add_child(fields, a);
         ui.add_child(fields, b);
@@ -1302,16 +1350,23 @@ pub fn file_panel(ui: &mut Ui, spec: &FilePanelSpec) -> FilePanelParts {
                 Prop::AccessibilityLabel,
                 Value::from("Show more options"),
             );
+            named(ui, more, "Expand");
             ui.add_child(wr, loc);
             ui.add_child(wr, more);
             let w = form_row(ui, "Where:", wr, None, false);
+            named(ui, w, "Where");
             ui.add_child(fields, w);
             ui.connect(more, Signal::Activated, move |ui, _, _| {
                 set_expanded(ui, root, true)
             });
         }
-        let v = inset(ui, fields);
-        ui.add_child(main, v);
+        // 15 under the title (the main column's gap is 12).
+        let _ = ui.set(
+            fields,
+            Prop::Padding,
+            Value::Insets(Insets::new(3.0, side, 0.0, side)),
+        );
+        ui.add_child(main, fields);
     }
     let loc_view;
     let mut browser = None;
@@ -1338,36 +1393,67 @@ pub fn file_panel(ui: &mut Ui, spec: &FilePanelSpec) -> FilePanelParts {
             .unwrap_or(main);
     } else {
         let bar = ui.create(Stack::row(12.0));
-        let nav = ui.create(ActionSegments::new(vec![
-            Segment::icon("chevron-left", "Back"),
-            Segment::icon("chevron-right", "Forward"),
-        ]));
-        let views = ui.create(SegmentedControl::new(vec![
-            Segment::icon("square-grid-2x2", "Icons"),
-            Segment::icon("list-bullet", "List"),
-            Segment::icon("gallery", "Gallery"),
-        ]));
-        let _ = ui.set(views, Prop::SelectedIndex, Value::Int(1));
+        let nav = ui.create(
+            ActionSegments::new(vec![
+                Segment::icon("chevron-left", "Back"),
+                Segment::icon("chevron-right", "Forward"),
+            ])
+            .size(ControlSize::Regular),
+        );
+        let views = ui.create(
+            SegmentedControl::new(vec![
+                Segment::icon("square-grid-2x2", "Icons"),
+                Segment::icon("list-bullet", "List"),
+                Segment::icon("gallery", "Gallery"),
+            ])
+            .size(ControlSize::Regular),
+        );
+        let _ = ui.set(views, Prop::SelectedIndex, Value::Int(0));
+        named(ui, nav, "Navigation");
+        named(ui, views, "View");
         let loc = ui.create(location_menu(spec));
+        named(ui, loc, "Location");
         let _ = ui.set(loc, Prop::LayoutPriority, Value::from(1.0));
         loc_view = loc;
         let s = ui.create(TextField::search());
         let _ = ui.set(s, Prop::Width, Value::from(108.0));
+        named(ui, s, "Search");
         search = Some(s);
         ui.add_child(bar, nav);
         ui.add_child(bar, views);
-        ui.add_child(bar, loc);
         if spec.mode == Mode::Save {
+            // The save panel keeps the location, the collapse button and the search field
+            // 8 apart (the search field 106 wide); the first two gaps are 12.
+            let _ = ui.set(s, Prop::Width, Value::from(106.0));
+            let _ = ui.set(bar, Prop::Spacing, Value::from(8.0));
+            for v in [views, loc] {
+                let _ = ui.set(
+                    v,
+                    Prop::Padding,
+                    Value::Insets(Insets::new(0.0, 4.0, 0.0, 0.0)),
+                );
+            }
             let less = ui.create(IconButton::new("chevron-up").square());
             let _ = ui.set(less, Prop::AccessibilityLabel, Value::from("Hide options"));
+            named(ui, less, "Expand");
             ui.connect(less, Signal::Activated, move |ui, _, _| {
                 set_expanded(ui, root, false)
             });
+            ui.add_child(bar, loc);
             ui.add_child(bar, less);
+            ui.add_child(bar, s);
+        } else {
+            ui.add_child(bar, loc);
+            ui.add_child(bar, s);
         }
-        ui.add_child(bar, s);
-        let v = inset(ui, bar);
-        ui.add_child(main, v);
+        // 16 under the fields of the save panel.
+        let top = if spec.mode == Mode::Save { 4.0 } else { 0.0 };
+        let _ = ui.set(
+            bar,
+            Prop::Padding,
+            Value::Insets(Insets::new(top, side, 0.0, side)),
+        );
+        ui.add_child(main, bar);
         ui.connect(nav, Signal::Activated, move |ui, _, v| {
             let which = if v.as_int() == Some(0) {
                 "back"
@@ -1376,8 +1462,11 @@ pub fn file_panel(ui: &mut Ui, spec: &FilePanelSpec) -> FilePanelParts {
             };
             ui.emit(root, Signal::Activated, Value::from(which));
         });
-        let b = ui.create(FileBrowser::new(spec.files.clone()));
+        let mut fb = FileBrowser::new(spec.files.clone());
+        fb.selected.clone_from(&spec.selected);
+        let b = ui.create(fb);
         let _ = ui.set(b, Prop::MaxWidth, Value::from(f32::INFINITY));
+        named(ui, b, "Browser");
         ui.add_child(main, b);
         browser = Some(b);
         // The search field filters the list.
@@ -1395,6 +1484,7 @@ pub fn file_panel(ui: &mut Ui, spec: &FilePanelSpec) -> FilePanelParts {
     }
     // The footer.
     let footer = ui.create(Stack::row(8.0));
+    named(ui, footer, "Footer");
     if spec.mode == Mode::Save && !compact {
         let nf = ui.create(PushButton::new("New Folder").variant(PushVariant::Secondary));
         named(ui, nf, "New Folder");
@@ -1414,8 +1504,19 @@ pub fn file_panel(ui: &mut Ui, spec: &FilePanelSpec) -> FilePanelParts {
         })
         .variant(PushVariant::Primary),
     );
+    for b in [secondary, primary] {
+        let _ = ui.set(b, Prop::MinWidth, Value::from(72.0));
+    }
     named(ui, secondary, "Cancel");
-    named(ui, primary, "Primary");
+    named(
+        ui,
+        primary,
+        if spec.mode == Mode::Save {
+            "Save"
+        } else {
+            "Open"
+        },
+    );
     ui.connect(secondary, Signal::Activated, move |ui, _, _| {
         ui.emit(root, Signal::Activated, Value::from("secondary"));
     });
@@ -1424,7 +1525,15 @@ pub fn file_panel(ui: &mut Ui, spec: &FilePanelSpec) -> FilePanelParts {
     });
     ui.add_child(footer, secondary);
     ui.add_child(footer, primary);
+    // The compact form keeps 20 above its footer (the main column's gap is 12).
     let v = inset(ui, footer);
+    if compact {
+        let _ = ui.set(
+            v,
+            Prop::Padding,
+            Value::Insets(Insets::new(8.0, 0.0, 0.0, 0.0)),
+        );
+    }
     ui.add_child(main, v);
     // A double click or Return on a file opens it.
     if let Some(b) = browser {
@@ -1447,7 +1556,7 @@ pub fn file_panel(ui: &mut Ui, spec: &FilePanelSpec) -> FilePanelParts {
 
 fn location_menu(spec: &FilePanelSpec) -> MenuButton {
     let items: Vec<&str> = spec.locations.iter().map(String::as_str).collect();
-    MenuButton::pop_up(&items, 0)
+    MenuButton::pop_up(&items, 0).fill()
 }
 
 /// Expands or collapses a save panel (what the chevron beside "Where:" and the one in the

@@ -37,6 +37,16 @@ pub mod metrics {
     pub const PLACES_RADIUS: f32 = 14.0;
     /// The file list's corner radius.
     pub const LIST_RADIUS: f32 = 12.0;
+    /// Gap between the rows of a form dialog's body.
+    pub const BODY_GAP: f32 = 12.0;
+    /// Extra space under a form dialog's body.
+    pub const BODY_BOTTOM: f32 = 4.0;
+    /// Gap between the rows of a group in a form dialog's body.
+    pub const GROUP_GAP: f32 = 4.0;
+    /// Space above a section rule (beyond the gap) ...
+    pub const RULE_ABOVE: f32 = 8.0;
+    /// ... and below it.
+    pub const RULE_BELOW: f32 = 3.0;
 }
 
 /// The dialog panel: a raised surface with a level 3 shadow; its children, top to bottom, sit
@@ -261,6 +271,83 @@ pub fn dialog_footer(ui: &mut Ui, width: f32, leading: &[ViewId], trailing: &[Vi
         ui.add_child(row, *v);
     }
     row
+}
+
+/// A rule between the groups of a form dialog's body: 1 pt, 8 above and 3 below it (on top
+/// of the body's 12 pt gap).
+#[derive(Debug, Default)]
+pub struct SectionRule;
+
+impl Widget for SectionRule {
+    fn kind(&self) -> &'static str {
+        "SectionRule"
+    }
+
+    fn measure(&mut self, _cx: &mut LayoutCx<'_>, p: Proposal) -> Size {
+        let w = p.width.filter(|w| w.is_finite()).unwrap_or(0.0).max(0.0);
+        Size::new(w, metrics::RULE_ABOVE + 1.0 + metrics::RULE_BELOW)
+    }
+
+    fn paint(&mut self, cx: &mut PaintCx<'_>) {
+        let c = cx.theme().colors;
+        let b = cx.bounds();
+        cx.rec.layer(
+            "Section rule",
+            Rect::new(b.x, b.y + metrics::RULE_ABOVE, b.width, 1.0),
+            Shape::RECT,
+            Style::fill(c.line_separator),
+        );
+    }
+
+    fn hit(&self, _p: crate::geom::Point, _size: Size) -> bool {
+        false
+    }
+
+    fn accessibility(&self, a: &mut A11y) {
+        a.hidden = true;
+    }
+}
+
+/// What a form dialog's body holds.
+#[derive(Debug, Clone)]
+pub enum BodyItem {
+    /// A row (or any view).
+    View(ViewId),
+    /// A [`SectionRule`].
+    Rule,
+    /// Rows that belong together (a group of checkboxes), `GROUP_GAP` apart.
+    Group(Vec<ViewId>),
+}
+
+/// Makes a form dialog's body: its rows 12 pt apart (a rule takes 8 above and 3 below on top
+/// of that) and 4 pt more under the last one before the footer.
+pub fn form_body(ui: &mut Ui, items: &[BodyItem]) -> ViewId {
+    let body = ui.create(Stack::column(metrics::BODY_GAP).aligned(Alignment::LEADING));
+    let _ = ui.set(
+        body,
+        Prop::Padding,
+        Value::Insets(Insets {
+            top: 0.0,
+            left: 0.0,
+            bottom: metrics::BODY_BOTTOM,
+            right: 0.0,
+        }),
+    );
+    for item in items {
+        let v = match item {
+            BodyItem::View(v) => *v,
+            BodyItem::Rule => ui.create(SectionRule),
+            BodyItem::Group(views) => {
+                let g = ui.create(Stack::column(metrics::GROUP_GAP).aligned(Alignment::LEADING));
+                for v in views {
+                    ui.add_child(g, *v);
+                }
+                g
+            }
+        };
+        ui.add_child(body, v);
+    }
+    body
 }
 
 /// Makes a dialog around `children` (top to bottom).

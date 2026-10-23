@@ -37,17 +37,7 @@ fn push_buttons_match_the_kit() {
         let (v, s) = (variant(v), size(s));
         scene.mount(|ui| ui.create(PushButton::new("Button").variant(v).size(s)));
         scene.set_state(state);
-        // Kit defect: the Dark/Glass/Regular shared style blurs 10 where materials.md (which
-        // wins) gives Regular 6 (docs/kit-issues.md).
-        let dark_regular_glass = name.contains("/Glass/")
-            && name.ends_with("/Dark")
-            && matches!(state, "Rest" | "Focused" | "Disabled");
-        let deviations: &[&str] = if dark_regular_glass {
-            &["Background#blurs"]
-        } else {
-            &[]
-        };
-        let report = scene.auto_geometry(deviations);
+        let report = scene.auto_geometry(&[]);
         if !report.is_empty() {
             failures.push(format!("{name}:\n    {}", report.join("\n    ")));
             continue;

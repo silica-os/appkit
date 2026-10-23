@@ -58,7 +58,6 @@ fn callouts_take_the_outline_of_the_popover_bubbles() {
             ui.add_child(call, inner);
             call
         });
-        scene.ignore_aspects = vec!["#blurs".to_string()];
         scene.png_margin = true;
         if let Some(c) = content {
             scene.extra_mask = vec![Rect::new(c.x, c.y, c.width, c.height)];

@@ -14,7 +14,7 @@ use crate::core::value::{Prop, Value};
 use crate::core::widget::{LayoutCx, PaintCx, PropChange, Widget};
 use crate::geom::{Rect, Size};
 use crate::shape::Shape;
-use crate::style::{Blur, Style};
+use crate::style::Style;
 
 /// How thick a glass is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -49,43 +49,13 @@ impl Tier {
     }
 }
 
-/// Thin glass blurs a fraction of Regular's σ (kit 4 against 10) ...
-const THIN_BLUR: f32 = 0.4;
-/// ... and is more saturated (kit 1.5 against 1.1 in the token).
-const THIN_SATURATION: f32 = 0.4;
-
 /// The layer style of a glass of `tier`: blur and refraction, tint, rims and drop shadow. With
 /// Reduce Transparency the blur is an opaque fill (the tint over `Surface/Window`).
 pub fn glass_style(theme: &Theme, tier: Tier) -> Style {
     match tier {
         Tier::Thick => theme.material_style("Glass/Thick"),
         Tier::Regular => theme.material_style("Glass/Regular"),
-        Tier::Thin => {
-            let mut s = theme.material_style("Glass/Regular");
-            let tint = theme.colors.glass_tint_thin;
-            if theme.appearance.reduce_transparency {
-                s.fills.clear();
-                s.fills.push(tint.over(theme.colors.surface_window).into());
-            } else {
-                s.fills.clear();
-                s.fills.push(tint.into());
-                for b in &mut s.blurs {
-                    match b {
-                        Blur::Glass(g) => {
-                            g.radius *= THIN_BLUR;
-                            g.saturation += THIN_SATURATION;
-                        }
-                        Blur::Background {
-                            radius, saturation, ..
-                        } => {
-                            *radius *= THIN_BLUR;
-                            *saturation += THIN_SATURATION;
-                        }
-                    }
-                }
-            }
-            s
-        }
+        Tier::Thin => theme.material_style("Glass/Thin"),
     }
 }
 
@@ -231,6 +201,7 @@ pub fn glass_panel(
 mod tests {
     use super::*;
     use crate::amalfi::theme::Theme;
+    use crate::style::Blur;
 
     #[test]
     fn thin_glass_is_lighter_than_regular() {

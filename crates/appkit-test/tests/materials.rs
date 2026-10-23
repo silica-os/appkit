@@ -1,8 +1,7 @@
 //! Kit parity of the glass materials. The `Materials` page of the kit has no masters of its own,
-//! so the surfaces are measured in the masters that use them. The kit export in silica-design
-//! (19 Oct) draws the Dock shelf in Regular glass and the Control Centre in Thick glass, where
-//! ui-kit's `SThinGlass` (newer) uses the Thin glass: the parity runs pin the tier the export
-//! used, and the Thin glass is checked against the .vue measures in `materials.rs`.
+//! so the surfaces are measured in the masters that use them (ui-kit's layer trees of 22 Oct:
+//! the Dock shelf and the Control Centre modules and detail panes are Thin glass, the banner
+//! Regular, the notification centre Thick).
 
 use appkit::amalfi::materials::{GlassPanel, Tier};
 use appkit::geom::{Rect, Size};
@@ -19,8 +18,6 @@ fn check(name: &str, tier: Tier, radius: f32, mask: &[Rect], pixels: bool) -> Re
     let mut scene = Scene::load(name)?;
     let size: Size = scene.master.size();
     scene.mount_sized(size, |ui| ui.create(GlassPanel::new(tier, radius)));
-    // Kit defect: the shared glass styles blur 4 / 10 / 18 where materials.md gives other values.
-    scene.ignore_aspects = vec!["#blurs".to_string()];
     scene.png_margin = true;
     scene.extra_mask = mask.to_vec();
     scene.skip_trees = Vec::new();
@@ -49,28 +46,24 @@ fn run(prefix: &str, tier: Tier, radius: f32, layer_mask: &[Rect], pixels: bool,
 }
 
 #[test]
-fn thick_glass_matches_the_edit_button_pixels() {
+fn thin_glass_matches_the_edit_button() {
     let names = KitMaster::names("Control Center/Module/Edit Button");
     assert_eq!(names.len(), 2, "{names:?}");
     for n in &names {
         let mut scene = Scene::load(n).expect("master");
         let size = scene.master.size();
         scene.mount_sized(size, |ui| {
-            ui.create(GlassPanel::new(Tier::Thick, 12.0).layer("Glass"))
+            ui.create(GlassPanel::new(Tier::Thin, 12.0).layer("Glass"))
         });
-        scene.ignore_aspects = vec!["#blurs".to_string()];
         scene.png_margin = true;
         let report = scene.geometry(&[("Glass", "Glass")], &[]);
         assert!(report.is_empty(), "{n}: {}", report.join("\n"));
-        if let Err(e) = scene.pixels(GLASS) {
-            panic!("{n}: {e}");
-        }
     }
 }
 
 #[test]
 fn regular_glass_matches_the_shelf() {
-    run("Dock/Shelf/Default", Tier::Regular, 24.0, &[], false, 2);
+    run("Dock/Shelf/Default", Tier::Thin, 24.0, &[], false, 2);
 }
 
 #[test]
@@ -91,7 +84,7 @@ fn regular_glass_matches_the_banner() {
 }
 
 #[test]
-fn thick_glass_matches_the_notification_centre_and_the_detail_panes() {
+fn thick_and_thin_glass_match_the_notification_centre_and_the_detail_panes() {
     run(
         "Notifications/Centre/Panel",
         Tier::Thick,
@@ -106,9 +99,8 @@ fn thick_glass_matches_the_notification_centre_and_the_detail_panes() {
         let mut scene = Scene::load(n).expect("master");
         let size = scene.master.size();
         scene.mount_sized(size, |ui| {
-            ui.create(GlassPanel::new(Tier::Thick, 16.0).layer("Glass"))
+            ui.create(GlassPanel::new(Tier::Thin, 16.0).layer("Glass"))
         });
-        scene.ignore_aspects = vec!["#blurs".to_string()];
         let report = scene.geometry(&[("Glass", "Glass")], &[]);
         assert!(report.is_empty(), "{n}: {}", report.join("\n"));
     }

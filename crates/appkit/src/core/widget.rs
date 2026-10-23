@@ -436,6 +436,12 @@ impl EventCx<'_> {
         self.ui.tree.flags(self.id).contains(NodeFlags::PRESSED)
     }
 
+    /// Scales the view about its centre (the held-down growth of icon buttons and segmented
+    /// controls); 1 restores it.
+    pub fn grow(&mut self, target: f32) {
+        self.ui.grow(self.id, target);
+    }
+
     /// Keeps ticking the view every frame until [`Widget::tick`] returns false.
     pub fn animate(&mut self) {
         self.ui.start_animating(self.id);

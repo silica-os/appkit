@@ -25,8 +25,6 @@ fn alert_masters_match_the_kit() {
         let root = scene.master.root.clone();
         let size = scene.master.size();
         scene.mount_sized(size, |ui| build(ui, &root, name));
-        // Kit defect: the Dark/Glass/Thick shared style blurs 10 where materials.md gives 6.
-        scene.ignore_aspects = vec!["#blurs".to_string()];
         scene.png_margin = true;
         // The app icon is a bitmap, and the Gatekeeper badges are squashed in the kit.
         let mut skip = vec![

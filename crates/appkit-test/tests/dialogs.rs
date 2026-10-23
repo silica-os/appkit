@@ -4,12 +4,13 @@
 mod common;
 
 use appkit::amalfi::button::{PushButton, PushVariant};
-use appkit::amalfi::dialogs::{Dialog, browser, dialog, dialog_footer};
+use appkit::amalfi::dialogs::{BodyItem, Dialog, dialog, dialog_footer, form_body};
+use appkit::amalfi::panels::{FileBrowser, FileEntry, FilePanelSpec, Mode, file_panel};
 use appkit::amalfi::text::{Text, TextRole};
 use appkit::amalfi::tokens::typography;
 use appkit::core::{Prop, Ui, Value, ViewId};
 use appkit_test::{KitLayer, KitMaster, Scene, Tolerance};
-use common::{build_footer, build_row, build_section, child, sidebar_view, text_at};
+use common::{build_footer, build_row, child, text_at};
 
 /// Raised surfaces with controls and rows inside.
 const DIALOG: Tolerance = Tolerance {
@@ -56,49 +57,102 @@ fn footer(ui: &mut Ui, kit: &KitLayer) -> ViewId {
     dialog_footer(ui, kit.frame.width, &lead, &trail)
 }
 
-fn browser_view(ui: &mut Ui, kit: &KitLayer, dark: bool) -> ViewId {
-    let _ = dark;
-    let places = child(kit, "Places")
-        .and_then(|p| child(p, "Places group"))
-        .and_then(|g| {
-            let m = g.master.clone()?;
-            let v = sidebar_view(ui, g, &m)?;
-            set_id(ui, v, "Places group");
-            Some(v)
-        });
-    let mut files: Vec<&KitLayer> = child(kit, "File list")
-        .map(|l| l.children.iter().filter(|c| c.master.is_some()).collect())
-        .unwrap_or_default();
-    files.sort_by(|a, b| a.frame.y.total_cmp(&b.frame.y));
-    let rows: Vec<ViewId> = files
+/// The file list of the kit's `Dialogs/Browser/Files`: its rows are `Sidebars/Row` instances
+/// named after the files, with the kind and date beside them.
+fn browser_view(ui: &mut Ui, kit: &KitLayer) -> ViewId {
+    let mut rows: Vec<&KitLayer> = kit
+        .children
         .iter()
-        .filter_map(|f| {
-            let m = f.master.clone()?;
-            let v = sidebar_view(ui, f, &m)?;
-            set_id(ui, v, &f.name);
-            Some(v)
+        .filter(|c| {
+            c.master
+                .as_deref()
+                .is_some_and(|m| m.starts_with("Sidebars/Row/"))
         })
         .collect();
-    browser(
-        ui,
-        kit.frame.width,
-        &places.into_iter().collect::<Vec<_>>(),
-        &rows,
-    )
+    rows.sort_by(|a, b| a.frame.y.total_cmp(&b.frame.y));
+    let mut files = Vec::new();
+    let mut selected = None;
+    for (i, r) in rows.iter().enumerate() {
+        let kind = text_at(kit, &format!("Kind {}", i + 1)).unwrap_or_default();
+        let date = text_at(kit, &format!("Date {}", i + 1)).unwrap_or_default();
+        files.push(FileEntry::new(&r.name, &r.name, "doc", &kind, &date));
+        if r.master
+            .as_deref()
+            .is_some_and(|m| m.contains("/Selected/"))
+        {
+            selected = Some(r.name.clone());
+        }
+    }
+    let mut b = FileBrowser::new(files);
+    b.selected = selected;
+    b.height = kit.frame.height;
+    ui.create(b)
+}
+
+/// An open or save panel from its kit master.
+fn file_panel_view(ui: &mut Ui, kit: &KitLayer, name: &str) -> ViewId {
+    let open = name.contains("/Open Panel/");
+    let mut spec = FilePanelSpec::new(if open { Mode::Open } else { Mode::Save });
+    spec.expanded = !name.contains("Compact");
+    spec.name = "Untitled".to_string();
+    spec.locations = vec!["Recipes".to_string()];
+    // The places: headers and rows by their order in the sidebar.
+    let mut kids: Vec<&KitLayer> = kit
+        .children
+        .iter()
+        .filter(|c| {
+            c.master
+                .as_deref()
+                .is_some_and(|m| m.starts_with("Sidebars/"))
+        })
+        .collect();
+    kids.sort_by(|a, b| a.frame.y.total_cmp(&b.frame.y));
+    for k in kids {
+        let m = k.master.clone().unwrap_or_default();
+        if m.starts_with("Sidebars/Header/") {
+            spec.places
+                .push((k.name.trim_start_matches("Header ").to_string(), Vec::new()));
+        } else if let Some(g) = spec.places.last_mut() {
+            g.1.push((k.name.clone(), k.name.clone(), "folder".to_string()));
+        }
+    }
+    if let Some(b) = child(kit, "Browser") {
+        let mut rows: Vec<&KitLayer> = b
+            .children
+            .iter()
+            .filter(|c| {
+                c.master
+                    .as_deref()
+                    .is_some_and(|m| m.starts_with("Sidebars/Row/"))
+            })
+            .collect();
+        rows.sort_by(|a, c| a.frame.y.total_cmp(&c.frame.y));
+        for (i, r) in rows.iter().enumerate() {
+            let kind = text_at(b, &format!("Kind {}", i + 1)).unwrap_or_default();
+            let date = text_at(b, &format!("Date {}", i + 1)).unwrap_or_default();
+            spec.files
+                .push(FileEntry::new(&r.name, &r.name, "doc", &kind, &date));
+            if r.master
+                .as_deref()
+                .is_some_and(|m| m.contains("/Selected/"))
+            {
+                spec.selected = Some(r.name.clone());
+            }
+        }
+    }
+    file_panel(ui, &spec).root
 }
 
 fn build(ui: &mut Ui, kit: &KitLayer, name: &str) -> Option<ViewId> {
     if name.starts_with("Dialogs/Browser/") {
-        return Some(browser_view(ui, kit, name.contains("/Dark")));
+        return Some(browser_view(ui, kit));
     }
     if name.starts_with("Dialogs/Footer/") {
         return Some(footer(ui, kit));
     }
-    let shape = if name.contains("/Generic/") {
-        Dialog::form()
-    } else {
-        Dialog::panel()
-    };
+    if name.contains("/Open Panel/") || name.contains("/Save Panel") {
+        return Some(file_panel_view(ui, kit, name));
+    }
     let mut kids: Vec<&KitLayer> = kit
         .children
         .iter()
@@ -106,37 +160,48 @@ fn build(ui: &mut Ui, kit: &KitLayer, name: &str) -> Option<ViewId> {
         .collect();
     kids.sort_by(|a, b| a.frame.y.total_cmp(&b.frame.y));
     let mut views = Vec::new();
+    let mut body = Vec::new();
+    let mut footer_view = None;
     for k in kids {
-        let v = if k.name == "Title" {
-            ui.create(
+        let m = k.master.clone().unwrap_or_default();
+        if k.name == "Title" {
+            let t = ui.create(
                 Text::new(&k.text.clone().unwrap_or_default())
                     .token(&typography::TITLE_3)
                     .role(TextRole::Primary)
                     .layer("Title")
                     .whole(1.0, 0.0),
-            )
-        } else {
-            let m = k.master.clone().unwrap_or_default();
-            let v = if m.starts_with("Forms/Section/") {
-                build_section(ui, k)
-            } else if m.starts_with("Forms/Footer/") {
-                build_footer(ui, k)
-            } else if m.starts_with("Forms/Row/") {
-                build_row(ui, k)
-            } else if m.starts_with("Dialogs/Browser/") {
-                browser_view(ui, k, m.contains("/Dark"))
-            } else if m.starts_with("Dialogs/Footer/") {
-                footer(ui, k)
-            } else {
-                return None;
-            };
+            );
+            set_id(ui, t, &k.name);
+            views.push(t);
+        } else if k.name == "Section rule" {
+            body.push(BodyItem::Rule);
+        } else if m.starts_with("Forms/Footer/") {
+            let v = build_footer(ui, k);
             set_width(ui, v, k.frame.width);
-            v
-        };
-        set_id(ui, v, &k.name);
-        views.push(v);
+            set_id(ui, v, &k.name);
+            footer_view = Some(v);
+        } else if m.starts_with("Forms/Row/") {
+            let v = build_row(ui, k);
+            set_width(ui, v, k.frame.width);
+            set_id(ui, v, &k.name);
+            // Consecutive checkbox rows are one group, 4 apart.
+            if m.starts_with("Forms/Row/Check/")
+                && let Some(BodyItem::Group(g)) = body.last_mut()
+            {
+                g.push(v);
+            } else if m.starts_with("Forms/Row/Check/") {
+                body.push(BodyItem::Group(vec![v]));
+            } else {
+                body.push(BodyItem::View(v));
+            }
+        } else {
+            return None;
+        }
     }
-    Some(dialog(ui, shape, &views))
+    views.push(form_body(ui, &body));
+    views.extend(footer_view);
+    Some(dialog(ui, Dialog::form(), &views))
 }
 
 #[test]
@@ -154,6 +219,8 @@ fn dialog_masters_match_the_kit() {
             build(ui, &root, name).unwrap_or_else(|| ui.create(Dialog::form()))
         });
         scene.png_margin = true;
+        let w = scene.window;
+        scene.ui.set_window_active(w, true);
         // Kit quirks of the nested forms (see forms.rs) and Sketch's wider titles.
         let skip = [
             "Control/Background",
@@ -163,6 +230,14 @@ fn dialog_masters_match_the_kit() {
             "Control/Switch/Track",
             "Control/Switch/Thumb",
             "Save/Label",
+            // The window draws its own traffic lights; the kit's glyph on the expand button is
+            // a placeholder (the .vue uses the chevrons).
+            "Traffic lights/Zoom/Dot",
+            "Traffic lights/Minimise/Dot",
+            "Traffic lights/Close/Dot",
+            "Expand/Glyph Plus",
+            "Expand/Glyph Chevron Up",
+            "Expand/Glyph Chevron Down",
             "Title",
             // Buttons wider than their text keep the master label's place in the kit.
             "/Label",
@@ -170,6 +245,10 @@ fn dialog_masters_match_the_kit() {
         let report = scene.auto_geometry_except(&skip, &[]);
         if !report.is_empty() {
             failures.push(format!("{name}:\n    {}", report.join("\n    ")));
+            continue;
+        }
+        // The PNGs of the redrawn dialogs (ui-kit 22 Oct) are the older layout.
+        if appkit_test::kit::png_is_stale(&scene.master) {
             continue;
         }
         // The footer's buttons are 72 wide in the kit whatever their text: a mean that small

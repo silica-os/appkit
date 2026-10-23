@@ -17,6 +17,9 @@ use crate::shape::Shape;
 use crate::style::{Border, Style};
 use crate::text::Align;
 
+/// How much a segmented control grows while held down (ui-kit `--press-scale-segmented`).
+const PRESS_SCALE_SEGMENTED: f32 = 1.035;
+
 /// Fixed measures.
 pub mod metrics {
     /// Space between a control's track and its items.
@@ -781,6 +784,7 @@ impl Widget for SegmentedControl {
                     return Handled::No;
                 };
                 self.down = true;
+                cx.grow(PRESS_SCALE_SEGMENTED);
                 self.focus_index = i;
                 if self.mode == Selection::Any {
                     // Select any has no lens: a flat pressed item, toggled on release.
@@ -836,6 +840,7 @@ impl Widget for SegmentedControl {
                 ..
             } if self.down => {
                 self.down = false;
+                cx.grow(1.0);
                 let local = Point::new(pos.x - origin.x, pos.y - origin.y);
                 if let Some(p) = self.pressed_item.take() {
                     if self.index_at(local) == Some(p) {
@@ -1175,16 +1180,13 @@ impl ActionSegments {
         let x = self.lefts.get(i).copied().unwrap_or(0.0);
         let w = self.widths.get(i).copied().unwrap_or(0.0);
         let h = m.height;
-        let pressed = look == Look::Pressed;
-        let inset = if pressed { 0.0 } else { m.hover_inset };
+        // Pressed keeps the margins of hover (ui-kit 03e08f8).
+        let _ = look;
+        let inset = m.hover_inset;
         if self.segments.get(i).is_some_and(Segment::is_icon) {
             return Rect::new(x + inset, inset, w - 2.0 * inset, h - 2.0 * inset);
         }
-        let side = if pressed && m.separator_takes_space() {
-            0.0
-        } else {
-            metrics::TEXT_HIGHLIGHT_INSET
-        };
+        let side = metrics::TEXT_HIGHLIGHT_INSET;
         Rect::new(x + side, inset, w - 2.0 * side, h - 2.0 * inset)
     }
 
@@ -1417,6 +1419,7 @@ impl Widget for ActionSegments {
                     return Handled::No;
                 };
                 self.pressed = Some(i);
+                cx.grow(PRESS_SCALE_SEGMENTED);
                 self.inside = true;
                 self.focus_index = i;
                 self.sync(cx);
@@ -1440,6 +1443,7 @@ impl Widget for ActionSegments {
                 ..
             } if self.pressed.is_some() => {
                 let pressed = self.pressed.take();
+                cx.grow(1.0);
                 let at = self.index_at(local(pos));
                 self.inside = false;
                 self.hovered = at.filter(|i| self.can_press(*i, enabled));

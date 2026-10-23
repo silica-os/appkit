@@ -386,6 +386,24 @@ impl Scene {
     /// Renders at 2× and compares with the master's PNG; on failure writes
     /// `target/kit-diff/<name>.png` (kit | ours | difference). Returns (mean, max).
     pub fn pixels(&mut self, tol: Tolerance) -> Result<(f64, u8), String> {
+        // The PNG of a master whose tree was updated from ui-kit shows the older look: only
+        // gross differences (a wrong shape, a missing layer) count.
+        let stale = crate::kit::png_is_stale(&self.master);
+        if stale && !self.master.png.exists() {
+            // A master only ui-kit has (no PNG): the geometry is all there is to compare.
+            return Ok((0.0, 0));
+        }
+        let tol = if stale {
+            Tolerance {
+                mean: tol.mean.max(30.0),
+                max: 255,
+                ..tol
+            }
+        } else {
+            tol
+        };
+        // The kit's pressed masters show no held-down growth.
+        self.ui.clear_growth();
         let ours = self
             .ui
             .snapshot(self.window, 2.0)

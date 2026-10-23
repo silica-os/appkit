@@ -3,9 +3,7 @@
 
 mod common;
 
-use appkit::amalfi::buttons::{
-    GradientButtons, HelpButton, IconButton, LinkButton, MenuButton, ToolbarButton,
-};
+use appkit::amalfi::buttons::{GradientButtons, HelpButton, IconButton, LinkButton, MenuButton};
 use appkit::amalfi::foundation::ControlSize;
 use appkit::core::{Prop, Value};
 use appkit_test::{KitMaster, Scene, Tolerance, center_of};
@@ -65,15 +63,6 @@ fn finish(failures: Vec<String>, count: usize) {
         failures.len(),
         failures.join("\n")
     );
-}
-
-/// Kit defect: the Dark/Glass/Regular shared style blurs 10 where materials.md gives 6.
-fn glass_devs(scene: &Scene) -> &'static [&'static str] {
-    if scene.master.dark() {
-        &["Background#blurs"]
-    } else {
-        &[]
-    }
 }
 
 #[test]
@@ -171,35 +160,8 @@ fn gradient_buttons_match_the_kit() {
     finish(failures, names.len());
 }
 
-#[test]
-fn toolbar_buttons_match_the_kit() {
-    let names = KitMaster::names("Buttons/Toolbar");
-    assert_eq!(names.len(), 24, "{} masters", names.len());
-    let mut failures = Vec::new();
-    for name in &names {
-        let parts: Vec<&str> = name.split('/').collect();
-        let [_, _, kind, st, _app] = parts[..] else {
-            continue;
-        };
-        let Ok(mut scene) = Scene::load(name) else {
-            continue;
-        };
-        let symbol = text_of(&scene, "Glyph Gear");
-        let mut b = ToolbarButton::new(&symbol).active(true);
-        match kind {
-            "Icon + Label" => b = b.labelled(&text_of(&scene, "Label")),
-            "Icon Small" => b = b.small(),
-            _ => {}
-        }
-        scene.mount(|ui| ui.create(b));
-        state(&mut scene, st, "Glyph Gear");
-        let devs = glass_devs(&scene);
-        if let Some(f) = check(&mut scene, name, &[], devs, CONTROLS) {
-            failures.push(f);
-        }
-    }
-    finish(failures, names.len());
-}
+// The toolbar buttons have no masters since the kit dropped Buttons/Toolbar (ui-kit, 22 Oct):
+// their look is that of the icon buttons, checked in `icon_buttons_match_the_kit`.
 
 #[test]
 fn pop_up_and_pull_down_buttons_match_the_kit() {

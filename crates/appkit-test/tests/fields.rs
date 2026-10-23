@@ -3,7 +3,7 @@
 
 mod common;
 
-use appkit::amalfi::button::PushButton;
+use appkit::amalfi::button::{PushButton, PushVariant};
 use appkit::amalfi::fields::{ClearButton, ComboButton, TextField, Token};
 use appkit::amalfi::foundation::ControlSize;
 use appkit::core::event::{Key, KeyEvent, Mods};
@@ -188,12 +188,7 @@ fn search_fields_match_the_kit() {
         let wide = scene.master.size();
         scene.mount_sized(wide, |ui| ui.create(f));
         finish_state(&mut scene, state);
-        // Kit defect: the Dark/Glass/Regular shared style blurs 10 where materials.md gives 6.
-        let devs: &[&str] = if scene.master.dark() {
-            &["Background#blurs"]
-        } else {
-            &[]
-        };
+        let devs: &[&str] = &[];
         // Kit quirk: the nested token master is 64 wide (Travel) whatever the label: its
         // instance is as wide as the label asks and the nested layers keep their places.
         let mut skip: Vec<&str> = SKIP.iter().copied().chain(["Token/Label"]).collect();
@@ -358,12 +353,18 @@ fn inline_button_fields_match_the_kit() {
         let wide = scene.master.size();
         scene.mount_sized(wide, |ui| {
             let f = ui.create(TextField::text().with_text(&value));
-            let b = ui.create(PushButton::new(&label).size(ControlSize::Small));
+            let b = ui.create(
+                PushButton::new(&label)
+                    .size(ControlSize::Small)
+                    .variant(PushVariant::Borderless),
+            );
             let _ = ui.set(b, Prop::Identifier, Value::from("Inline button"));
             ui.add_child(f, b);
             f
         });
         finish_state(&mut scene, state);
+        // The PNG of the older export has a 2 px margin the new tree does not.
+        scene.png_margin = true;
         if let Some(r) = check(&mut scene, name, SKIP, &[], FIELD) {
             failures.push(r);
         }

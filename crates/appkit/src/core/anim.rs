@@ -115,6 +115,39 @@ impl Ui {
         }
     }
 
+    /// Scales the view about its centre to `target` with `spring.snappy` (held-down growth:
+    /// icon buttons 1.05, segmented controls 1.035, back to 1 on release). Reduce Motion: no
+    /// scale.
+    pub fn grow(&mut self, id: ViewId, target: f32) {
+        if self.appearance.reduce_motion && target != 1.0 {
+            return;
+        }
+        let t = self.motion_timing(Timing::Spring(motion::SPRING_SNAPPY));
+        let Some(a) = self.anim_mut(id) else { return };
+        if (a.scale.target() - target).abs() <= f32::EPSILON {
+            return;
+        }
+        a.scale.animate_to(target, t);
+        self.track(id);
+    }
+
+    /// Ends every held-down growth at once (the kit's pressed masters show none: the parity
+    /// tests call this before they compare).
+    pub fn clear_growth(&mut self) {
+        let mut ids = self.node_anims.clone();
+        let roots: Vec<ViewId> = self.windows().map(|w| w.root).collect();
+        for r in roots {
+            ids.push(r);
+            ids.extend(self.tree.descendants(r));
+        }
+        for id in ids {
+            if let Some(a) = self.tree.get_mut(id).and_then(|n| n.anim.as_mut()) {
+                a.scale.jump(1.0);
+            }
+            self.request_paint(id);
+        }
+    }
+
     /// The view moved from `old` to `new` (parent coordinates).
     pub(crate) fn animate_move(&mut self, id: ViewId, old: Rect, new: Rect) {
         let Some(t) = self.tree.get(id).and_then(|n| n.modifiers.animation) else {
@@ -234,6 +267,32 @@ mod tests {
         ui.set(v, Prop::Width, Value::from(20.0)).unwrap();
         ui.set(v, Prop::Height, Value::from(20.0)).unwrap();
         v
+    }
+
+    #[test]
+    fn grow_scales_with_the_snappy_spring_and_not_with_reduce_motion() {
+        let mut ui = Ui::new_headless();
+        let w = ui.create_window(WindowKind::Normal, Size::new(100.0, 100.0));
+        let v = boxed(&mut ui);
+        ui.set_content(w, v);
+        ui.show_window(w);
+        ui.prepare_frame(w);
+        ui.grow(v, 1.05);
+        let target = |ui: &Ui| {
+            ui.tree
+                .get(v)
+                .and_then(|n| n.anim.as_ref())
+                .map(|a| a.scale.target())
+        };
+        assert_eq!(target(&ui), Some(1.05));
+        ui.grow(v, 1.0);
+        assert_eq!(target(&ui), Some(1.0));
+        ui.set_appearance(crate::core::env::Appearance {
+            reduce_motion: true,
+            ..crate::core::env::Appearance::default()
+        });
+        ui.grow(v, 1.05);
+        assert_eq!(target(&ui), Some(1.0));
     }
 
     #[test]

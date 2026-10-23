@@ -415,6 +415,21 @@ fn layer(v: &Value, root: bool) -> KitLayer {
     }
 }
 
+/// Whether the master's PNG is older than its layer tree, or than the tree of a master it
+/// nests (`kit/_stale`, written by `cargo xtask sync-kit --ui-kit` for every tree it changed):
+/// the pixel comparison is then loosened, since the PNG shows the older look.
+pub fn png_is_stale(master: &KitMaster) -> bool {
+    let Ok(text) = std::fs::read_to_string(kit_dir().join("_stale")) else {
+        return false;
+    };
+    let stale: std::collections::HashSet<&str> = text.lines().map(str::trim).collect();
+    fn nests(l: &KitLayer, stale: &std::collections::HashSet<&str>) -> bool {
+        l.master.as_deref().is_some_and(|m| stale.contains(m))
+            || l.children.iter().any(|c| nests(c, stale))
+    }
+    stale.contains(master.name.as_str()) || nests(&master.root, &stale)
+}
+
 impl KitMaster {
     /// Loads a master by name.
     pub fn load(name: &str) -> Result<KitMaster, String> {

@@ -361,7 +361,9 @@ pub fn strip_of(
     let mut kids: Vec<&KitLayer> = kit
         .children
         .iter()
-        .filter(|c| c.master.is_some() || c.name == "Title" || c.name == "Spacer")
+        .filter(|c| {
+            c.master.is_some() || matches!(c.name.as_str(), "Title" | "Spacer" | "Toolbar button")
+        })
         .collect();
     kids.sort_by(|a, b| a.frame.x.total_cmp(&b.frame.x));
     let s = ui.create(Strip::new(height, pad.0, pad.1).gap(gap).backdrop(backdrop));
@@ -373,12 +375,15 @@ pub fn strip_of(
             ui.create(t)
         } else if k.name == "Spacer" && k.master.is_none() {
             ui.create(Spacer::fixed(k.frame.width))
+        } else if k.name == "Toolbar button" && k.master.is_none() {
+            // Since ui-kit 22 Oct the toolbar button is a plain group, not a master.
+            ui.create(ToolbarButton::new(&first_text(k).unwrap_or_default()).small())
         } else {
             let m = k.master.clone().unwrap_or_default();
             titlebar_view(ui, k, &m)?
         };
         // The title and the spacer are plain layers of the bar in the kit.
-        if k.master.is_some() {
+        if k.master.is_some() || k.name == "Toolbar button" {
             set_id(ui, v, &k.name);
         }
         ui.add_child(s, v);
@@ -504,8 +509,8 @@ pub fn titlebar_view(ui: &mut Ui, kit: &KitLayer, master: &str) -> Option<ViewId
         ("Titlebars", "Piece") => piece(ui, kit, &parts),
         ("Titlebars", "Bar") => {
             let (pad, gap, align) = match *parts.get(2)? {
-                "Compact" => ((20.0, 16.0), 8.0, Align::Start),
-                "Title Only" => ((20.0, 20.0), 0.0, Align::Center),
+                "Compact" => ((0.0, 8.0), 8.0, Align::Start),
+                "Title Only" => ((0.0, 8.0), 0.0, Align::Center),
                 _ => ((0.0, 16.0), 0.0, Align::Start),
             };
             let h = kit.frame.height;
@@ -551,6 +556,7 @@ pub fn piece(ui: &mut Ui, kit: &KitLayer, parts: &[&str]) -> Option<ViewId> {
     }
     let pad = match name {
         "Controls" => (20.0, 12.0),
+        "Controls Small" => (8.0, 8.0),
         "Mail Send" => (4.0, 16.0),
         "Title + Subtitle" => (8.0, 8.0),
         _ => (4.0, 4.0),

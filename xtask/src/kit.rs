@@ -11,7 +11,138 @@ use serde_json::Value;
 
 use crate::{Result, flag, root, sibling};
 
+/// `--ui-kit DIR`: lays the layer trees of ui-kit's `kit/` (newer than silica-design's export)
+/// over the fixtures that exist; the PNGs stay as exported. Returns how many trees changed.
+fn overlay_ui_kit(dir: &Path, kit: &Path) -> Result<usize> {
+    let mut changed = 0;
+    let stale_path = kit.join("_stale");
+    let mut stale: std::collections::BTreeSet<String> = std::fs::read_to_string(&stale_path)
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect();
+    let mut cache: std::collections::HashMap<String, Value> = std::collections::HashMap::new();
+    let mut files = Vec::new();
+    collect_json(kit, &mut files);
+    for file in files {
+        let rel = file.strip_prefix(kit).map_err(|e| e.to_string())?;
+        let name = rel.with_extension("").to_string_lossy().to_string();
+        let Some(category) = name.split('/').next() else {
+            continue;
+        };
+        if !cache.contains_key(category) {
+            let path = dir.join("kit").join(format!("{category}.json"));
+            let v = std::fs::read_to_string(&path)
+                .ok()
+                .and_then(|t| serde_json::from_str(&t).ok())
+                .unwrap_or(Value::Null);
+            cache.insert(category.to_string(), v);
+        }
+        let Some(new) = cache.get(category).map(|c| &c[name.as_str()]) else {
+            continue;
+        };
+        if new.is_null() {
+            continue;
+        }
+        let old: Value = std::fs::read_to_string(&file)
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or(Value::Null);
+        if !same(&old, new) {
+            let text = serde_json::to_string(new).map_err(|e| e.to_string())?;
+            std::fs::write(&file, text).map_err(|e| format!("{}: {e}", file.display()))?;
+            stale.insert(name.clone());
+            changed += 1;
+        }
+    }
+    // Masters the new trees nest that the fixtures lack (no PNG: they are only expanded).
+    loop {
+        let mut files = Vec::new();
+        collect_json(kit, &mut files);
+        let mut wanted = Vec::new();
+        for file in files {
+            let Some(v) = std::fs::read_to_string(&file)
+                .ok()
+                .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+            else {
+                continue;
+            };
+            let mut nested = Vec::new();
+            collect_masters(&v, &mut nested);
+            wanted.extend(nested);
+        }
+        let mut added = false;
+        for name in wanted {
+            let path = kit.join(format!("{name}.json"));
+            if path.exists() {
+                continue;
+            }
+            let Some(category) = name.split('/').next() else {
+                continue;
+            };
+            let new = cache.get(category).map(|c| &c[name.as_str()]);
+            let Some(new) = new.filter(|n| !n.is_null()) else {
+                continue;
+            };
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+            }
+            let text = serde_json::to_string(new).map_err(|e| e.to_string())?;
+            std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
+            stale.insert(name.clone());
+            changed += 1;
+            added = true;
+        }
+        if !added {
+            break;
+        }
+    }
+    std::fs::write(
+        &stale_path,
+        stale.into_iter().collect::<Vec<_>>().join("\n") + "\n",
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(changed)
+}
+
+/// Whether `new` says what `old` says (it may carry more keys: ui-kit adds layout hints).
+fn same(old: &Value, new: &Value) -> bool {
+    match (old, new) {
+        (Value::Object(a), Value::Object(b)) => {
+            a.iter().all(|(k, v)| b.get(k).is_some_and(|w| same(v, w)))
+        }
+        (Value::Array(a), Value::Array(b)) => {
+            a.len() == b.len() && a.iter().zip(b).all(|(x, y)| same(x, y))
+        }
+        (Value::Number(a), Value::Number(b)) => a.as_f64() == b.as_f64(),
+        (a, b) => a == b,
+    }
+}
+
+fn collect_json(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in rd.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            collect_json(&p, out);
+        } else if p.extension().is_some_and(|x| x == "json")
+            && !e.file_name().to_string_lossy().starts_with('_')
+        {
+            out.push(p);
+        }
+    }
+}
+
 pub fn sync(args: &[String]) -> Result<()> {
+    if let Some(i) = args.iter().position(|a| a == "--ui-kit") {
+        let dir = args.get(i + 1).ok_or("--ui-kit needs a directory")?;
+        let kit = root().join("crates/appkit-test/kit");
+        let n = overlay_ui_kit(Path::new(dir), &kit)?;
+        println!("{n} layer trees updated from ui-kit");
+        return Ok(());
+    }
     let design = PathBuf::from(flag(
         args,
         "--design",

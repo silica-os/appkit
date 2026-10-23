@@ -146,8 +146,6 @@ fn popover_masters_match_the_kit() {
                 popover(ui, shape_of(name), padding, inner)
             }
         });
-        // Kit defect: the Dark/Glass/Thick shared style blurs 10 where materials.md gives 6.
-        scene.ignore_aspects = vec!["#blurs".to_string()];
         scene.png_margin = true;
         let report = scene.auto_geometry(&[]);
         if !report.is_empty() {

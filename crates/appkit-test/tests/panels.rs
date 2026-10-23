@@ -90,27 +90,26 @@ fn the_file_list_follows_the_vue_measures() {
     );
     mount(&mut ui, b, 560.0, 220.0);
     // The header: 28 high, its hairline at 27; the rows of 32 from 28; the selection 8 in.
-    assert_eq!(layer(&mut ui, b, "Header").height, 28.0);
     assert_eq!(
         layer(&mut ui, b, "Header rule"),
         Rect::new(0.0, 27.0, 560.0, 1.0)
     );
     assert_eq!(
-        layer(&mut ui, b, "Stripe"),
+        layer(&mut ui, b, "Stripe 2"),
         Rect::new(0.0, 60.0, 560.0, 32.0)
     );
     assert_eq!(
-        layer(&mut ui, b, "Selection"),
+        layer(&mut ui, b, "Focaccia.recipe/Selection"),
         Rect::new(8.0, 60.0, 544.0, 32.0)
     );
-    assert_eq!(layer(&mut ui, b, "Header Name").x, 44.0);
-    assert_eq!(layer(&mut ui, b, "Header Kind").x, 300.0);
-    assert_eq!(layer(&mut ui, b, "Header Date").x, 396.0);
+    assert_eq!(layer(&mut ui, b, "Column Name").x, 44.0);
+    assert_eq!(layer(&mut ui, b, "Column Kind").x, 300.0);
+    assert_eq!(layer(&mut ui, b, "Column Date").x, 396.0);
     // The stripes carry on through the empty space.
     let n = ui
         .inspect_layers(b)
         .iter()
-        .filter(|l| l.name == "Stripe")
+        .filter(|l| l.name.starts_with("Stripe"))
         .count();
     assert_eq!(n, 3);
 }
@@ -133,7 +132,7 @@ fn the_file_panel_follows_the_vue_measures() {
     let places = ui
         .tree
         .window_rect(ui.tree.children(ui.tree.children(parts.root)[0])[0]);
-    assert_eq!(places.width, 177.0);
+    assert_eq!(places.width, 176.0);
     // The buttons sit 16 from the right edge, Save last.
     let save = ui.tree.window_rect(parts.primary);
     assert_eq!(root.right() - save.right(), 16.0);

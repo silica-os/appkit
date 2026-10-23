@@ -109,10 +109,74 @@ impl Theme {
 
     /// The material token by name in this appearance.
     pub fn material(&self, name: &str) -> Option<MaterialToken> {
-        materials::ALL
-            .iter()
-            .find(|(l, _)| l.name == name)
-            .map(|(l, d)| if self.dark() { *d } else { *l })
+        let dark = self.dark();
+        let pick = |n: &str| {
+            materials::ALL
+                .iter()
+                .find(|(l, _)| l.name == n)
+                .map(|(l, d)| if dark { *d } else { *l })
+        };
+        // ui-kit's `glass` styles (Sketch layer styles, 22 Oct) supersede the older
+        // `materials` numbers: blur, saturation, brightness and refraction per tier, and the
+        // tints from the colour tokens.
+        let c = &self.colors;
+        let (blur, sat, bri, dist, depth, ca, tint) = match name {
+            "Glass/Regular" => (
+                if dark { 12.0 } else { 10.0 },
+                if dark { 1.25 } else { 1.6 },
+                if dark { 1.0 } else { 1.12 },
+                0.3,
+                0.5,
+                0.025,
+                Some(c.glass_tint),
+            ),
+            "Glass/Thick" => (
+                if dark { 20.0 } else { 18.0 },
+                if dark { 1.2 } else { 1.7 },
+                if dark { 1.0 } else { 1.15 },
+                0.22,
+                0.4,
+                0.015,
+                Some(c.glass_tint_thick),
+            ),
+            "Glass/Thin" => (
+                if dark { 5.0 } else { 4.0 },
+                if dark { 1.4 } else { 1.5 },
+                if dark { 0.95 } else { 1.06 },
+                0.4,
+                0.6,
+                0.04,
+                Some(c.glass_tint_thin),
+            ),
+            "Glass/Clear" => (
+                1.0,
+                1.2,
+                if dark { 0.98 } else { 1.06 },
+                0.45,
+                0.7,
+                0.06,
+                None,
+            ),
+            _ => return pick(name),
+        };
+        let mut m = pick(if name == "Glass/Thin" {
+            "Glass/Regular"
+        } else {
+            name
+        })?;
+        m.name = if name == "Glass/Thin" {
+            "Glass/Thin"
+        } else {
+            m.name
+        };
+        m.blur = blur;
+        m.saturation = sat;
+        m.brightness = bri;
+        m.distortion = dist;
+        m.depth = depth;
+        m.chromatic_aberration = ca;
+        m.tint = tint;
+        Some(m)
     }
 
     /// A material as a layer style: blur and refraction, tint, inside rim, rim light and
@@ -133,7 +197,14 @@ impl Theme {
             let fill = m.tint.map(|t| t.over(base)).unwrap_or(base);
             style.fills.push(fill.into());
         } else {
-            if m.blur > 0.0 || m.distortion > 0.0 || m.lens {
+            if m.blur > 0.0 && m.distortion == 0.0 && !m.lens && !m.specular {
+                // A plain blur (the sidebar title bar): no refraction, no rim.
+                style.blurs.push(Blur::Background {
+                    radius: m.blur,
+                    saturation: m.saturation,
+                    brightness: m.brightness,
+                });
+            } else if m.blur > 0.0 || m.distortion > 0.0 || m.lens {
                 style.blurs.push(Blur::Glass(Glass {
                     radius: m.blur,
                     saturation: m.saturation,
@@ -151,6 +222,13 @@ impl Theme {
         }
         if let Some(rim) = m.rim_light {
             style.inner_shadows.push(Shadow::new(rim, 0.0, 1.0, 1.0));
+            // The glow that comes with it (kit: inner 0, 0, blur 3).
+            let glow = if self.dark() {
+                Color::rgba(255, 255, 255, 0x17)
+            } else {
+                Color::rgba(255, 255, 255, 0x40)
+            };
+            style.inner_shadows.push(Shadow::new(glow, 0.0, 0.0, 3.0));
         }
         if let Some(rim) = m.rim_inside {
             style.borders.push(Border::inside(rim, 1.0));
@@ -214,7 +292,7 @@ mod tests {
         assert_eq!(s.shadows[0].blur, 32.0);
         assert_eq!(s.blurs.len(), 1);
         assert_eq!(s.borders.len(), 1);
-        assert_eq!(s.inner_shadows.len(), 1);
+        assert_eq!(s.inner_shadows.len(), 2);
         let rt = Theme::new(Appearance {
             reduce_transparency: true,
             ..Appearance::default()

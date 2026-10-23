@@ -35,6 +35,9 @@ pub fn glyph_layer(symbol: &str) -> String {
     s
 }
 
+/// How much a held-down icon button grows.
+const PRESS_SCALE_ICON: f32 = 1.05;
+
 /// The state every button here reacts to (hover, press, focus), with the transitions.
 #[derive(Debug, Default)]
 struct Core {
@@ -196,7 +199,27 @@ impl Widget for IconButton {
         activate(cx, event)
     }
 
-    button_plumbing!();
+    fn state_changed(&mut self, cx: &mut EventCx<'_>, _old: NodeFlags, new: NodeFlags) {
+        self.core.state_changed(cx, new);
+        // Held down, the button grows until release (ui-kit `--press-scale-icon`).
+        cx.grow(if new.contains(NodeFlags::PRESSED) {
+            PRESS_SCALE_ICON
+        } else {
+            1.0
+        });
+    }
+
+    fn tick(&mut self, _cx: &mut EventCx<'_>, dt: f32) -> bool {
+        self.core.transitions.tick(dt)
+    }
+
+    fn interaction(&self) -> Interaction {
+        Interaction::Button
+    }
+
+    fn focus(&self) -> FocusKind {
+        FocusKind::Control
+    }
 
     fn set_prop(&mut self, prop: Prop, value: &Value) -> PropChange {
         match prop {
@@ -887,6 +910,8 @@ pub struct MenuButton {
     pub size: ControlSize,
     /// Width (`None`: the size's own).
     pub width: Option<f32>,
+    /// Takes the width it is offered (at least its own).
+    pub fills: bool,
     /// The list is open (the button looks pressed).
     pub open: bool,
     popup: Option<crate::core::window::WindowId>,
@@ -895,6 +920,12 @@ pub struct MenuButton {
 }
 
 impl MenuButton {
+    /// Takes the width it is offered.
+    pub fn fill(mut self) -> MenuButton {
+        self.fills = true;
+        self
+    }
+
     /// A pop-up button.
     pub fn pop_up(items: &[&str], selected: usize) -> MenuButton {
         MenuButton {
@@ -904,6 +935,7 @@ impl MenuButton {
             selected: Some(selected),
             size: ControlSize::Regular,
             width: None,
+            fills: false,
             open: false,
             popup: None,
             core: Core::default(),
@@ -920,6 +952,7 @@ impl MenuButton {
             selected: None,
             size: ControlSize::Regular,
             width: None,
+            fills: false,
             open: false,
             popup: None,
             core: Core::default(),
@@ -1065,12 +1098,15 @@ impl Widget for MenuButton {
         }
     }
 
-    fn measure(&mut self, _cx: &mut LayoutCx<'_>, _p: Proposal) -> Size {
-        Size::new(
-            self.width
-                .unwrap_or_else(|| MenuButton::default_width(self.size)),
-            self.size.height(),
-        )
+    fn measure(&mut self, _cx: &mut LayoutCx<'_>, p: Proposal) -> Size {
+        let own = self
+            .width
+            .unwrap_or_else(|| MenuButton::default_width(self.size));
+        let w = match p.width {
+            Some(w) if self.fills && w.is_finite() => w.max(own),
+            _ => own,
+        };
+        Size::new(w, self.size.height())
     }
 
     fn paint(&mut self, cx: &mut PaintCx<'_>) {
