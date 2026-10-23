@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  gate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sources (ui-kit, symbols)
+        run: |
+          git clone -q --depth 1 https://github.com/silica-os/ui-kit ../ui-kit
+          git clone -q --depth 1 https://github.com/silica-os/symbols ../symbols
+      - name: System libraries
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -yq --no-install-recommends libxkbcommon-dev libfontconfig-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - run: cargo xtask check-sources

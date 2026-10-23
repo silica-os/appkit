@@ -1,12 +1,13 @@
 # AppKit: status
 
 Living document: what is done, the decisions taken, and what comes next. A successor picks up
-from "Next" below. Plan: [silica-os/silica-desktop#254](https://github.com/silica-os/silica-desktop/issues/254).
+from "Next" below. Architecture: [architecture.md](architecture.md).
 
 Gate (real exit codes): `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test`.
 ABI: `cargo xtask header` (regenerates `include/appkit.h`, `abi/appkit.map`), `cargo xtask abi-check [--debug]`.
-VM: `cargo xtask vm run [example]`, `vm shot PATH`, `vm log`, `vm stop` (hold no lock yourself: the
-task takes `/dev/shm/silica-vm.lock` per command). Local e2e: Ossido headless (see "Testing").
+VM: in `silica-os/system`, `tools/dev-sysext appkit-dev` builds the library and the Kit
+Gallery from this checkout and merges them into the running dev VM (`tools/run-vm --gpu venus
+--resolution 1920x1200 --fullscreen`); `tools/test-vm --desktop --appkit` checks the gallery.
 
 ## Crates
 
@@ -15,24 +16,26 @@ task takes `/dev/shm/silica-vm.lock` per command). Local e2e: Ossido headless (s
 | `appkit` (lib `appkit`, cdylib + rlib + staticlib for packaging) | the toolkit | see below |
 | `appkit-sys` | the C ABI: types, ids, one function list (`for_each_function!`) | done (94 functions, APPKIT_1.0) |
 | `appkit-rs` | safe Rust objects over the ABI | done for the current ABI |
-| `appkit` | declarative layer | done (v1), see below |
+| `appkit-ui` | declarative layer | done (v1), see below |
 | `appkit-test` | kit-parity harness | done; families added as components land |
 | `examples/gallery` | demo app for the VM | push buttons, menus, context menu; grows with components |
 | `xtask` | sync-kit, check-sources, header, package, abi-check, vm | done |
-| `appkit-terminal`, `appkit-inspector` | planned | not started |
+| `appkit-inspector` | dumps view trees, layers and the a11y tree over the inspector socket | done |
+| `examples/bench` | frame-time budgets (exits non-zero over budget) | done |
+| `appkit-terminal` | planned | not started |
 
 ## appkit: done
 
-- **Foundations**: `geom`, `color`, `shape` (smooth corners, port of silica_ui), `style` (kit
-  layer styles: fills/gradients, inside/centre/outside/dashed borders, CSS-blur shadows, inner
-  shadows, backdrop blur), `render::glass` (SkSL refraction from Ossido's material pass),
-  `motion` (Bézier, springs from response/ζ, interruptible `Animated<T>`).
-- **Tokens** generated at build time from `data/amalfi-tokens.json` + `data/amalfi-motion.md`
-  (copies of silica-desktop `docs/design/amalfi/`; `cargo xtask check-sources` compares), Silica
-  Symbols codepoints from `data/silica-symbols-codepoints.json`. `amalfi::theme`: palette,
-  Increase Contrast, accent, materials as styles, Reduce Transparency fallback.
+- **Foundations**: `geom`, `color`, `shape` (smooth corners), `style` (kit layer styles:
+  fills/gradients, inside/centre/outside/dashed borders, CSS-blur shadows, inner shadows,
+  backdrop blur), glass refraction on the CPU (`render::backdrop`), `motion` (Bézier, springs
+  from response/ζ, interruptible `Animated<T>`).
+- **Tokens** from `silica-os/ui-kit` (`data/tokens.json`, `data/silica_motion.rs`) and the
+  Silica Symbols codepoints from `silica-os/symbols`; `cargo xtask sync-sources` copies them,
+  `cargo xtask check-sources` compares. `amalfi::theme`: palette, Increase Contrast, accent,
+  materials as styles, Reduce Transparency fallback.
 - **Text**: embedded Inter / JetBrains Mono / Silica Symbols, fontconfig fallback (off in
-  tests: `APPKIT_DETERMINISTIC`), SkParagraph layout (even leading as the kit), attributed
+  tests: `APPKIT_DETERMINISTIC`), parley layout (even leading as the kit), attributed
   strings, attachments, UTF-8 offsets; `text::edit::Editor` (selection, grapheme/word/line/
   paragraph/document movement, macOS bindings, undo groups, IME preedit, surrounding delete).
 - **Core**: generational view arena; generic modifiers (padding, frame, priority, opacity,
@@ -80,18 +83,17 @@ task takes `/dev/shm/silica-vm.lock` per command). Local e2e: Ossido headless (s
   (full-size content, appearance), silica-glass-v1 (compositor glass regions with profiles),
   silica-menu-v1 (menu bar JSON model in a sealed memfd, pop-up menus), frame pacing by frame
   callbacks.
-- **Render backends**: Vulkan (primary; ash + Skia Ganesh VK, direct driver loading as the
-  embedder, two frames in flight with per-slot semaphores and fences around Skia's submit,
-  reduced shader variations; partial repaints into a retained GPU back surface copied onto
-  each swapchain image, since Venus does not keep image contents; a pipeline warm-up draw
-  after the first frame, as skia-safe has no persistent shader cache binding), GLES/EGL (buffer-age partial repaint,
-  swap-with-damage), software (shm raster). Choice: `APPKIT_RENDERER=vulkan|gl|software`,
-  falling back in that order. Raster caches of static subtrees (`core::raster`: stable for
-  3 frames, ≥ 24 items, no backdrop/glass/custom drawing; drawn at whole device pixels;
-  96 MB cap; `APPKIT_RASTER_CACHE=0` turns it off; off in headless tests).
-- **Start-up**: bundled fonts through a custom empty font manager, fontconfig loaded on a
-  thread and added to the fallback when ready (text laid out again); `APPKIT_STARTUP_TIMING`
-  prints the start-up stages and the first frame.
+- **Renderer** (`render`): `Canvas` on vello_cpu (single-threaded) with curves flattened at
+  0.1 device px, region rendering (`begin_region`: a frame rasterizes only its damage rows),
+  whole-pixel copies of cached images, a glyph-outline cache (`render::glyphs`, skrifa) and
+  backdrops (blur, saturation, refraction) filtered in bands on threads. Presented through
+  wl_shm with `damage_buffer`. Raster caches of static subtrees (`core::raster`: stable for 3
+  frames, ≥ 24 items, no backdrop/glass/custom drawing; drawn at whole device pixels; 96 MB
+  cap; `APPKIT_RASTER_CACHE=0` turns it off; off in headless tests). The GPU backend (wgpu)
+  is not written yet.
+- **Start-up**: bundled fonts registered at once; the system fonts (fontconfig) are loaded on a
+  thread, the collection is warmed there and joins the fallback when ready (text laid out
+  again); `APPKIT_STARTUP_TIMING` prints the start-up stages and the first frame.
 - **Services** (`services`, zbus): typed proxies for every daemon interface and the portals,
   `AppearanceWatcher` (System1 look → `Appearance`, live), `SettingsWatcher` (key repeat,
   renderer key), `Observable`, `Services` facade. The platform runs them on the calloop
@@ -149,8 +151,6 @@ kit's popover for `.popover`; `toolbar` (`toolbar_button`, `toolbar_group`, `too
 - **Window content** is offered the window size and centred at the size it takes; fill with
   an infinite max width/height. Normal windows are opaque (`Surface/Window`), popups and shell
   surfaces transparent with compositor glass.
-- **Skia prebuilt binaries**: the feature set matches a published combination (`egl, gl,
-  vulkan, wayland, x11, textlayout, svg, webp, pdf, skottie`).
 - **One app loop per process** (`ak_app_run`); headless runtimes are per thread.
 - **Precise closure capture pitfall**: a `move` closure that reads only `data.user` captures
   only that field; the FFI forces whole capture (`let d = &data;`) where a guard must live.
@@ -159,12 +159,10 @@ kit's popover for `.popover`; `toolbar` (`toolbar_button`, `toolbar_group`, `too
 
 - `cargo test`: unit tests, kit parity (`crates/appkit-test/tests/*.rs`), FFI round trips,
   appkit-rs, declarative reconciler.
-- Ossido headless e2e: `examples/gallery/tests/e2e.rs` runs
-  `~/silica/silica/target/release/ossido --backend headless` in a private runtime dir, starts
-  the gallery, clicks Quit through the control socket and checks the exit (skipped when the
-  binary is missing). `examples/bench`: frame budgets (500 controls, hover, 10 MB typing).
-- VM: gallery verified with Vulkan (Venus), GL (virgl) and software; dark appearance follows
-  System1; menu bar shows the app's menus.
+- `examples/gallery/tests/e2e.rs` runs a headless compositor when its binary is found, starts
+  the gallery, clicks Quit through the control socket and checks the exit.
+  `examples/bench`: frame budgets, see below.
+- VM: the Kit Gallery runs in the Silica VM at 1920×1200 (Venus GPU, wl_shm buffers).
 
 ## Components
 
@@ -214,24 +212,22 @@ first, Escape last).
 
 ## Performance (#254 budgets)
 
-`cargo run --release -p appkit-bench` (headless, CPU raster) and the e2e test:
-- typing in a 10 MB document: 0.6 ms per key (budget 8 ms);
-- a spinner beside 500 controls at 2×: 50 ms per frame without the raster cache, 3.5 ms with
-  it (120 Hz budget: 8.3 ms); hover change 0.14 ms;
-- cold start to the first frame: 125 ms in software on a local headless Ossido (budget
-  150 ms; the e2e test reports it). On the dev VM the Vulkan (Venus) first frame takes
-  seconds (driver load and pipeline compiles: Skia's persistent pipeline cache is not
-  reachable through skia-safe) and the VM's timings jitter by whole seconds;
-- shell memory: the AppKit shell in the VM (Vulkan, Venus) was 179 MB resident. Now 75–79 MB
-  (the Flutter shell's embedder: about 73 MB): images are decoded without Skia's cache and
-  downscaled (icons 256 px, wallpapers at the output's size), Skia's resource cache is
-  capped at 8 MB, `platform::trim_memory` returns freed heap after startup, and Skia's
-  global Vulkan queries (null instance) are answered by AppKit, so the loader no longer opens
-  every installed driver (only the machine's own driver is loaded).
+`cargo run --release -p appkit-bench` (headless, CPU raster, development machine); the table is
+in the README. Cold start 89 ms (Vetro on Skia: 125 ms), hover 0.16 ms, typing 0.62 ms per key
+in a 10 MB document, 500 controls with a spinner 0.13 ms (damage only) and 4.4 ms (whole
+window from the raster cache), Dock with 20 magnifying tiles on glass at 1920×1200 3.8 ms, 975
+symbols at 2× 9.6 ms. Where the time goes: vello_cpu's `fill_path` costs about 5 µs per glyph
+(its glyph atlas has 4096² pages, too costly for a first frame, so it is not used); a flush
+costs the rows it covers; backdrops dominate glass scenes.
 
 ## Next
 
-1. Shell on AppKit (§2): silica-desktop branch `appkit` (worktree ~/build/wt-appkit-shell,
+1. GPU backend (`render::gpu`, wgpu: Vulkan, GLES fallback) with the same formulas as the CPU
+   canvas and a GPU-vs-CPU agreement test.
+2. The ui-kit families Vetro lacked (materials, callouts, notifications, Control Centre,
+   Dock, menu bar, colour and file panels) and a Kit Gallery mirroring the ui-kit Library.
+3. The shell on AppKit, migrated from the archived silica-desktop `appkit` branch
+   (summary kept for the migration): silica-desktop branch `appkit` (worktree ~/build/wt-appkit-shell,
    crate `crates/shell`, binary `silica-shell`; appkit from the sibling `../appkit`
    checkout, the workspace patches appkit's git dependency on silica-desktop's protocols to
    the local crates). `cargo xtask os deploy --toolkit=appkit` runs it as the dev session's
@@ -271,11 +267,10 @@ first, Escape last).
    swapchain at the output's size; the idle roles about 8 MB each).
    Next: the screenshot editor stays an app (#154, not in the shell); recording (#153);
    Notification Center widgets need a kit design first.
-2. Performance: a real Skia persistent shader cache needs a skia-safe binding.
-3. Collections: type-select, column reordering, drag and drop of rows, rubber-band
+4. Collections: type-select, column reordering, drag and drop of rows, rubber-band
    selection in grids.
-4. Open kit problems: app icons (bitmaps in the kit), `Open` button masters, menu bar family.
-5. `appkit-terminal` (port `crates/embedder/src/termgrid.rs` + `pty.rs`) with the apps phase.
-6. Keep AppKit free of distribution-specific assumptions (Silica OS moves to a
+5. Open kit problems: app icons (bitmaps in the kit), `Open` button masters, menu bar family.
+6. `appkit-terminal` (port `crates/embedder/src/termgrid.rs` + `pty.rs`) with the apps phase.
+7. Keep AppKit free of distribution-specific assumptions (Silica OS moves to a
    BuildStream/freedesktop-sdk image): fonts are bundled, fontconfig and the services are
    optional at run time.
