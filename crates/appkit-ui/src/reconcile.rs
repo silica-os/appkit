@@ -305,6 +305,34 @@ fn apply_effects(view: &KitView, state: &mut EffectState, want: &Effects, sched:
     }
 }
 
+/// The suppression checkbox and the accessory field of an alert, above its buttons.
+fn add_alert_accessories(alert: &KitView, spec: &crate::element::AlertSpec) {
+    if let Some((label, changed)) = &spec.suppression
+        && let Ok(c) = KitView::new(appkit_rs::Kind::CHECKBOX)
+    {
+        let _ = c.set_str(appkit_rs::Prop::TITLE, label);
+        let changed = changed.clone();
+        let _ = c.on(Signal::VALUE_CHANGED, move |_, v| {
+            if let Some(on) = v.as_bool() {
+                changed(on);
+            }
+        });
+        let _ = alert.add_accessory(&c);
+    }
+    if let Some((placeholder, changed)) = &spec.field
+        && let Ok(f) = KitView::new(appkit_rs::Kind::TEXT_FIELD)
+    {
+        let _ = f.set_str(appkit_rs::Prop::PLACEHOLDER, placeholder);
+        let changed = changed.clone();
+        let _ = f.on(Signal::TEXT_CHANGED, move |_, v| {
+            if let appkit_rs::Value::Str(t) = v {
+                changed(t.clone());
+            }
+        });
+        let _ = alert.add_accessory(&f);
+    }
+}
+
 /// Shows or dismisses an element's alert.
 fn present_alert(
     view: &KitView,
@@ -319,11 +347,16 @@ fn present_alert(
             };
             let Some(parent) = view.window() else { return };
             let buttons: Vec<&str> = spec.buttons.iter().map(String::as_str).collect();
-            let flags = if spec.destructive {
-                appkit_rs::alert_flags::DESTRUCTIVE
-            } else {
-                0
-            };
+            use appkit_rs::alert_flags as af;
+            let flags = [
+                (spec.destructive, af::DESTRUCTIVE),
+                (spec.glass, af::GLASS),
+                (spec.critical, af::CRITICAL),
+                (spec.stacked, af::STACKED),
+            ]
+            .iter()
+            .filter(|(on, _)| *on)
+            .fold(0, |f, (_, b)| f | b);
             let Ok(a) = KitView::alert(
                 &spec.title,
                 spec.message.as_deref(),
@@ -333,6 +366,7 @@ fn present_alert(
             ) else {
                 return;
             };
+            add_alert_accessories(&a, spec);
             let (response, dismissed) = (spec.response.clone(), dismissed.clone());
             if let Ok(w) = appkit_rs::Window::present_alert(Some(&parent), &a, move |r| {
                 dismissed();

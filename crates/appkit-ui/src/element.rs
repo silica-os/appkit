@@ -281,6 +281,11 @@ impl RowsLayout {
     }
 }
 
+/// A callback with a boolean.
+pub type BoolFn = Rc<dyn Fn(bool)>;
+/// A callback with a text.
+pub type StrFn = Rc<dyn Fn(String)>;
+
 /// An alert presented from a view.
 #[derive(Clone)]
 pub struct AlertSpec {
@@ -294,6 +299,16 @@ pub struct AlertSpec {
     pub destructive: bool,
     /// A symbol as the alert's icon.
     pub icon: Option<String>,
+    /// The glass panel instead of the solid one.
+    pub glass: bool,
+    /// The warning badge on the icon.
+    pub critical: bool,
+    /// The buttons stacked in a column (the first is the default).
+    pub stacked: bool,
+    /// A suppression checkbox ("Do not show this again") and what its state does.
+    pub suppression: Option<(String, BoolFn)>,
+    /// An accessory text field (placeholder) and what its text does.
+    pub field: Option<(String, StrFn)>,
     /// Gets the index of the button pressed, or -1 (Escape).
     pub response: Rc<dyn Fn(i64)>,
 }
@@ -307,6 +322,11 @@ impl AlertSpec {
             buttons: buttons.iter().map(|b| b.to_string()).collect(),
             destructive: false,
             icon: None,
+            glass: false,
+            critical: false,
+            stacked: false,
+            suppression: None,
+            field: None,
             response: Rc::new(response),
         }
     }
@@ -326,6 +346,36 @@ impl AlertSpec {
     /// A symbol as the icon.
     pub fn icon(mut self, symbol: &str) -> Self {
         self.icon = Some(symbol.to_string());
+        self
+    }
+
+    /// On the glass panel.
+    pub fn glass(mut self) -> Self {
+        self.glass = true;
+        self
+    }
+
+    /// With the warning badge on the icon.
+    pub fn critical(mut self) -> Self {
+        self.critical = true;
+        self
+    }
+
+    /// With the buttons stacked.
+    pub fn stacked(mut self) -> Self {
+        self.stacked = true;
+        self
+    }
+
+    /// With a suppression checkbox; `changed` gets its state.
+    pub fn suppression(mut self, label: &str, changed: impl Fn(bool) + 'static) -> Self {
+        self.suppression = Some((label.to_string(), Rc::new(changed)));
+        self
+    }
+
+    /// With an accessory text field; `changed` gets its text.
+    pub fn field(mut self, placeholder: &str, changed: impl Fn(String) + 'static) -> Self {
+        self.field = Some((placeholder.to_string(), Rc::new(changed)));
         self
     }
 }

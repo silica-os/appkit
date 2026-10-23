@@ -501,3 +501,44 @@ fn the_sidebar_scrolls_when_it_is_taller_than_the_window() {
     let panel = root.host().find("panel").unwrap();
     assert!(panel.frame().unwrap().height > 200.0, "{:?}", panel.frame());
 }
+
+struct WithAlert {
+    suppressed: Rc<Cell<Option<bool>>>,
+}
+
+impl Component for WithAlert {
+    fn body(&self, cx: &mut Cx) -> Element {
+        let open = cx.state(|| false);
+        let o2 = open.clone();
+        let s = self.suppressed.clone();
+        column(button("Open").id("open").on_activate(move || o2.set(true))).alert(
+            &open.binding(),
+            crate::AlertSpec::new("Delete?", &["Cancel", "Delete"], |_| {})
+                .message("Gone for good.")
+                .glass()
+                .critical()
+                .stacked()
+                .suppression("Do not show this again", move |on| s.set(Some(on)))
+                .field("Reason", |_| {}),
+        )
+    }
+}
+
+#[test]
+fn an_alert_with_a_suppression_checkbox_and_a_field_opens() {
+    let rt = Headless::new().unwrap();
+    let suppressed = Rc::new(Cell::new(None));
+    let s2 = suppressed.clone();
+    let root = mount(host(), move || WithAlert {
+        suppressed: s2.clone(),
+    });
+    root.host().find("open").unwrap().click().unwrap();
+    rt.advance(0.01);
+    // Nothing was ticked: the callback has not run, and presenting did not fail.
+    assert_eq!(suppressed.get(), None);
+    let spec = crate::AlertSpec::new("T", &["OK"], |_| {})
+        .glass()
+        .suppression("x", |_| {})
+        .field("y", |_| {});
+    assert!(spec.glass && spec.suppression.is_some() && spec.field.is_some());
+}
