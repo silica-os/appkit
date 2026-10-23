@@ -270,6 +270,15 @@ impl Core {
         match key {
             Key::Up | Key::Right => self.key(cx, |f| f + step),
             Key::Down | Key::Left => self.key(cx, |f| f - step),
+            // A tenth of the range, or a division when that is larger (ui-kit `big`).
+            Key::PageUp => {
+                let big = step.max(0.1);
+                self.key(cx, |f| f + big);
+            }
+            Key::PageDown => {
+                let big = step.max(0.1);
+                self.key(cx, |f| f - big);
+            }
             Key::Home => self.key(cx, |_| 0.0),
             Key::End => self.key(cx, |_| 1.0),
             _ => return Handled::No,
@@ -1160,6 +1169,21 @@ mod tests {
         ui.key(win, KeyEvent::press(Key::End, Mods::empty()));
         ui.key(win, KeyEvent::press(Key::Home, Mods::empty()));
         assert_eq!(*log.borrow(), vec![0.75, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn page_keys_move_a_tenth_of_the_range() {
+        let (mut ui, win, id, log) = scene(Slider::new().value(0.5));
+        ui.set_focus(id, true);
+        ui.key(win, KeyEvent::press(Key::PageUp, Mods::empty()));
+        ui.key(win, KeyEvent::press(Key::PageDown, Mods::empty()));
+        ui.key(win, KeyEvent::press(Key::PageDown, Mods::empty()));
+        let v: Vec<f64> = log
+            .borrow()
+            .iter()
+            .map(|x| (x * 100.0).round() / 100.0)
+            .collect();
+        assert_eq!(v, vec![0.6, 0.5, 0.4]);
     }
 
     #[test]
