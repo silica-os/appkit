@@ -420,3 +420,22 @@ pub fn file_panel(
         }
     })
 }
+
+/// A sidebar row with a `symbol` and a `title`; `select` runs when it is pressed.
+pub fn sidebar_row(
+    symbol: &str,
+    title: &str,
+    selected: bool,
+    select: impl Fn() + 'static,
+) -> Element {
+    Element::of(Kind::SIDEBAR_ROW)
+        .prop(Prop::SYMBOL, s(symbol))
+        .prop(Prop::TITLE, s(title))
+        .prop(Prop::STATE, PValue::Bool(selected))
+        .on(Signal::ACTIVATED, move |_| select())
+}
+
+/// A sidebar: the surface of the rows in `rows`.
+pub fn sidebar(rows: impl crate::IntoChildren) -> Element {
+    Element::of(Kind::SIDEBAR_PANEL).children(rows)
+}

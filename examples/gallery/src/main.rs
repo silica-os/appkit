@@ -1,492 +1,170 @@
-//! The gallery: AppKit's components in one window, built with the declarative layer (so it
-//! runs the whole stack: appkit-ui → appkit-rs → the C ABI → appkit), for the dev VM and
-//! screenshots.
+//! The Kit Gallery: every family of AppKit's Amalfi kit, live, in one window, mirroring the
+//! ui-kit Library (a sidebar of families; a content pane with each family's variants, sizes and
+//! states). Built with the declarative layer, so it runs the whole stack: appkit-ui →
+//! appkit-rs → the C ABI → appkit.
+//!
+//! - `appkit-gallery`: the window.
+//! - `appkit-gallery --snapshot DIR [--dark]`: renders every page headless to
+//!   `DIR/<nn>-<page>.png` at 2× and exits.
+//! - `appkit-gallery --preview PATH [PAGE] [dark]`: renders one page.
 
+mod pages;
+
+use appkit_ui::kit::{self, AppearanceOption};
 use appkit_ui::prelude::*;
-use appkit_ui::{Animation, MenuEntry, Transition};
+use pages::PAGES;
+
+const SIZE: (f32, f32) = (1100.0, 800.0);
+
+/// Accent choices of the toolbar: the name and the colour (`None`: Amalfi's).
+const ACCENTS: &[(&str, Option<u32>)] = &[
+    ("Amalfi", None),
+    ("Red", Some(0xE5484DFF)),
+    ("Orange", Some(0xF76B15FF)),
+    ("Green", Some(0x30A46CFF)),
+    ("Purple", Some(0x8E4EC6FF)),
+];
 
 /// The window's content; `start` is the page shown first.
 struct Gallery {
     start: usize,
 }
 
-/// The controls page.
-struct Controls;
-
-/// The collections page: a list box, a table, an outline and an icon grid.
-struct Collections;
-
-/// The windows page: tabs, an alert, a popover, a sheet; the window keeps its state.
-struct Windows;
-
-fn section(title: &str, content: Element) -> Element {
-    column((
-        label(title).text_style("Headline").color("Text/Secondary"),
-        content,
-    ))
-    .spacing(8.0)
-    .alignment(0)
+/// A binding to one of the appearance options, which live in the runtime.
+fn option(tick: &State<u32>, o: AppearanceOption) -> Binding<bool> {
+    let t = tick.clone();
+    Binding::new(
+        move || kit::appearance_option(o),
+        move |v| {
+            let _ = kit::set_appearance_option(o, v);
+            t.update(|n| *n += 1);
+        },
+    )
 }
 
 impl Component for Gallery {
     fn body(&self, cx: &mut Cx) -> Element {
-        let start = self.start;
+        let start = self.start.min(PAGES.len().saturating_sub(1));
         let page = cx.state(move || start);
-        let sheet = cx.state(|| false);
-        let s2 = sheet.clone();
-        let content = match page.get() {
-            0 => component(Controls),
-            1 => component(Collections),
-            _ => component(Windows),
-        };
-        let search = cx.state(String::new);
-        let bar = toolbar((
-            toolbar_title("AppKit Gallery"),
-            spacer(),
-            segmented(&["Controls", "Collections", "Windows"], &page.binding()).id("pages"),
-            spacer(),
-            toolbar_button("doc-plus")
-                .accessibility_label("Open Sheet")
-                .id("open-sheet")
-                .on_activate(move || s2.set(true)),
-            toolbar_search("Search", &search.binding()),
-        ));
-        column((
-            row((
-                button("Quit")
-                    .style(0)
-                    .id("quit")
-                    .on_activate(appkit_ui::kit::quit),
-                label("Components of the Amalfi kit on AppKit.").color("Text/Secondary"),
-            ))
-            .spacing(16.0),
-            content.fill(),
-        ))
-        .spacing(18.0)
-        .alignment(0)
-        .padding(24.0)
-        .fill()
-        .align(0)
-        .toolbar(bar)
-        .context_menu(vec![
-            MenuEntry::item("Toggle Appearance", || {
-                let _ = appkit_ui::kit::set_dark(!appkit_ui::kit::is_dark());
-            }),
-            MenuEntry::separator(),
-            MenuEntry::item("Quit", appkit_ui::kit::quit).shortcut("cmd+q"),
-        ])
-        .sheet(&sheet.binding(), (360.0, 160.0), {
-            let s3 = sheet.clone();
-            move || {
-                let s4 = s3.clone();
-                column((
-                    label("A sheet").text_style("Title 3"),
-                    label("Attached to the gallery window."),
-                    button("Done")
-                        .style(0)
-                        .default_action()
-                        .on_activate(move || s4.set(false)),
-                ))
-                .spacing(12.0)
-                .padding(20.0)
-            }
-        })
-    }
-}
-
-impl Component for Controls {
-    fn body(&self, cx: &mut Cx) -> Element {
-        let on = cx.state(|| true);
-        let level = cx.state(|| 0.4f64);
-        let count = cx.state(|| 3.0f64);
-        let name = cx.state(String::new);
-        let seg = cx.state(|| 0usize);
-        let pick = cx.state(|| 1usize);
-        let expanded = cx.state(|| false);
-        let items = cx.state(|| vec![1u32, 2, 3]);
-        let (i2, i3) = (items.clone(), items.clone());
-
-        let buttons = row((
-            button("Primary").style(0),
-            button("Secondary").style(1),
-            button("Destructive").style(2),
-            button("Borderless").style(3),
-            button("Glass").style(4),
-            help_button(),
-            icon_button("gear"),
-            link("Link"),
-        ))
-        .spacing(12.0);
-        let toggles = row((
-            checkbox("Checkbox", &on.binding()),
-            radio("Radio", on.get(), {
-                let o = on.clone();
-                move || o.set(true)
-            }),
-            switch(&on.binding()),
-        ))
-        .spacing(16.0);
-        let values = row((
-            slider(&level.binding(), 0.0, 1.0).width(200.0),
-            stepper(&count.binding(), 0.0, 10.0, 1.0),
-            label(format!("{:.0} %  ·  {}", level.get() * 100.0, count.get())),
-        ))
-        .spacing(16.0);
-        let progress_row = row((
-            progress(Some(level.get())).width(200.0),
-            progress(None).width(120.0),
-            spinner(),
-        ))
-        .spacing(16.0);
-        let choices = row((
-            segmented(&["Day", "Week", "Month"], &seg.binding()),
-            pop_up(&["Small", "Medium", "Large"], &pick.binding()),
-            pull_down("Actions", &["Rename", "Duplicate", "Move to Trash"], |_| {}),
-        ))
-        .spacing(16.0);
-        let fields = row((
-            text_field("Name", &name.binding()).width(180.0),
-            secure_field("Password", &cx.state(String::new).binding()).width(160.0),
-            search_field("Search", &cx.state(String::new).binding()).width(180.0),
-        ))
-        .spacing(12.0);
-        let list = row((
-            button("Add").on_activate(move || {
-                i2.update(|v| {
-                    let n = v.iter().max().copied().unwrap_or(0) + 1;
-                    v.push(n)
-                })
-            }),
-            button("Remove").on_activate(move || {
-                i3.update(|v| {
-                    v.pop();
-                })
-            }),
-            row(for_each(
-                items.get(),
-                |n| *n,
-                |n| {
-                    button(format!("Item {n}"))
-                        .transition(Transition::Scale)
-                        .animation(Animation::Snappy)
-                },
-            ))
-            .spacing(8.0),
-        ))
-        .spacing(12.0);
-        let disclosure = disclosure_group(
-            "More options",
-            &expanded.binding(),
-            column((
-                label("Hidden until expanded"),
-                checkbox("Another", &on.binding()),
-            ))
-            .spacing(8.0),
+        let tick = cx.state(|| 0u32);
+        let t_dark = tick.clone();
+        let dark = Binding::new(kit::is_dark, move |v| {
+            let _ = kit::set_dark(v);
+            t_dark.update(|n| *n += 1);
+        });
+        let t_acc = tick.clone();
+        let accent = Binding::new(
+            || {
+                let now = kit::accent().map(|c| {
+                    (u32::from(c.r) << 24) | (u32::from(c.g) << 16) | (u32::from(c.b) << 8) | 0xFF
+                });
+                ACCENTS.iter().position(|(_, c)| *c == now).unwrap_or(0)
+            },
+            move |i: usize| {
+                let c = ACCENTS.get(i).and_then(|(_, c)| *c).map(rgba);
+                let _ = kit::set_accent(c);
+                t_acc.update(|n| *n += 1);
+            },
         );
-
-        column((
-            section("Buttons", buttons),
-            section("Toggles", toggles),
-            section("Sliders and steppers", values),
-            section("Progress", progress_row),
-            section("Choices", choices),
-            section("Fields", fields),
-            section("Animated list", list),
-            section("Disclosure", disclosure),
-            text_view("A text view for documents of any size.\nType here.")
-                .height(80.0)
-                .fill_width(),
-        ))
-        .spacing(18.0)
-        .alignment(0)
-        .fill()
-        .align(0)
-    }
-}
-
-impl Component for Windows {
-    fn body(&self, cx: &mut Cx) -> Element {
-        let titles = cx.state(|| vec!["Welcome".to_string(), "Notes".to_string()]);
-        let selected = cx.state(|| 0usize);
-        let alert = cx.state(|| false);
-        let popover = cx.state(|| false);
-        let answer = cx.state(String::new);
-        let t = titles.get();
-        let pages: Vec<Element> = t
+        let names: Vec<&str> = ACCENTS.iter().map(|(n, _)| *n).collect();
+        let bar = toolbar((
+            toolbar_title("Kit Gallery"),
+            spacer(),
+            label("Accent").color("Text/Secondary"),
+            pop_up(&names, &accent).id("accent"),
+            checkbox("Dark", &dark).id("dark"),
+            checkbox(
+                "Reduce Motion",
+                &option(&tick, AppearanceOption::ReduceMotion),
+            )
+            .id("reduce-motion"),
+            checkbox(
+                "Increase Contrast",
+                &option(&tick, AppearanceOption::IncreaseContrast),
+            )
+            .id("increase-contrast"),
+        ));
+        let current = page.get().min(PAGES.len().saturating_sub(1));
+        let rows: Vec<Element> = PAGES
             .iter()
             .enumerate()
-            .map(|(i, title)| {
-                column((
-                    label(title.clone()).text_style("Title 3"),
-                    label(format!(
-                        "Tab {} of {}. ⌃Tab and ⌃⇧Tab move between tabs, ⌘1…⌘9 pick one.",
-                        i + 1,
-                        t.len()
-                    ))
-                    .color("Text/Secondary"),
-                ))
-                .spacing(8.0)
-                .alignment(0)
-                .padding(16.0)
-                .fill()
-                .align(0)
-                .key(title.clone())
+            .map(|(i, p)| {
+                let page = page.clone();
+                sidebar_row(p.symbol, p.name, i == current, move || page.set(i)).key(i as i64)
             })
             .collect();
-        let (t2, t3, s2, s3) = (
-            titles.clone(),
-            titles.clone(),
-            selected.clone(),
-            selected.clone(),
-        );
-        let a2 = alert.clone();
-        let p2 = popover.clone();
-        let ans = answer.clone();
-        column((
-            section(
-                "Window tabs",
-                tabs(
-                    &t.iter().map(String::as_str).collect::<Vec<_>>(),
-                    &selected.binding(),
-                    pages,
-                )
-                .on_new_tab(move || {
-                    let n = t2.get().len() + 1;
-                    t2.update(|v| v.push(format!("Tab {n}")));
-                    s2.set(n - 1);
-                })
-                .on_close_tab(move |i| {
-                    t3.update(|v| {
-                        if v.len() > 1 && i < v.len() {
-                            v.remove(i);
-                        }
-                    });
-                    let len = t3.get().len();
-                    s3.update(|s| *s = (*s).min(len.saturating_sub(1)));
-                })
-                .fill_width()
-                .height(160.0),
-            ),
-            section(
-                "Alerts and popovers",
-                row((
-                    button("Show Alert…").on_activate(move || a2.set(true)),
-                    button("Show Popover")
-                        .on_activate(move || p2.set(true))
-                        .popover(&popover.binding(), (220.0, 60.0), || {
-                            label("A popover with the kit's arrow and material.").padding(8.0)
-                        }),
-                    label(answer.get()).color("Text/Secondary"),
-                ))
-                .spacing(12.0)
-                .alert(
-                    &alert.binding(),
-                    AlertSpec::new(
-                        "Move “Notes” to the Trash?",
-                        &["Cancel", "Move to Trash"],
-                        move |r| {
-                            ans.set(match r {
-                                1 => "Moved to the Trash.".to_string(),
-                                0 => "Cancelled.".to_string(),
-                                _ => "Dismissed.".to_string(),
-                            })
-                        },
-                    )
-                    .message("You can put it back from the Trash.")
-                    .destructive()
-                    .icon("trash"),
-                ),
-            ),
-            section(
-                "State restoration",
-                label(
-                    "The window keeps its size, the table's column widths and the outline's \
-                     expanded folders between runs (autosave name “gallery”).",
-                )
-                .color("Text/Secondary"),
-            ),
-        ))
-        .spacing(18.0)
-        .alignment(0)
-        .fill()
-        .align(0)
-    }
-}
-
-/// A file of the table demo.
-#[derive(Clone)]
-struct File {
-    name: String,
-    size: u64,
-    kind: &'static str,
-}
-
-fn files() -> Vec<File> {
-    let kinds = ["Document", "Image", "Folder", "Archive", "Text"];
-    (0..2000u64)
-        .map(|i| File {
-            name: format!("File {:04}", i + 1),
-            size: (i * 7919) % 100_000,
-            kind: kinds.get((i % 5) as usize).copied().unwrap_or("Document"),
-        })
-        .collect()
-}
-
-fn cell_label(text: String, secondary: bool) -> Element {
-    let l = label(text).align(3);
-    if secondary {
-        l.text_style("Callout").color("Text/Secondary")
-    } else {
-        l
-    }
-}
-
-impl Component for Collections {
-    fn body(&self, cx: &mut Cx) -> Element {
-        let data = cx.state(files);
-        let sort = cx.state(|| None::<(usize, bool)>);
-        let picked = cx.state(|| vec![2u64]);
-        // The rows in the sorted order.
-        let mut order: Vec<usize> = (0..data.get().len()).collect();
-        if let Some((col, asc)) = sort.get() {
-            let d = data.get();
-            order.sort_by(|a, b| {
-                let (Some(x), Some(y)) = (d.get(*a), d.get(*b)) else {
-                    return std::cmp::Ordering::Equal;
-                };
-                let o = match col {
-                    0 => x.name.cmp(&y.name),
-                    1 => x.size.cmp(&y.size),
-                    _ => x.kind.cmp(y.kind),
-                };
-                if asc { o } else { o.reverse() }
-            });
-        }
-        let order = std::rc::Rc::new(order);
-        let rows = data.get().len();
-        let (d2, o2) = (data.clone(), order.clone());
-        let (d3, o3) = (data.clone(), order.clone());
-        let s2 = sort.clone();
-        let p2 = picked.clone();
-        let table_view = table(
-            vec![
-                Column::new("Name", 260.0).editable(),
-                Column::new("Size", 100.0).align(2),
-                Column::new("Kind", 120.0),
-            ],
-            rows,
-            move |r, c| {
-                let d = d2.get();
-                let Some(f) = o2.get(r).and_then(|i| d.get(*i)) else {
-                    return label("");
-                };
-                match c {
-                    0 => row((
-                        symbol(if f.kind == "Folder" { "folder" } else { "doc" })
-                            .color("Accent/Amalfi"),
-                        label(f.name.clone()),
-                    ))
-                    .spacing(4.0)
-                    .align(3),
-                    1 => cell_label(format!("{} KB", f.size), true).align(5),
-                    _ => cell_label(f.kind.to_string(), true),
-                }
-            },
-        )
-        .alternating(true)
-        .sorted(sort.get())
-        .on_sort(move |s| s2.set(s))
-        .on_edit(move |r, _, text| {
-            let i = o3.get(r as usize).copied();
-            d3.update(|d| {
-                if let Some(f) = i.and_then(|i| d.get_mut(i)) {
-                    f.name = text.clone();
-                }
-            });
-        })
-        .selection(&picked.get())
-        .on_select(move |keys| p2.set(keys))
-        .id("table")
-        .fill_width()
-        .height(220.0);
-
-        let tree = outline(
-            vec![Column::new("Folder", 200.0), Column::new("Items", 60.0)],
-            |parent| match parent {
-                None => vec![1, 2, 3],
-                Some(n) if n < 1000 => (1..=4).map(|k| n * 10 + k).collect(),
-                Some(_) => Vec::new(),
-            },
-            |n| n < 1000,
-            |n, c| {
-                if c == 0 {
-                    row((
-                        symbol(if n < 1000 { "folder" } else { "doc" }).color("Accent/Amalfi"),
-                        label(format!("Item {n}")),
-                    ))
-                    .spacing(4.0)
-                    .align(3)
-                } else {
-                    cell_label(if n < 1000 { "4".into() } else { "—".into() }, true)
-                }
-            },
-        )
-        .style(2)
-        .id("outline")
-        .width(380.0)
-        .height(220.0);
-
-        let tiles = collection(500, (104.0, 104.0), |i| {
+        let content = match PAGES.get(current) {
+            Some(p) => (p.build)().key(current as i64),
+            None => label("No pages."),
+        };
+        row((
+            scroll_view(sidebar(rows).width(240.0))
+                .width(240.0)
+                .max_height(f32::INFINITY),
             column((
-                symbol(if i % 3 == 0 { "folder" } else { "doc" })
-                    .color("Accent/Amalfi")
-                    .font_size(48.0)
-                    .frame(64.0, 64.0),
-                label(format!("Item {}", i + 1))
-                    .text_style("Callout")
-                    .text_align(1)
-                    .frame(88.0, 16.0),
+                row((
+                    label(PAGES.get(current).map_or("", |p| p.name)).text_style("Title 2"),
+                    spacer(),
+                    button("Quit").style(1).id("quit").on_activate(kit::quit),
+                ))
+                .padding_xy(24.0, 12.0),
+                scroll_view(content).fill(),
             ))
-            .spacing(10.0)
-            .align(1)
-        })
-        .id("grid")
-        .fill_width()
-        .height(220.0);
-
-        column((
-            section(
-                "A list box of 10 000 rows",
-                appkit_ui::list(10_000, 24.0, |i| {
-                    label(format!("Row {}", i + 1))
-                        .padding_xy(8.0, 0.0)
-                        .align(3)
-                })
-                .style(2)
-                .id("list")
-                .fill_width()
-                .height(120.0),
-            ),
-            section(
-                &format!(
-                    "Table of {} files: click a title to sort, Return renames ({} selected)",
-                    rows,
-                    picked.get().len()
-                ),
-                table_view,
-            ),
-            row((
-                section("Outline", tree),
-                section("Collection of 500 tiles", tiles),
-            ))
-            .spacing(24.0)
+            .spacing(0.0)
             .alignment(0)
-            .fill_width(),
+            .fill(),
         ))
-        .spacing(18.0)
+        .spacing(0.0)
         .alignment(0)
         .fill()
-        .align(0)
+        .toolbar(bar)
+    }
+}
+
+/// The file name of a page's snapshot: `<nn>-<page>.png`.
+fn snapshot_name(index: usize, name: &str) -> String {
+    let slug: String = name
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let slug = slug
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    format!("{:02}-{slug}.png", index + 1)
+}
+
+/// Renders page `index` headless to a PNG at 2×.
+fn render(index: usize, dark: bool) -> Result<Vec<u8>, String> {
+    appkit_ui::preview(SIZE, 2.0, dark, move || Gallery { start: index }).map_err(|e| e.to_string())
+}
+
+/// `--snapshot DIR [--dark]`: every page to `DIR/<nn>-<page>.png`.
+fn snapshot(args: &[String]) -> Option<i32> {
+    let i = args.iter().position(|a| a == "--snapshot")?;
+    let Some(dir) = args.get(i + 1).map(std::path::PathBuf::from) else {
+        eprintln!("appkit-gallery: --snapshot needs a directory");
+        return Some(2);
+    };
+    let dark = args.iter().any(|a| a == "--dark" || a == "dark");
+    let run = || -> Result<(), String> {
+        std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        let _rt = kit::Headless::new().map_err(|e| e.to_string())?;
+        for (n, p) in PAGES.iter().enumerate() {
+            let png = render(n, dark).map_err(|e| format!("{}: {e}", p.name))?;
+            let path = dir.join(snapshot_name(n, p.name));
+            std::fs::write(&path, png).map_err(|e| format!("{}: {e}", path.display()))?;
+        }
+        Ok(())
+    };
+    match run() {
+        Ok(()) => Some(0),
+        Err(e) => {
+            eprintln!("appkit-gallery: {e}");
+            Some(1)
+        }
     }
 }
 
@@ -496,23 +174,18 @@ fn preview(args: &[String]) -> Option<i32> {
     let path = args.get(i + 1)?.clone();
     let start = args.get(i + 2).and_then(|p| p.parse().ok()).unwrap_or(0);
     let dark = args.iter().any(|a| a == "dark");
-    let _rt = match appkit_ui::kit::Headless::new() {
+    let _rt = match kit::Headless::new() {
         Ok(rt) => rt,
         Err(e) => {
             eprintln!("appkit-gallery: {e}");
             return Some(1);
         }
     };
-    match appkit_ui::preview((900.0, 800.0), 2.0, dark, move || Gallery { start }) {
-        Ok(png) => match std::fs::write(&path, png) {
-            Ok(()) => Some(0),
-            Err(e) => {
-                eprintln!("appkit-gallery: {path}: {e}");
-                Some(1)
-            }
-        },
+    match render(start, dark).and_then(|png| std::fs::write(&path, png).map_err(|e| e.to_string()))
+    {
+        Ok(()) => Some(0),
         Err(e) => {
-            eprintln!("appkit-gallery: {e}");
+            eprintln!("appkit-gallery: {path}: {e}");
             Some(1)
         }
     }
@@ -520,33 +193,25 @@ fn preview(args: &[String]) -> Option<i32> {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    if let Some(code) = preview(&args) {
+    if let Some(code) = snapshot(&args).or_else(|| preview(&args)) {
         std::process::exit(code);
     }
-    let menus = || -> appkit_ui::kit::Result<()> {
-        let app = appkit_ui::kit::Menu::new("AppKit Gallery", Some("app"))?
-            .item("About AppKit Gallery", None, 1, 0)?
+    let menus = || -> kit::Result<()> {
+        let app = kit::Menu::new("Kit Gallery", Some("app"))?
+            .item("About Kit Gallery", None, 1, 0)?
             .separator()?
-            .item("Quit AppKit Gallery", Some("cmd+q"), 2, 0)?;
-        let view = appkit_ui::kit::Menu::new("View", None)?.item(
-            "Toggle Appearance",
-            Some("cmd+shift+d"),
-            3,
-            0,
-        )?;
-        let window = appkit_ui::kit::Menu::new("Window", Some("window"))?;
-        appkit_ui::kit::set_menu_bar(vec![app, view, window], |id| match id {
-            2 => appkit_ui::kit::quit(),
-            3 => {
-                let _ = appkit_ui::kit::set_dark(!appkit_ui::kit::is_dark());
+            .item("Quit Kit Gallery", Some("cmd+q"), 2, 0)?;
+        let window = kit::Menu::new("Window", Some("window"))?;
+        kit::set_menu_bar(vec![app, window], |id| {
+            if id == 2 {
+                kit::quit()
             }
-            _ => {}
         })
     };
-    let r = appkit_ui::kit::run("dev.silica.KitGallery", move || {
+    let r = kit::run("dev.silica.KitGallery", move || {
         let _ = menus();
-        let spec = appkit_ui::WindowSpec::new("AppKit Gallery", (900.0, 800.0))
-            .min_size(720.0, 600.0)
+        let spec = appkit_ui::WindowSpec::new("Kit Gallery", SIZE)
+            .min_size(900.0, 600.0)
             .autosave("gallery");
         if let Ok(root) = spec.open(|| Gallery { start: 0 }) {
             // The window lives as long as the process.
