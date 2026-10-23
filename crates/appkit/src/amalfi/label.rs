@@ -5,10 +5,13 @@ use crate::amalfi::foundation::Label as LabelCache;
 use crate::amalfi::theme::Theme;
 use crate::amalfi::tokens::{self, TypeStyle};
 use crate::color::Color;
-use crate::core::a11y::{A11y, Role};
+use crate::core::a11y::{A11y, Action, Role};
+use crate::core::event::{Button, Event, Handled, Key, Mods};
 use crate::core::layout::Proposal;
+use crate::core::tree::NodeFlags;
+use crate::core::ui::Cursor;
 use crate::core::value::{Prop, Value};
-use crate::core::widget::{LayoutCx, PaintCx, PropChange, Widget};
+use crate::core::widget::{EventCx, FocusKind, Interaction, LayoutCx, PaintCx, PropChange, Widget};
 use crate::geom::{Point, Rect, Size};
 use crate::text::{Align, TextStyle};
 
@@ -62,6 +65,11 @@ pub struct Label {
     pub wraps: bool,
     /// Weight override.
     pub weight: Option<u16>,
+    /// The text can be selected with the pointer and copied (⌘C / Ctrl+C).
+    pub selectable: bool,
+    /// The selection as (anchor, focus) byte offsets.
+    selection: Option<(usize, usize)>,
+    dragging: bool,
     cache: LabelCache,
 }
 
@@ -76,8 +84,24 @@ impl Label {
             max_lines: 0,
             wraps: true,
             weight: None,
+            selectable: false,
+            selection: None,
+            dragging: false,
             cache: LabelCache::default(),
         }
+    }
+
+    /// With selectable text.
+    pub fn selectable(mut self) -> Self {
+        self.selectable = true;
+        self
+    }
+
+    /// The selected text, if any.
+    pub fn selected_text(&self) -> Option<&str> {
+        let (a, b) = self.selection?;
+        let (lo, hi) = (a.min(b), a.max(b));
+        self.text.get(lo..hi).filter(|s| !s.is_empty())
     }
 
     /// With a type style.
@@ -116,8 +140,118 @@ impl Widget for Label {
         "Label"
     }
 
-    fn hit(&self, _p: Point, _size: Size) -> bool {
-        false
+    fn hit(&self, p: Point, size: Size) -> bool {
+        self.selectable && Rect::from_size(size).contains(p)
+    }
+
+    fn interaction(&self) -> Interaction {
+        if self.selectable {
+            Interaction::Hover
+        } else {
+            Interaction::None
+        }
+    }
+
+    fn focus(&self) -> FocusKind {
+        if self.selectable {
+            FocusKind::Always
+        } else {
+            FocusKind::None
+        }
+    }
+
+    fn event(&mut self, cx: &mut EventCx<'_>, event: &Event) -> Handled {
+        if !self.selectable {
+            return Handled::No;
+        }
+        let theme = cx.theme();
+        let width = cx.size().width.max(1.0);
+        let style = self.text_style(&theme);
+        let layout = self
+            .cache
+            .layout(&self.text, &style, self.align, width, self.lines());
+        let len = self.text.len();
+        match event {
+            Event::PointerDown {
+                pos,
+                button: Button::Left,
+                clicks,
+                ..
+            } => {
+                let (at, _) = layout.offset_at(*pos);
+                cx.focus_self();
+                self.selection = match clicks {
+                    0 | 1 => Some((at, at)),
+                    2 => {
+                        let w = layout.word_at(at);
+                        Some((w.start, w.end))
+                    }
+                    _ => Some((0, len)),
+                };
+                self.dragging = *clicks <= 1;
+                if self.dragging {
+                    cx.capture_pointer();
+                }
+                cx.request_paint();
+                Handled::Yes
+            }
+            Event::PointerMove {
+                pos,
+                dragging: true,
+                ..
+            } if self.dragging => {
+                let (at, _) = layout.offset_at(*pos);
+                if let Some((anchor, _)) = self.selection {
+                    self.selection = Some((anchor, at));
+                    cx.request_paint();
+                }
+                Handled::Yes
+            }
+            Event::PointerMove { .. } => {
+                cx.set_cursor(Cursor::Text);
+                Handled::No
+            }
+            Event::PointerUp {
+                button: Button::Left,
+                ..
+            } => {
+                self.dragging = false;
+                Handled::Yes
+            }
+            Event::FocusOut => {
+                cx.request_paint();
+                Handled::No
+            }
+            Event::Key(k) if k.pressed => {
+                let command = k.mods.intersects(Mods::LOGO | Mods::CTRL);
+                match &k.key {
+                    Key::Char('c') if command => {
+                        if let Some(t) = self.selected_text() {
+                            cx.set_clipboard(t.to_string());
+                        }
+                        Handled::Yes
+                    }
+                    Key::Char('a') if command => {
+                        self.selection = Some((0, len));
+                        cx.request_paint();
+                        Handled::Yes
+                    }
+                    Key::Escape if self.selection.is_some() => {
+                        self.selection = None;
+                        cx.request_paint();
+                        Handled::Yes
+                    }
+                    _ => Handled::No,
+                }
+            }
+            _ => Handled::No,
+        }
+    }
+
+    fn state_changed(&mut self, cx: &mut EventCx<'_>, old: NodeFlags, new: NodeFlags) {
+        if old.contains(NodeFlags::FOCUSED) != new.contains(NodeFlags::FOCUSED) {
+            cx.request_paint();
+        }
     }
 
     fn measure(&mut self, cx: &mut LayoutCx<'_>, p: Proposal) -> Size {
@@ -153,6 +287,18 @@ impl Widget for Label {
             self.lines(),
         );
         let color = style.color;
+        if let Some((a, b)) = self.selection.filter(|_| self.selectable) {
+            let fill =
+                crate::text::view::selection_color(theme.colors.accent_amalfi, cx.is_focused());
+            for sel in layout.selection_rects(a.min(b)..a.max(b)) {
+                cx.rec.layer(
+                    "Selection",
+                    Rect::new(r.x + sel.x, r.y + sel.y, sel.width, sel.height),
+                    crate::shape::Shape::RECT,
+                    crate::style::Style::fill(fill),
+                );
+            }
+        }
         cx.rec.text(
             "Label",
             Rect::new(r.x, r.y, r.width, layout.size().height.max(r.height)),
@@ -209,6 +355,23 @@ impl Widget for Label {
                 }
                 None => PropChange::Unknown,
             },
+            Prop::Selectable => match value.as_bool() {
+                Some(b) => {
+                    self.selectable = b;
+                    if !b {
+                        self.selection = None;
+                    }
+                    PropChange::Paint
+                }
+                None => PropChange::Unknown,
+            },
+            Prop::SelectedRange => match value {
+                Value::Range(a, b) if self.selectable => {
+                    self.selection = Some((*a.min(&self.text.len()), *b.min(&self.text.len())));
+                    PropChange::Paint
+                }
+                _ => PropChange::Unknown,
+            },
             Prop::FontWeight => match value.as_int() {
                 Some(w) => {
                     self.weight = u16::try_from(w).ok();
@@ -227,6 +390,10 @@ impl Widget for Label {
             Prop::TextColor => Some(self.color.to_value()),
             Prop::MaxLines => Some(Value::from(self.max_lines)),
             Prop::Wraps => Some(Value::Bool(self.wraps)),
+            Prop::Selectable => Some(Value::Bool(self.selectable)),
+            Prop::SelectedRange => self
+                .selection
+                .map(|(a, b)| Value::Range(a.min(b), a.max(b))),
             _ => None,
         }
     }
@@ -234,6 +401,9 @@ impl Widget for Label {
     fn accessibility(&self, a: &mut A11y) {
         a.role = Role::Label;
         a.label = Some(self.text.clone());
+        if self.selectable {
+            a.actions = vec![Action::Focus];
+        }
     }
 
     fn baseline(&self) -> Option<f32> {
@@ -360,5 +530,66 @@ mod tests {
         ui.set(l, Prop::TextStyle, Value::from("Title 1")).unwrap();
         assert_eq!(ui.measure(l, Proposal::UNSPECIFIED).height, 32.0);
         assert!(ui.set(l, Prop::TextStyle, Value::from("Nope")).is_err());
+    }
+}
+
+#[cfg(test)]
+mod selectable_tests {
+    use super::*;
+    use crate::core::event::{KeyEvent, Mods};
+    use crate::core::ui::Ui;
+    use crate::core::window::WindowKind;
+
+    fn scene(label: Label) -> (Ui, crate::core::WindowId, crate::core::ViewId) {
+        let mut ui = Ui::new_headless();
+        let win = ui.create_window(WindowKind::Normal, Size::new(300.0, 100.0));
+        let id = ui.create(label);
+        ui.set_content(win, id);
+        ui.show_window(win);
+        ui.prepare_frame(win);
+        (ui, win, id)
+    }
+
+    #[test]
+    fn a_plain_label_takes_no_pointer_but_a_selectable_one_selects_and_copies() {
+        let (ui, win, id) = scene(Label::new("Amalfi coast"));
+        let r = ui.tree.window_rect(id);
+        assert!(
+            ui.hit_test(win, r.center()).is_none(),
+            "plain labels are transparent"
+        );
+
+        let (mut ui, win, id) = scene(Label::new("Amalfi coast").selectable());
+        ui.prepare_frame(win);
+        let r = ui.tree.window_rect(id);
+        // A double click on the first word selects it.
+        let p = Point::new(r.x + 8.0, r.center().y);
+        ui.pointer_move(win, p, Mods::empty());
+        for _ in 0..2 {
+            ui.pointer_down(win, p, Button::Left, Mods::empty());
+            ui.pointer_up(win, p, Button::Left, Mods::empty());
+        }
+        assert_eq!(ui.focus(win), Some(id));
+        assert_eq!(ui.get(id, Prop::SelectedRange), Some(Value::Range(0, 6)));
+        ui.key(win, KeyEvent::press(Key::Char('c'), Mods::LOGO));
+        assert_eq!(ui.clipboard_text().as_deref(), Some("Amalfi"));
+        // Select all, then Escape clears.
+        ui.key(win, KeyEvent::press(Key::Char('a'), Mods::LOGO));
+        assert_eq!(ui.get(id, Prop::SelectedRange), Some(Value::Range(0, 12)));
+        ui.key(win, KeyEvent::press(Key::Escape, Mods::empty()));
+        assert_eq!(ui.get(id, Prop::SelectedRange), None);
+    }
+
+    #[test]
+    fn dragging_extends_the_selection() {
+        let (mut ui, win, id) = scene(Label::new("Amalfi coast").selectable());
+        ui.prepare_frame(win);
+        let r = ui.tree.window_rect(id);
+        let y = r.center().y;
+        ui.pointer_move(win, Point::new(r.x + 1.0, y), Mods::empty());
+        ui.pointer_down(win, Point::new(r.x + 1.0, y), Button::Left, Mods::empty());
+        ui.pointer_move(win, Point::new(r.x + 200.0, y), Mods::empty());
+        ui.pointer_up(win, Point::new(r.x + 200.0, y), Button::Left, Mods::empty());
+        assert!(matches!(ui.get(id, Prop::SelectedRange), Some(Value::Range(0, e)) if e > 0));
     }
 }

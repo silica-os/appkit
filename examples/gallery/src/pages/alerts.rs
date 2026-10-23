@@ -16,6 +16,11 @@ impl Component for Page {
         let message =
             cx.state(|| "Your edits will be lost if you close without saving.".to_string());
         let open = cx.state(|| false);
+        let glass = cx.state(|| false);
+        let suppress = cx.state(|| false);
+        let accessory = cx.state(|| false);
+        let ticked = cx.state(|| false);
+        let typed = cx.state(String::new);
         let chosen = cx.state(String::new);
         let shown: [(&str, &str); 3] = [
             ("Save", "Save"),
@@ -26,6 +31,7 @@ impl Component for Page {
         let labels: Vec<&str> = shown.iter().take(n).map(|b| b.0).collect();
         let critical = variant.get() == 1;
         let (o2, c2) = (open.clone(), chosen.clone());
+        let (t2, y2) = (ticked.clone(), typed.clone());
         let live = column((
             button("Show alert…")
                 .style(1)
@@ -45,16 +51,44 @@ impl Component for Page {
             })
             .message(&message.get())
             .icon("note");
-            if critical { spec.destructive() } else { spec }
+            let spec = if critical {
+                spec.destructive().critical()
+            } else {
+                spec
+            };
+            let spec = if glass.get() { spec.glass() } else { spec };
+            let spec = if suppress.get() {
+                spec.suppression("Do not show this again", move |on| t2.set(on))
+            } else {
+                spec
+            };
+            if accessory.get() {
+                spec.field("Reason", move |t| y2.set(t))
+            } else {
+                spec
+            }
         });
         let controls = column((
-            field("Variant", segmented(&["default", "critical"], &variant.binding())),
+            field(
+                "Variant",
+                segmented(&["default", "critical"], &variant.binding()),
+            ),
             field("Buttons", segmented(&["1", "2", "3"], &count.binding())),
             field("Title", text_field("Title", &title.binding()).width(220.0)),
-            field("Message", text_field("Message", &message.binding()).width(220.0)),
-            label("Suppression checkbox, accessory field and the glass variant are not in AppKit's alert: not shown.")
-                .text_style("Caption")
-                .color("Text/Tertiary"),
+            field(
+                "Message",
+                text_field("Message", &message.binding()).width(220.0),
+            ),
+            field("Material", checkbox("Glass", &glass.binding())),
+            field("Checkbox", checkbox("Suppression", &suppress.binding())),
+            field("Accessory", checkbox("Text field", &accessory.binding())),
+            label(format!(
+                "suppressed: {} · field: “{}”",
+                ticked.get(),
+                typed.get()
+            ))
+            .text_style("Caption")
+            .color("Text/Tertiary"),
         ))
         .spacing(10.0)
         .alignment(0);

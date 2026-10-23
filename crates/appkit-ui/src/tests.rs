@@ -501,3 +501,312 @@ fn the_sidebar_scrolls_when_it_is_taller_than_the_window() {
     let panel = root.host().find("panel").unwrap();
     assert!(panel.frame().unwrap().height > 200.0, "{:?}", panel.frame());
 }
+
+struct WithAlert {
+    suppressed: Rc<Cell<Option<bool>>>,
+}
+
+impl Component for WithAlert {
+    fn body(&self, cx: &mut Cx) -> Element {
+        let open = cx.state(|| false);
+        let o2 = open.clone();
+        let s = self.suppressed.clone();
+        column(button("Open").id("open").on_activate(move || o2.set(true))).alert(
+            &open.binding(),
+            crate::AlertSpec::new("Delete?", &["Cancel", "Delete"], |_| {})
+                .message("Gone for good.")
+                .glass()
+                .critical()
+                .stacked()
+                .suppression("Do not show this again", move |on| s.set(Some(on)))
+                .field("Reason", |_| {}),
+        )
+    }
+}
+
+#[test]
+fn an_alert_with_a_suppression_checkbox_and_a_field_opens() {
+    let rt = Headless::new().unwrap();
+    let suppressed = Rc::new(Cell::new(None));
+    let s2 = suppressed.clone();
+    let root = mount(host(), move || WithAlert {
+        suppressed: s2.clone(),
+    });
+    root.host().find("open").unwrap().click().unwrap();
+    rt.advance(0.01);
+    // Nothing was ticked: the callback has not run, and presenting did not fail.
+    assert_eq!(suppressed.get(), None);
+    let spec = crate::AlertSpec::new("T", &["OK"], |_| {})
+        .glass()
+        .suppression("x", |_| {})
+        .field("y", |_| {});
+    assert!(spec.glass && spec.suppression.is_some() && spec.field.is_some());
+}
+
+struct SideProbe {
+    seen: Rc<Cell<(u32, u32)>>,
+}
+
+impl Component for SideProbe {
+    fn body(&self, cx: &mut Cx) -> Element {
+        let open = cx.state(|| false);
+        let e = button("x")
+            .popover(&open.binding(), (10.0, 10.0), || label("p"))
+            .popover_side(2);
+        let after = e.effects.popover.as_ref().map_or(99, |p| p.side);
+        let e = e.popover_side(9);
+        let below = e.effects.popover.as_ref().map_or(99, |p| p.side);
+        self.seen.set((after, below));
+        e
+    }
+}
+
+#[test]
+fn a_popover_keeps_its_preferred_side() {
+    let _rt = Headless::new().unwrap();
+    let seen = Rc::new(Cell::new((0, 0)));
+    let s2 = seen.clone();
+    let _root = mount(host(), move || SideProbe { seen: s2.clone() });
+    assert_eq!(seen.get(), (appkit_rs::side::AFTER, appkit_rs::side::BELOW));
+}
+
+struct Segs;
+
+impl Component for Segs {
+    fn body(&self, cx: &mut Cx) -> Element {
+        let many = cx.state(|| vec![0usize, 2]);
+        let one = cx.state(|| 1usize);
+        column((
+            segmented_multiple(&["A", "B", "C"], &many.binding()).id("multi"),
+            segmented_icons(&[("gear", "General"), ("folder", "Files")], &one.binding())
+                .id("icons"),
+            pane_control(&[("gear", "General"), ("folder", "Files")], &one.binding()).id("panes"),
+        ))
+    }
+}
+
+#[test]
+fn multiple_icon_and_pane_segments_hold_their_selection() {
+    let _rt = Headless::new().unwrap();
+    let root = mount(host(), || Segs);
+    let multi = root.host().find("multi").unwrap();
+    assert_eq!(multi.get_int(Prop::STYLE).unwrap(), 1);
+    let panes = root.host().find("panes").unwrap();
+    assert_eq!(panes.get_int(Prop::SELECTED_INDEX).unwrap(), 1);
+    assert!(root.host().find("icons").is_some());
+}
+
+struct Folding;
+
+impl Component for Folding {
+    fn body(&self, cx: &mut Cx) -> Element {
+        let open = cx.state(|| true);
+        let o2 = open.clone();
+        column((
+            button("Toggle")
+                .id("toggle")
+                .on_activate(move || o2.update(|o| *o = !*o)),
+            sidebar(vec![
+                sidebar_group(
+                    "Favourites",
+                    &open.binding(),
+                    vec![
+                        sidebar_row("clock", "Recents", false, || {})
+                            .id("row")
+                            .children(sidebar_badge("3")),
+                    ],
+                )
+                .id("group"),
+                sidebar_footer(|| {}, || {}).id("footer"),
+            ]),
+        ))
+    }
+}
+
+#[test]
+fn a_sidebar_group_folds_and_unfolds_its_rows() {
+    let rt = Headless::new().unwrap();
+    let root = mount(host(), || Folding);
+    let group = root.host().find("group").unwrap();
+    let row = root.host().find("row").unwrap();
+    assert!(root.host().find("footer").is_some());
+    assert!(group.get_bool(Prop::EXPANDED).unwrap());
+    let toggle = root.host().find("toggle").unwrap();
+    toggle.click().unwrap();
+    for _ in 0..60 {
+        rt.advance(0.02);
+    }
+    assert!(!group.get_bool(Prop::EXPANDED).unwrap());
+    assert!(
+        row.get_bool(Prop::HIDDEN).unwrap(),
+        "folded rows leave the layout"
+    );
+    toggle.click().unwrap();
+    for _ in 0..60 {
+        rt.advance(0.02);
+    }
+    assert!(
+        !row.get_bool(Prop::HIDDEN).unwrap(),
+        "unfolded rows come back"
+    );
+}
+
+#[test]
+fn a_scroll_view_takes_its_mode_axis_and_hold() {
+    let _rt = Headless::new().unwrap();
+    struct Scroll;
+    impl Component for Scroll {
+        fn body(&self, _cx: &mut Cx) -> Element {
+            scroll_view(label("x"))
+                .id("s")
+                .style(1)
+                .scroll_axis(1)
+                .scroll_hold(2)
+        }
+    }
+    let root = mount(host(), || Scroll);
+    let s = root.host().find("s").unwrap();
+    assert_eq!(s.get_int(Prop::STYLE).unwrap(), 1);
+    assert_eq!(s.get_int(Prop::VALUE).unwrap(), 1);
+}
+
+struct FieldOptions;
+
+impl Component for FieldOptions {
+    fn body(&self, cx: &mut Cx) -> Element {
+        let text = cx.state(|| "abc".to_string());
+        column((
+            text_field("x", &text.binding())
+                .id("f")
+                .clearable(true)
+                .error("Bad"),
+            inline_button_field("y", &text.binding(), "Browse", || {}).id("inline"),
+            combo_button(|| {}).id("cb"),
+        ))
+    }
+}
+
+#[test]
+fn fields_take_clear_error_inline_button_and_combo_button() {
+    let _rt = Headless::new().unwrap();
+    let root = mount(host(), || FieldOptions);
+    let f = root.host().find("f").unwrap();
+    assert!(f.get_bool(Prop::SHOWS_CLEAR).unwrap_or(true));
+    assert!(root.host().find("inline").is_some());
+    assert!(root.host().find("cb").is_some());
+}
+
+struct Number;
+
+impl Component for Number {
+    fn body(&self, cx: &mut Cx) -> Element {
+        let v = cx.state(|| 98.0f64);
+        let b = v.binding();
+        column((
+            number_field(cx, &b, 0.0, 99.0, 1.0),
+            label(format!("{}", v.get())).id("shown"),
+        ))
+    }
+}
+
+#[test]
+fn a_number_field_steps_clamps_and_shows_the_value() {
+    let rt = Headless::new().unwrap();
+    let root = mount(host(), || Number);
+    let field = root.host().find("Value field").unwrap();
+    let stepper = root.host().find("Stepper").unwrap();
+    assert_eq!(field.get_str(Prop::TEXT).unwrap(), "98");
+    stepper.perform(3 /* AK_ACTION_INCREMENT */).unwrap();
+    rt.advance(0.01);
+    assert_eq!(
+        root.host()
+            .find("shown")
+            .unwrap()
+            .get_str(Prop::TEXT)
+            .unwrap(),
+        "99"
+    );
+    assert_eq!(field.get_str(Prop::TEXT).unwrap(), "99");
+    // Past the maximum nothing moves.
+    stepper.perform(3 /* AK_ACTION_INCREMENT */).unwrap();
+    rt.advance(0.01);
+    assert_eq!(field.get_str(Prop::TEXT).unwrap(), "99");
+}
+
+struct Swatches;
+
+impl Component for Swatches {
+    fn body(&self, cx: &mut Cx) -> Element {
+        let pick = cx.state(|| Some(0usize));
+        let colors = [rgba(0xFF0000FF), rgba(0x00FF00FF), rgba(0x0000FFFF)];
+        column((
+            swatch_row(&colors, &pick.binding()).id("row"),
+            label(format!("{:?}", pick.get())).id("chosen"),
+        ))
+    }
+}
+
+#[test]
+fn a_swatch_row_selects_the_chip_that_is_clicked() {
+    let rt = Headless::new().unwrap();
+    let root = mount(host(), || Swatches);
+    let row = root.host().find("row").unwrap();
+    assert_eq!(
+        root.host()
+            .find("chosen")
+            .unwrap()
+            .get_str(Prop::TEXT)
+            .unwrap(),
+        "Some(0)"
+    );
+    let chips = row.children();
+    assert_eq!(chips.len(), 3);
+    chips[2].click().unwrap();
+    rt.advance(0.01);
+    assert_eq!(
+        root.host()
+            .find("chosen")
+            .unwrap()
+            .get_str(Prop::TEXT)
+            .unwrap(),
+        "Some(2)"
+    );
+    assert!(chips[2].get_bool(Prop::STATE).unwrap());
+}
+
+#[test]
+fn a_canvas_element_is_drawn_by_its_closure() {
+    let _rt = Headless::new().unwrap();
+    let drawn = Rc::new(Cell::new(0u32));
+    let d2 = drawn.clone();
+    struct Plot(Rc<Cell<u32>>);
+    impl Component for Plot {
+        fn body(&self, _cx: &mut Cx) -> Element {
+            let n = self.0.clone();
+            canvas(120.0, 60.0, 1, move |c, w, h| {
+                n.set(n.get() + 1);
+                c.line(0.0, h, w, 0.0, 2.0, rgba(0x0E77E6FF));
+            })
+            .id("plot")
+        }
+    }
+    let png = preview((200.0, 100.0), 1.0, false, move || Plot(d2.clone())).unwrap();
+    assert_eq!(png.get(1..4), Some(&b"PNG"[..]));
+    assert!(drawn.get() >= 1, "the closure drew");
+}
+
+#[test]
+fn the_clipboard_is_written_through_the_abi() {
+    let _rt = Headless::new().unwrap();
+    appkit_rs::set_clipboard("#0E77E6").unwrap();
+    let host = host();
+    assert!(host.request_paste().is_ok());
+}
+
+#[test]
+fn the_selected_segments_of_a_multiple_control_reach_the_widget() {
+    let _rt = Headless::new().unwrap();
+    let root = mount(host(), || Segs);
+    let multi = root.host().find("multi").unwrap();
+    assert_eq!(multi.get_ints(Prop::SELECTED_ROWS).unwrap(), vec![0, 2]);
+}

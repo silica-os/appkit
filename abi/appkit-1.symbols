@@ -9,6 +9,8 @@ ak_advance
 ak_after
 ak_cancel
 ak_set_dark
+ak_clipboard_set_text
+ak_view_request_paste
 ak_is_dark
 ak_view_new
 ak_custom_view_new
@@ -62,6 +64,7 @@ ak_menu_free
 ak_menu_add_item
 ak_menu_add_separator
 ak_menu_add_submenu
+ak_menu_set_icon
 ak_app_set_menu_bar
 ak_view_popup_menu
 ak_canvas_save

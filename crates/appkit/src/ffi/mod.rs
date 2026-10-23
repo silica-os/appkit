@@ -434,8 +434,9 @@ impl Widget for CustomView {
         let data = self.data.clone();
         let draw: crate::core::display::CustomDraw = std::rc::Rc::new(move |canvas, rect| {
             canvas.translate((rect.x, rect.y));
-            let c = canvas as *mut crate::render::canvas::Canvas as *mut AKCanvas;
-            // SAFETY: the canvas lives for the call; the callback is the caller's.
+            let mut surface = canvas::Surface(canvas);
+            let c = &mut surface as *mut canvas::Surface<'_> as *mut AKCanvas;
+            // SAFETY: the surface lives for the call; the callback is the caller's.
             unsafe { f(c, rect.width, rect.height, data.user) };
         });
         let b = cx.bounds();
@@ -1446,6 +1447,31 @@ pub extern "C" fn ak_view_perform(view: *mut AKView, action: u32) -> AKStatus {
                     return Err(AK_ERROR_NO_SUCH_OBJECT);
                 }
                 ui.perform(v, a);
+                Ok(())
+            })?
+        }))
+    })
+}
+
+/// Writes `text` to the clipboard.
+#[unsafe(no_mangle)]
+pub extern "C" fn ak_clipboard_set_text(text: *const c_char) -> AKStatus {
+    guard(AK_ERROR_PLATFORM, || match req_str(text) {
+        Ok(t) => status(with_ui(|ui| ui.set_clipboard(t.to_string()))),
+        Err(_) => set_last(AK_ERROR_INVALID_ARGUMENT),
+    })
+}
+
+/// Asks for the clipboard's text: `view` receives it as a paste (a text field inserts it).
+#[unsafe(no_mangle)]
+pub extern "C" fn ak_view_request_paste(view: *mut AKView) -> AKStatus {
+    guard(AK_ERROR_PLATFORM, || {
+        status(view_id(view).and_then(|v| {
+            with_ui(|ui| {
+                if !ui.tree.contains(v) {
+                    return Err(AK_ERROR_NO_SUCH_OBJECT);
+                }
+                ui.request_paste(v);
                 Ok(())
             })?
         }))

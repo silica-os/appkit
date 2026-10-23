@@ -2,7 +2,7 @@
 
 use appkit_ui::prelude::*;
 
-use super::{code, h2, lead, page, playground};
+use super::{code, h2, lead, page, stage};
 
 /// The page.
 pub struct Page;
@@ -25,6 +25,33 @@ impl Component for Page {
                 sidebar_row(s, t, sel.get() == i, move || sel.set(i)).key(i as i64)
             })
             .collect();
+        let open = cx.state(|| true);
+        let ejected = cx.state(|| false);
+        let e2 = ejected.clone();
+        let mut volume = sidebar_row("folder", "Backup", false, || {})
+            .children(sidebar_eject(move || e2.set(true)));
+        if ejected.get() {
+            volume = volume.hidden(true);
+        }
+        let groups = sidebar(vec![
+            sidebar_group(
+                "Favourites",
+                &open.binding(),
+                vec![
+                    sidebar_row("clock", "Recents", false, || {}).key(0i64),
+                    sidebar_row("folder", "Documents", false, || {})
+                        .children(sidebar_badge("12"))
+                        .key(1i64),
+                ],
+            ),
+            sidebar_group(
+                "Locations",
+                &cx.state(|| true).binding(),
+                vec![volume.key(2i64)],
+            ),
+            sidebar_footer(|| {}, || {}),
+        ])
+        .frame(240.0, 240.0);
         let live = row((
             sidebar(rows).frame(240.0, 240.0),
             label(format!(
@@ -40,15 +67,7 @@ impl Component for Page {
                 "A 240 pt sidebar: rows with a coloured glyph, groups with a disclosure chevron that fold away, count badges, volumes with an eject button, a footer toolbar. v-model is the selected row; arrow keys move.",
             ),
             h2("Playground"),
-            playground(
-                live,
-                super::wrapped(
-                    "Click a row or use the arrow keys. Groups, badges, eject buttons and the footer toolbar are built from the sidebar group, header and badge views, which the declarative layer does not expose yet.",
-                    "Caption",
-                    "Text/Tertiary",
-                    268.0,
-                ),
-            ),
+            row((stage(live), groups)).spacing(16.0).alignment(0),
             code("sidebar(rows).frame(240.0, 240.0)"),
             h2("Rows"),
             super::wrapped(

@@ -115,6 +115,44 @@ pub fn segmented(items: &[&str], selected: &Binding<usize>) -> Element {
         })
 }
 
+/// A segmented control that allows several segments on: `selected` holds their indices.
+pub fn segmented_multiple(items: &[&str], selected: &Binding<Vec<usize>>) -> Element {
+    let b = selected.clone();
+    let rows: Vec<String> = selected.get().iter().map(usize::to_string).collect();
+    Element::of(Kind::SEGMENTED)
+        .prop(Prop::ITEMS, list(items))
+        .prop(Prop::STYLE, PValue::Int(1))
+        .prop(Prop::SELECTED_ROWS, PValue::Strings(rows.into()))
+        .on(Signal::VALUE_CHANGED, move |v| {
+            if let Value::List(l) = v {
+                b.set(l.iter().filter_map(|s| s.parse().ok()).collect());
+            }
+        })
+}
+
+/// A segmented control of icon segments: `items` are (symbol, accessible label).
+pub fn segmented_icons(items: &[(&str, &str)], selected: &Binding<usize>) -> Element {
+    let labels: Vec<&str> = items.iter().map(|i| i.1).collect();
+    let symbols: Vec<&str> = items.iter().map(|i| i.0).collect();
+    segmented(&labels, selected).prop(Prop::ITEM_SYMBOLS, list(&symbols))
+}
+
+/// The Icon + Label control that switches the panes of a window: `items` are (symbol, label).
+pub fn pane_control(items: &[(&str, &str)], selected: &Binding<usize>) -> Element {
+    let b = selected.clone();
+    let labels: Vec<&str> = items.iter().map(|i| i.1).collect();
+    let symbols: Vec<&str> = items.iter().map(|i| i.0).collect();
+    Element::of(Kind::PANE_CONTROL)
+        .prop(Prop::ITEMS, list(&labels))
+        .prop(Prop::ITEM_SYMBOLS, list(&symbols))
+        .prop(Prop::SELECTED_INDEX, PValue::Int(selected.get() as i64))
+        .on(Signal::VALUE_CHANGED, move |v| {
+            if let Some(i) = v.as_int().and_then(|i| usize::try_from(i).ok()) {
+                b.set(i);
+            }
+        })
+}
+
 fn field(kind: Kind, placeholder: &str, text: &Binding<String>) -> Element {
     let b = text.clone();
     Element::of(kind)
@@ -456,4 +494,172 @@ pub fn sidebar_row(
 /// A sidebar: the surface of the rows in `rows`.
 pub fn sidebar(rows: impl crate::IntoChildren) -> Element {
     Element::of(Kind::SIDEBAR_PANEL).children(rows)
+}
+
+/// A count badge at the end of a sidebar row (a child of [`sidebar_row`]).
+pub fn sidebar_badge(count: &str) -> Element {
+    Element::of(Kind::SIDEBAR_BADGE).prop(Prop::TEXT, s(count))
+}
+
+/// The eject button of a volume row (a child of [`sidebar_row`]); `eject` runs on a click.
+pub fn sidebar_eject(eject: impl Fn() + 'static) -> Element {
+    Element::of(Kind::SIDEBAR_EJECT).on(Signal::ACTIVATED, move |_| eject())
+}
+
+/// A sidebar group: a header with a disclosure chevron over `rows`, which fold away when
+/// the header is clicked. `open` holds whether the group is unfolded.
+pub fn sidebar_group(title: &str, open: &Binding<bool>, rows: impl crate::IntoChildren) -> Element {
+    let b = open.clone();
+    let header = Element::of(Kind::SIDEBAR_HEADER)
+        .prop(Prop::TITLE, s(title))
+        .prop(Prop::STYLE, PValue::Int(1))
+        .prop(Prop::EXPANDED, PValue::Bool(open.get()))
+        .on(Signal::EXPANDED_CHANGED, move |v| {
+            if let Some(o) = v.as_bool() {
+                b.set(o);
+            }
+        });
+    let mut kids = vec![header];
+    kids.extend(rows.into_children());
+    Element::of(Kind::SIDEBAR_GROUP)
+        .prop(Prop::EXPANDED, PValue::Bool(open.get()))
+        .children(kids)
+}
+
+/// The bar at the bottom of a sidebar with an add and a settings button.
+pub fn sidebar_footer(add: impl Fn() + 'static, settings: impl Fn() + 'static) -> Element {
+    let button = |symbol: &str, title: &str, f: Box<dyn Fn()>| {
+        Element::of(Kind::ICON_BUTTON)
+            .symbol(symbol)
+            .prop(Prop::TITLE, s(title))
+            .prop(Prop::STYLE, PValue::Int(1))
+            .prop(Prop::CONTROL_SIZE, PValue::Int(1))
+            .on(Signal::ACTIVATED, move |_| f())
+    };
+    Element::of(Kind::SIDEBAR_FOOTER).children(vec![
+        button("plus", "Add", Box::new(add)),
+        button("gear", "Settings", Box::new(settings)),
+    ])
+}
+
+/// A text field with a small borderless button inside its trailing edge (a path with
+/// "Browse"); `action` runs on the button.
+pub fn inline_button_field(
+    placeholder: &str,
+    text: &Binding<String>,
+    button_title: &str,
+    action: impl Fn() + 'static,
+) -> Element {
+    text_field(placeholder, text).children(
+        crate::button(button_title)
+            .style(3)
+            .control_size(1)
+            .on_activate(action),
+    )
+}
+
+/// The round chevron button of a combo box on its own (the kit's combo button).
+pub fn combo_button(action: impl Fn() + 'static) -> Element {
+    Element::of(Kind::COMBO_BUTTON).on(Signal::ACTIVATED, move |_| action())
+}
+
+fn format_number(v: f64) -> String {
+    if v.is_finite() && v.fract() == 0.0 {
+        format!("{}", v as i64)
+    } else {
+        v.to_string()
+    }
+}
+
+/// A number field: the value field with a stepper beside it (the kit's `Steppers/With Field`),
+/// 8 apart. `value` is clamped to `min..=max`; typing a number is committed on Return or when
+/// the field loses the focus (a text that is no number gives the value back), and Up and Down
+/// in the field step by `step`.
+pub fn number_field(
+    cx: &mut crate::Cx,
+    value: &Binding<f64>,
+    min: f64,
+    max: f64,
+    step: f64,
+) -> Element {
+    let (lo, hi) = (min.min(max), max.max(min));
+    let typed = cx.state(|| format_number(value.get()));
+    let seen = cx.state(|| value.get());
+    if (seen.get() - value.get()).abs() > f64::EPSILON {
+        // Changed from outside: the field shows it.
+        seen.set(value.get());
+        typed.set(format_number(value.get()));
+    }
+    let commit = {
+        let (value, typed) = (value.clone(), typed.clone());
+        move |text: &str| {
+            let n = text
+                .trim()
+                .replace(',', ".")
+                .parse::<f64>()
+                .ok()
+                .filter(|n| n.is_finite())
+                .map_or(value.get(), |n| n.clamp(lo, hi));
+            value.set(n);
+            typed.set(format_number(n));
+        }
+    };
+    let (c1, c2, t1) = (commit.clone(), commit, typed.clone());
+    let (v1, t2, v2, t3) = (value.clone(), typed.clone(), value.clone(), typed.clone());
+    let field = Element::of(Kind::VALUE_FIELD)
+        .id("Value field")
+        .prop(Prop::TEXT, s(&typed.get()))
+        .on(Signal::TEXT_CHANGED, move |v| {
+            if let Value::Str(t) = v
+                && *t != t1.get()
+            {
+                t1.set(t.clone());
+            }
+        })
+        .on(Signal::SUBMITTED, move |v| {
+            if let Value::Str(t) = v {
+                c1(t);
+            }
+        })
+        .on(Signal::EDITING_ENDED, {
+            let typed = typed.clone();
+            move |_| c2(&typed.get())
+        })
+        .on(Signal::ACTIVATED, move |v| {
+            // Up (1) and Down (-1) in the field.
+            let dir = v.as_int().unwrap_or(0).signum() as f64;
+            let n = (v1.get() + dir * step).clamp(lo, hi);
+            v1.set(n);
+            t2.set(format_number(n));
+        });
+    let stepper = stepper(value, lo, hi, step)
+        .id("Stepper")
+        .on(Signal::VALUE_CHANGED, move |v| {
+            if let Some(n) = v.as_f64() {
+                v2.set(n);
+                t3.set(format_number(n));
+            }
+        });
+    crate::row((field, stepper)).spacing(8.0).alignment(1)
+}
+
+/// A swatch chip: a round colour with the selection ring when `selected`; `pick` runs on a click.
+pub fn swatch_chip(color: appkit_rs::Color, selected: bool, pick: impl Fn() + 'static) -> Element {
+    Element::of(Kind::SWATCH_CHIP)
+        .prop(Prop::COLOR_VALUE, PValue::Color(color))
+        .prop(Prop::STATE, PValue::Bool(selected))
+        .on(Signal::ACTIVATED, move |_| pick())
+}
+
+/// A row of swatch chips (8 apart, 4 around) over `colors`; `selected` holds the chosen index.
+pub fn swatch_row(colors: &[appkit_rs::Color], selected: &Binding<Option<usize>>) -> Element {
+    let chips: Vec<Element> = colors
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let b = selected.clone();
+            swatch_chip(*c, selected.get() == Some(i), move || b.set(Some(i))).key(i as i64)
+        })
+        .collect();
+    crate::row(chips).spacing(8.0).padding(4.0)
 }

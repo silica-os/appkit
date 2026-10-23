@@ -139,26 +139,65 @@ pub struct MenuEntry {
     pub action: Option<Rc<dyn Fn()>>,
     /// A separator row.
     pub separator: bool,
+    /// A section heading row.
+    pub heading: bool,
+    /// The checkmark: `Some(true)` checked, `Some(false)` mixed.
+    pub checked: Option<bool>,
+    /// Drawn in the destructive colour.
+    pub destructive: bool,
+    /// Drawn and treated as disabled although it has an action.
+    pub disabled: bool,
+    /// A Silica Symbols name shown before the title.
+    pub icon: Option<String>,
+    /// The rows of a submenu (the entry then opens it instead of acting).
+    pub submenu: Option<Vec<MenuEntry>>,
 }
 
 impl MenuEntry {
-    /// An item.
-    pub fn item(title: &str, action: impl Fn() + 'static) -> Self {
+    fn base(title: &str) -> Self {
         MenuEntry {
             title: title.to_string(),
             shortcut: None,
-            action: Some(Rc::new(action)),
+            action: None,
             separator: false,
+            heading: false,
+            checked: None,
+            destructive: false,
+            disabled: false,
+            icon: None,
+            submenu: None,
+        }
+    }
+
+    /// An item.
+    pub fn item(title: &str, action: impl Fn() + 'static) -> Self {
+        MenuEntry {
+            action: Some(Rc::new(action)),
+            ..MenuEntry::base(title)
         }
     }
 
     /// A separator.
     pub fn separator() -> Self {
         MenuEntry {
-            title: String::new(),
-            shortcut: None,
-            action: None,
             separator: true,
+            ..MenuEntry::base("")
+        }
+    }
+
+    /// A section heading.
+    pub fn heading(title: &str) -> Self {
+        MenuEntry {
+            heading: true,
+            ..MenuEntry::base(title)
+        }
+    }
+
+    /// An item that opens a submenu of `entries`.
+    pub fn submenu(title: &str, entries: Vec<MenuEntry>) -> Self {
+        MenuEntry {
+            submenu: Some(entries),
+            ..MenuEntry::base(title)
         }
     }
 
@@ -167,11 +206,43 @@ impl MenuEntry {
         self.shortcut = Some(s.to_string());
         self
     }
+
+    /// With a checkmark (`false`: unchecked, no mark).
+    pub fn checked(mut self, checked: bool) -> Self {
+        self.checked = checked.then_some(true);
+        self
+    }
+
+    /// With the mixed-state mark.
+    pub fn mixed(mut self) -> Self {
+        self.checked = Some(false);
+        self
+    }
+
+    /// In the destructive colour.
+    pub fn destructive(mut self) -> Self {
+        self.destructive = true;
+        self
+    }
+
+    /// Disabled.
+    pub fn disabled(mut self) -> Self {
+        self.disabled = true;
+        self
+    }
+
+    /// With an icon (a Silica Symbols name).
+    pub fn icon(mut self, symbol: &str) -> Self {
+        self.icon = Some(symbol.to_string());
+        self
+    }
 }
 
 /// A window presented from a view (sheet or popover).
 #[derive(Clone)]
 pub(crate) struct Presentation {
+    /// Where a popover prefers to open (`appkit_rs::side`).
+    pub(crate) side: u32,
     pub(crate) presented: bool,
     pub(crate) size: (f32, f32),
     pub(crate) content: Rc<dyn Fn() -> Element>,
@@ -212,6 +283,11 @@ impl RowsLayout {
     }
 }
 
+/// A callback with a boolean.
+pub type BoolFn = Rc<dyn Fn(bool)>;
+/// A callback with a text.
+pub type StrFn = Rc<dyn Fn(String)>;
+
 /// An alert presented from a view.
 #[derive(Clone)]
 pub struct AlertSpec {
@@ -225,6 +301,16 @@ pub struct AlertSpec {
     pub destructive: bool,
     /// A symbol as the alert's icon.
     pub icon: Option<String>,
+    /// The glass panel instead of the solid one.
+    pub glass: bool,
+    /// The warning badge on the icon.
+    pub critical: bool,
+    /// The buttons stacked in a column (the first is the default).
+    pub stacked: bool,
+    /// A suppression checkbox ("Do not show this again") and what its state does.
+    pub suppression: Option<(String, BoolFn)>,
+    /// An accessory text field (placeholder) and what its text does.
+    pub field: Option<(String, StrFn)>,
     /// Gets the index of the button pressed, or -1 (Escape).
     pub response: Rc<dyn Fn(i64)>,
 }
@@ -238,6 +324,11 @@ impl AlertSpec {
             buttons: buttons.iter().map(|b| b.to_string()).collect(),
             destructive: false,
             icon: None,
+            glass: false,
+            critical: false,
+            stacked: false,
+            suppression: None,
+            field: None,
             response: Rc::new(response),
         }
     }
@@ -257,6 +348,36 @@ impl AlertSpec {
     /// A symbol as the icon.
     pub fn icon(mut self, symbol: &str) -> Self {
         self.icon = Some(symbol.to_string());
+        self
+    }
+
+    /// On the glass panel.
+    pub fn glass(mut self) -> Self {
+        self.glass = true;
+        self
+    }
+
+    /// With the warning badge on the icon.
+    pub fn critical(mut self) -> Self {
+        self.critical = true;
+        self
+    }
+
+    /// With the buttons stacked.
+    pub fn stacked(mut self) -> Self {
+        self.stacked = true;
+        self
+    }
+
+    /// With a suppression checkbox; `changed` gets its state.
+    pub fn suppression(mut self, label: &str, changed: impl Fn(bool) + 'static) -> Self {
+        self.suppression = Some((label.to_string(), Rc::new(changed)));
+        self
+    }
+
+    /// With an accessory text field; `changed` gets its text.
+    pub fn field(mut self, placeholder: &str, changed: impl Fn(String) + 'static) -> Self {
+        self.field = Some((placeholder.to_string(), Rc::new(changed)));
         self
     }
 }
@@ -604,6 +725,32 @@ impl Element {
         self.prop(Prop::STYLE, PValue::Int(s))
     }
 
+    /// A label's text can be selected with the pointer and copied.
+    pub fn selectable(self, on: bool) -> Self {
+        self.prop(Prop::SELECTABLE, PValue::Bool(on))
+    }
+
+    /// A text field's clear button, shown while there is text.
+    pub fn clearable(self, on: bool) -> Self {
+        self.prop(Prop::SHOWS_CLEAR, PValue::Bool(on))
+    }
+
+    /// A text field's error look (the terracotta border and the warning glyph) with `message`
+    /// for assistive technologies; an empty message clears it.
+    pub fn error(self, message: &str) -> Self {
+        self.prop(Prop::SUBTITLE, PValue::Str(Rc::from(message)))
+    }
+
+    /// The axes of a scroll view that have a bar: 0 both, 1 vertical only, 2 horizontal only.
+    pub fn scroll_axis(self, axis: i64) -> Self {
+        self.prop(Prop::VALUE, PValue::Int(axis))
+    }
+
+    /// Keeps a scroll view's bars in a state: 0 follows the pointer, 1 thin, 2 expanded.
+    pub fn scroll_hold(self, hold: i64) -> Self {
+        self.prop(Prop::STATE, PValue::Int(hold))
+    }
+
     /// Control size: 0 mini, 1 small, 2 regular, 3 large.
     pub fn control_size(self, s: i64) -> Self {
         self.prop(Prop::CONTROL_SIZE, PValue::Int(s))
@@ -670,6 +817,7 @@ impl Element {
     ) -> Self {
         let b = presented.clone();
         self.effects.sheet = Some(Presentation {
+            side: appkit_rs::side::BELOW,
             presented: presented.get(),
             size,
             content: Rc::new(content),
@@ -688,11 +836,27 @@ impl Element {
     ) -> Self {
         let b = presented.clone();
         self.effects.popover = Some(Presentation {
+            side: appkit_rs::side::BELOW,
             presented: presented.get(),
             size,
             content: Rc::new(content),
             dismissed: Some(Rc::new(move || b.set(false))),
         });
+        self
+    }
+
+    /// Where the popover of [`Element::popover`] prefers to open: 0 below (the default), 1 above,
+    /// 2 after, 3 before. It flips to the other side when it does not fit.
+    pub fn popover_side(mut self, side: u32) -> Self {
+        let side = match side {
+            1 => appkit_rs::side::ABOVE,
+            2 => appkit_rs::side::AFTER,
+            3 => appkit_rs::side::BEFORE,
+            _ => appkit_rs::side::BELOW,
+        };
+        if let Some(p) = &mut self.effects.popover {
+            p.side = side;
+        }
         self
     }
 
@@ -1060,3 +1224,36 @@ pub(crate) fn same_what(a: &What, b: &What) -> bool {
 
 #[allow(dead_code)]
 fn _assert_any(_: &dyn Any) {}
+
+/// A drawing closure of [`canvas`].
+type DrawFn = Rc<dyn Fn(&appkit_rs::Canvas, f32, f32)>;
+
+/// A view drawn by a closure: `draw(canvas, width, height)` over the ABI's canvas
+/// (rectangles, rounded rectangles, ellipses, lines, text and symbols). The view has the given
+/// size. It is drawn once per `version`: pass a new one (a hash of the data drawn) when what
+/// the closure draws has changed.
+pub fn canvas(
+    width: f32,
+    height: f32,
+    version: u64,
+    draw: impl Fn(&appkit_rs::Canvas, f32, f32) + 'static,
+) -> Element {
+    struct Drawn {
+        draw: DrawFn,
+        size: (f32, f32),
+    }
+    impl appkit_rs::Custom for Drawn {
+        fn draw(&mut self, canvas: &appkit_rs::Canvas, width: f32, height: f32) {
+            (self.draw)(canvas, width, height);
+        }
+        fn measure(&mut self, _proposed: (Option<f32>, Option<f32>)) -> (f32, f32) {
+            self.size
+        }
+    }
+    let draw: DrawFn = Rc::new(draw);
+    custom(move || Drawn {
+        draw: draw.clone(),
+        size: (width, height),
+    })
+    .key(version as i64)
+}

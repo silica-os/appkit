@@ -38,12 +38,7 @@ impl Component for Page {
             )
             .spacing(12.0),
             h2("Number field"),
-            row((
-                text_field("0", &text.binding()).width(80.0),
-                stepper(&b, 0.0, 99.0, 1.0),
-            ))
-            .spacing(4.0)
-            .alignment(1),
+            number_field(cx, &b, 0.0, 99.0, 1.0),
             label("Type a number, press ↑ ↓ or use the stepper.").color("Text/Tertiary"),
         ])
     }

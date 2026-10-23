@@ -24,17 +24,34 @@ impl Component for Page {
                 .alignment(0)
                 .padding(14.0)
             });
+        let mut sides = Vec::new();
+        for (i, name) in ["Below", "Above", "After", "Before"]
+            .into_iter()
+            .enumerate()
+        {
+            let st = cx.state(|| false);
+            let s2 = st.clone();
+            sides.push(
+                button(name)
+                    .style(1)
+                    .key(i as i64)
+                    .on_activate(move || s2.set(true))
+                    .popover(&st.binding(), (220.0, 56.0), move || {
+                        label(format!(
+                            "Opens {} the trigger when it fits.",
+                            name.to_lowercase()
+                        ))
+                        .padding(14.0)
+                    })
+                    .popover_side(i as u32),
+            );
+        }
         page(vec![
             lead("A popover anchors any content (or a menu) to a trigger."),
             h2("Popovers"),
             stage(trigger),
             h3("Arrow on every edge"),
-            super::wrapped(
-                "The popover opens on the side of its trigger where it fits and its arrow points at the trigger; near a window edge it flips to the other side.",
-                "Callout",
-                "Text/Secondary",
-                680.0,
-            ),
+            row(sides).spacing(16.0),
         ])
     }
 }

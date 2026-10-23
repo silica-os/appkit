@@ -10,6 +10,8 @@ pub struct Page;
 impl Component for Page {
     fn body(&self, cx: &mut Cx) -> Element {
         let disabled = cx.state(|| false);
+        let mode = cx.state(|| 0usize);
+        let axis = cx.state(|| 0usize);
         let lines = |n: usize| {
             column(
                 (1..=n)
@@ -26,17 +28,13 @@ impl Component for Page {
             .padding(12.0)
         };
         let area = scroll_view(lines(14))
+            .style(mode.get() as i64)
+            .scroll_axis(axis.get() as i64)
             .frame(264.0, 180.0)
             .disabled(disabled.get());
         let controls = column((
-            field(
-                "Mode",
-                label("overlay (legacy follows the system setting)").color("Text/Secondary"),
-            ),
-            field(
-                "Axis",
-                label("both (a wide line scrolls sideways)").color("Text/Secondary"),
-            ),
+            field("Mode", segmented(&["overlay", "legacy"], &mode.binding())),
+            field("Axis", segmented(&["both", "y", "x"], &axis.binding())),
             checkbox("disabled", &disabled.binding()),
         ))
         .spacing(10.0)
@@ -49,19 +47,16 @@ impl Component for Page {
             playground(area, controls).spacing(16.0).alignment(0),
             code("scroll_view(content).frame(264.0, 180.0)"),
             h2("Overlay"),
-            super::wrapped(
-                "The bars above are the overlay ones: they appear while you scroll or point at them.",
-                "Callout",
-                "Text/Secondary",
-                680.0,
-            ),
+            row((
+                scroll_view(lines(14)).scroll_hold(1).frame(264.0, 140.0),
+                scroll_view(lines(14)).scroll_hold(2).frame(264.0, 140.0),
+            ))
+            .spacing(16.0),
+            label("Thin, then expanded: the states an overlay bar goes through.")
+                .text_style("Caption")
+                .color("Text/Tertiary"),
             h2("Legacy"),
-            super::wrapped(
-                "Legacy bars (an always visible 16 pt track) are chosen by the system setting, not per view.",
-                "Callout",
-                "Text/Tertiary",
-                680.0,
-            ),
+            scroll_view(lines(14)).style(1).frame(264.0, 140.0),
         ])
     }
 }

@@ -152,6 +152,8 @@ pub struct TextField {
     pub placeholder: String,
     /// The error message (the field shows the error look).
     pub error: Option<String>,
+    /// A clear button shows while there is text (always so in a search field).
+    pub clearable: bool,
     /// The tokens (search and token fields).
     pub tokens: Vec<String>,
     /// The options of a combo box.
@@ -195,6 +197,7 @@ impl TextField {
             size: ControlSize::Regular,
             placeholder: String::new(),
             error: None,
+            clearable: false,
             tokens: Vec::new(),
             options: Vec::new(),
             value_field: false,
@@ -273,6 +276,12 @@ impl TextField {
     /// With a size.
     pub fn with_size(mut self, size: ControlSize) -> TextField {
         self.size = size;
+        self
+    }
+
+    /// With a clear button.
+    pub fn clearable(mut self) -> TextField {
+        self.clearable = true;
         self
     }
 
@@ -396,7 +405,7 @@ impl TextField {
             row.error = Some(Rect::new(end - glyph, (h - glyph) / 2.0, glyph, glyph));
             end -= glyph + metrics::GAP;
         }
-        if self.kind == FieldKind::Search && !self.editor.text().is_empty() {
+        if (self.kind == FieldKind::Search || self.clearable) && !self.editor.text().is_empty() {
             let side = metrics::CLEAR_BUTTON;
             row.clear = Some(Rect::new(end - side, (h - side) / 2.0, side, side));
             end -= side + metrics::GAP;
@@ -1511,6 +1520,10 @@ impl Widget for TextField {
                 self.options = l.to_vec();
                 PropChange::Paint
             }),
+            Prop::ShowsClear => value.as_bool().map_or(PropChange::Unknown, |b| {
+                self.clearable = b;
+                PropChange::Layout
+            }),
             Prop::Subtitle => {
                 self.error = value.as_str().filter(|s| !s.is_empty()).map(str::to_string);
                 PropChange::Layout
@@ -1709,6 +1722,19 @@ impl Widget for ComboButton {
         Interaction::Button
     }
 
+    fn set_prop(&mut self, prop: Prop, value: &Value) -> PropChange {
+        match prop {
+            Prop::ControlSize => match value.as_int().and_then(ControlSize::from_int) {
+                Some(s) => {
+                    self.size = s;
+                    PropChange::Layout
+                }
+                None => PropChange::Unknown,
+            },
+            _ => PropChange::Unknown,
+        }
+    }
+
     fn accessibility(&self, a: &mut A11y) {
         a.role = Role::Button;
         a.label = Some("Show options".to_string());
@@ -1755,6 +1781,24 @@ mod tests {
 
     fn key(ui: &mut Ui, win: WindowId, k: Key, mods: Mods) {
         ui.key(win, KeyEvent::press(k, mods));
+    }
+
+    #[test]
+    fn a_clearable_text_field_shows_its_clear_button_only_with_text() {
+        let has_clear = |ui: &mut Ui, id| {
+            ui.inspect_layers(id)
+                .iter()
+                .any(|l| l.path.starts_with("Clear button"))
+        };
+        let (mut ui, win, id, _log) = scene(TextField::text().clearable().with_text("abc"));
+        ui.prepare_frame(win);
+        assert!(has_clear(&mut ui, id));
+        let (mut ui, win, id, _log) = scene(TextField::text().clearable());
+        ui.prepare_frame(win);
+        assert!(!has_clear(&mut ui, id));
+        let (mut ui, win, id, _log) = scene(TextField::text().with_text("abc"));
+        ui.prepare_frame(win);
+        assert!(!has_clear(&mut ui, id), "a plain text field has none");
     }
 
     #[test]

@@ -6,18 +6,23 @@ use appkit_sys::*;
 
 use super::{color_of, guard, opt_str, req_str, set_last};
 use crate::geom::Rect;
-use crate::render::canvas::{Brush, Canvas, StrokeStyle};
+use crate::render::Painter;
+use crate::render::canvas::{Brush, StrokeStyle};
 use crate::render::path::PathBuilder;
 use crate::text::fonts::UI_FAMILY;
 use crate::text::{TextLayout, TextStyle};
 
-fn canvas<'a>(c: *mut AKCanvas) -> Option<&'a mut Canvas> {
+/// What an `AKCanvas *` points at: the painter of the draw callback, on any backend.
+pub(super) struct Surface<'a>(pub &'a mut dyn Painter);
+
+fn canvas<'a>(c: *mut AKCanvas) -> Option<&'a mut dyn Painter> {
     if c.is_null() {
         None
     } else {
-        // SAFETY: the pointer is the `&mut Canvas` handed to the draw callback, valid and
-        // not otherwise borrowed during it.
-        Some(unsafe { &mut *(c as *mut Canvas) })
+        // SAFETY: the pointer is the `Surface` made for the draw callback, valid and not
+        // otherwise borrowed during it.
+        let surface = unsafe { &mut *(c as *mut Surface<'a>) };
+        Some(&mut *surface.0)
     }
 }
 

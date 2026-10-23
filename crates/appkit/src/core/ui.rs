@@ -949,6 +949,11 @@ impl Ui {
         }
     }
 
+    /// The text last written to the clipboard through [`Ui::set_clipboard`].
+    pub fn clipboard_text(&self) -> Option<String> {
+        self.clipboard.clone()
+    }
+
     /// Delivers clipboard text read by the platform.
     pub fn deliver_paste(&mut self, view: ViewId, text: String) {
         self.send(view, &Event::Paste(text));

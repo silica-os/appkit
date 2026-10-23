@@ -322,7 +322,8 @@ ids! { KINDS,
     AK_KIND_TABLE = 52, AK_KIND_OUTLINE = 53, AK_KIND_GRID_VIEW = 54,
     AK_KIND_TAB_VIEW = 55, AK_KIND_STATUS_ITEM = 56, AK_KIND_TOOLBAR = 57,
     AK_KIND_TOOLBAR_GROUP = 58, AK_KIND_FORM_VALUE = 59, AK_KIND_FORM_FOOTER = 60,
-    AK_KIND_BOX_SURFACE = 61, AK_KIND_GLASS_PANEL = 62, AK_KIND_CALLOUT = 63, AK_KIND_TOUCH_PROBE = 64,
+    AK_KIND_BOX_SURFACE = 61, AK_KIND_GLASS_PANEL = 62, AK_KIND_CALLOUT = 63, AK_KIND_TOUCH_PROBE = 64, AK_KIND_PANE_CONTROL = 65, AK_KIND_SIDEBAR_BADGE = 66, AK_KIND_SIDEBAR_EJECT = 67,
+    AK_KIND_SIDEBAR_FOOTER = 68, AK_KIND_COMBO_BUTTON = 69, AK_KIND_VALUE_FIELD = 70, AK_KIND_SWATCH_CHIP = 71,
 }
 
 // Alert flags and popover sides.
@@ -385,6 +386,8 @@ macro_rules! for_each_function {
             fn ak_after(seconds: f64, callback: $crate::AKCallback, user: *mut ::std::ffi::c_void, destroy: $crate::AKDestroy) -> u64;
             fn ak_cancel(timer: u64);
             fn ak_set_dark(dark: u8) -> $crate::AKStatus;
+            fn ak_clipboard_set_text(text: *const ::std::ffi::c_char) -> $crate::AKStatus;
+            fn ak_view_request_paste(view: *mut $crate::AKView) -> $crate::AKStatus;
             fn ak_is_dark() -> u8;
             // Views.
             fn ak_view_new(kind: u32) -> *mut $crate::AKView;
@@ -440,6 +443,7 @@ macro_rules! for_each_function {
             fn ak_menu_free(menu: *mut $crate::AKMenu);
             fn ak_menu_add_item(menu: *mut $crate::AKMenu, title: *const ::std::ffi::c_char, shortcut: *const ::std::ffi::c_char, id: u32, flags: u32) -> $crate::AKStatus;
             fn ak_menu_add_separator(menu: *mut $crate::AKMenu) -> $crate::AKStatus;
+            fn ak_menu_set_icon(menu: *mut $crate::AKMenu, symbol: *const ::std::ffi::c_char) -> $crate::AKStatus;
             fn ak_menu_add_submenu(menu: *mut $crate::AKMenu, submenu: *mut $crate::AKMenu) -> $crate::AKStatus;
             fn ak_app_set_menu_bar(menus: *const *mut $crate::AKMenu, count: usize, callback: $crate::AKMenuFn, user: *mut ::std::ffi::c_void, destroy: $crate::AKDestroy) -> $crate::AKStatus;
             fn ak_view_popup_menu(view: *mut $crate::AKView, menu: *mut $crate::AKMenu, anchor: $crate::AKRect, kind: u32, selected: u32, callback: $crate::AKMenuFn, user: *mut ::std::ffi::c_void, destroy: $crate::AKDestroy) -> $crate::AKStatus;

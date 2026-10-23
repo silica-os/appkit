@@ -1047,12 +1047,38 @@ impl Widget for ScrollView {
                 }
                 _ => PropChange::Unknown,
             },
+            // The axes with a bar: 0 both, 1 vertical only, 2 horizontal only.
+            Prop::Value => match value.as_int() {
+                Some(a @ 0..=2) => {
+                    self.vertical = a != 2;
+                    self.horizontal = a != 1;
+                    PropChange::Layout
+                }
+                _ => PropChange::Unknown,
+            },
+            // Keeps the bars in a state: 0 follows the pointer, 1 thin, 2 expanded.
+            Prop::State => match value.as_int() {
+                Some(h @ 0..=2) => {
+                    self.hold = match h {
+                        1 => Hold::Thin,
+                        2 => Hold::Expanded,
+                        _ => Hold::None,
+                    };
+                    PropChange::Paint
+                }
+                _ => PropChange::Unknown,
+            },
             _ => PropChange::Unknown,
         }
     }
 
     fn prop(&self, prop: Prop) -> Option<Value> {
         match prop {
+            Prop::Value => Some(Value::Int(match (self.vertical, self.horizontal) {
+                (true, false) => 1,
+                (false, true) => 2,
+                _ => 0,
+            })),
             Prop::ScrollOffset => Some(Value::Point(self.offset)),
             Prop::ContentSize => Some(Value::Size(self.content)),
             Prop::Style => Some(Value::Int(match self.style {

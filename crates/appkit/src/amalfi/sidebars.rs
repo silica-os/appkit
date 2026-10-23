@@ -622,8 +622,17 @@ impl Widget for Header {
             }),
             Prop::Expanded => value.as_bool().map_or(PropChange::Unknown, |b| {
                 self.open = b;
+                self.turn.jump(if b { 1.0 } else { 0.0 });
                 PropChange::Paint
             }),
+            // Through the ABI: 1 makes the header collapsible.
+            Prop::Style => match value.as_int() {
+                Some(n) => {
+                    self.collapsible = n == 1;
+                    PropChange::Paint
+                }
+                None => PropChange::Unknown,
+            },
             _ => PropChange::Unknown,
         }
     }
@@ -739,6 +748,15 @@ impl Widget for Group {
         let running = self.fold.tick(dt);
         let (id, open) = (cx.id(), self.open);
         cx.request_layout();
+        if open {
+            // Opened again: the rows come back into the layout.
+            let rows: Vec<ViewId> = cx.ui().tree.children(id).iter().skip(1).copied().collect();
+            for r in rows {
+                if matches!(cx.ui().get(r, Prop::Hidden), Some(Value::Bool(true))) {
+                    let _ = cx.ui().set(r, Prop::Hidden, Value::Bool(false));
+                }
+            }
+        }
         if !running && !open {
             // Folded away: the rows leave the layout, the key loop and the hit tests.
             let rows: Vec<ViewId> = cx.ui().tree.children(id).iter().skip(1).copied().collect();

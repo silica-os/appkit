@@ -326,6 +326,13 @@ typedef void (*AKAlertFn)(int64_t response, void *user);
 #define AK_KIND_GLASS_PANEL 62u
 #define AK_KIND_CALLOUT 63u
 #define AK_KIND_TOUCH_PROBE 64u
+#define AK_KIND_PANE_CONTROL 65u
+#define AK_KIND_SIDEBAR_BADGE 66u
+#define AK_KIND_SIDEBAR_EJECT 67u
+#define AK_KIND_SIDEBAR_FOOTER 68u
+#define AK_KIND_COMBO_BUTTON 69u
+#define AK_KIND_VALUE_FIELD 70u
+#define AK_KIND_SWATCH_CHIP 71u
 
 /* Window kinds. */
 #define AK_WINDOW_NORMAL 1u
@@ -388,6 +395,10 @@ void ak_advance(double seconds);
 uint64_t ak_after(double seconds, AKCallback callback, void *user, AKDestroy destroy);
 void ak_cancel(uint64_t timer);
 AKStatus ak_set_dark(uint8_t dark);
+/* Writes text to the clipboard. */
+AKStatus ak_clipboard_set_text(const char *text);
+/* Asks for the clipboard text: the view receives it as a paste. */
+AKStatus ak_view_request_paste(AKView *view);
 uint8_t ak_is_dark(void);
 AKView *ak_view_new(uint32_t kind);
 AKView *ak_custom_view_new(AKDrawFn draw, AKMeasureFn measure, AKEventFn event, void *user, AKDestroy destroy);
@@ -440,6 +451,8 @@ AKMenu *ak_menu_new(const char *title, const char *role);
 void ak_menu_free(AKMenu *menu);
 AKStatus ak_menu_add_item(AKMenu *menu, const char *title, const char *shortcut, uint32_t id, uint32_t flags);
 AKStatus ak_menu_add_separator(AKMenu *menu);
+/* Gives the last item added a Silica Symbols name (or an absolute icon path). */
+AKStatus ak_menu_set_icon(AKMenu *menu, const char *symbol);
 AKStatus ak_menu_add_submenu(AKMenu *menu, AKMenu *submenu);
 AKStatus ak_app_set_menu_bar(AKMenu *const *menus, size_t count, AKMenuFn callback, void *user, AKDestroy destroy);
 AKStatus ak_view_popup_menu(AKView *view, AKMenu *menu, AKRect anchor, uint32_t kind, uint32_t selected, AKMenuFn callback, void *user, AKDestroy destroy);

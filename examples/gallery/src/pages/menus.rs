@@ -11,6 +11,7 @@ impl Component for Page {
     fn body(&self, cx: &mut Cx) -> Element {
         let last = cx.state(String::new);
         let (a, b, c, d) = (last.clone(), last.clone(), last.clone(), last.clone());
+        let (m1, m2, m3, m4) = (last.clone(), last.clone(), last.clone(), last.clone());
         let file = pull_down(
             "File",
             &[
@@ -66,12 +67,32 @@ impl Component for Page {
             ),
             code("pull_down(\"File\", &[\"New Window\", …], |i| …)"),
             h2("Menu items"),
-            super::wrapped(
-                "Items with a checkmark, a submenu, a header, an icon, the destructive and the disabled look are drawn by the native menu: AppKit's declarative MenuEntry has shortcut and separator only, so they are not shown here.",
-                "Callout",
-                "Text/Tertiary",
-                680.0,
+            lead(
+                "Secondary-click the panel: a heading, a checked and a mixed item, an icon, a submenu, the destructive and the disabled look.",
             ),
+            label("Secondary-click here for the menu items.")
+                .padding(24.0)
+                .background(rgba(0x80808022))
+                .corner_radius(12.0)
+                .context_menu(vec![
+                    MenuEntry::heading("Document"),
+                    MenuEntry::item("Autosave", move || m1.set("Autosave".into())).checked(true),
+                    MenuEntry::item("Show Ruler", move || m2.set("Show Ruler".into())).mixed(),
+                    MenuEntry::item("Duplicate", move || m3.set("Duplicate".into()))
+                        .icon("copy")
+                        .shortcut("cmd+d"),
+                    MenuEntry::submenu(
+                        "Open Recent",
+                        vec![
+                            MenuEntry::item("notes.txt", || {}),
+                            MenuEntry::item("recipes.md", || {}),
+                        ],
+                    ),
+                    MenuEntry::separator(),
+                    MenuEntry::item("Export…", || {}).disabled(),
+                    MenuEntry::item("Move to Trash", move || m4.set("Move to Trash".into()))
+                        .destructive(),
+                ]),
             h2("Menus"),
             super::wrapped(
                 "The menus above are the real ones: glass, 12 pt corners, the highlighted row follows ↑ ↓.",
