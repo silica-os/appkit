@@ -115,6 +115,8 @@ pub struct Switch {
     drag_from: f32,
     thumb_from: f32,
     suppress_activate: bool,
+    /// The lens held up by `Prop::Dragging`.
+    forced_lens: bool,
 }
 
 impl Switch {
@@ -135,6 +137,7 @@ impl Switch {
             drag_from: 0.0,
             thumb_from: 0.0,
             suppress_activate: false,
+            forced_lens: false,
         }
     }
 
@@ -293,7 +296,7 @@ impl Widget for Switch {
 
         // Thumb.
         let x = m.clamp_x(self.thumb.get());
-        if !self.dragging {
+        if !self.dragging && !self.forced_lens {
             let stretch = SwitchMetrics::PRESSED_STRETCH * press;
             let left = if self.on { x - stretch } else { x };
             cx.rec.layer(
@@ -488,6 +491,14 @@ impl Widget for Switch {
                 }
                 None => PropChange::Unknown,
             },
+            Prop::Dragging => match value.as_bool() {
+                Some(d) => {
+                    self.forced_lens = d;
+                    self.lens.jump(if d { 1.0 } else { 0.0 });
+                    PropChange::Paint
+                }
+                None => PropChange::Unknown,
+            },
             Prop::Title => match value {
                 Value::Str(s) => {
                     self.label = Some(s.clone()).filter(|s| !s.is_empty());
@@ -514,6 +525,7 @@ impl Widget for Switch {
     fn prop(&self, prop: Prop) -> Option<Value> {
         match prop {
             Prop::State | Prop::Value => Some(Value::Bool(self.on)),
+            Prop::Dragging => Some(Value::Bool(self.forced_lens)),
             Prop::Title => Some(self.label.clone().map(Value::Str).unwrap_or_default()),
             Prop::ControlSize => Some(Value::Int(self.size.to_int())),
             _ => None,
@@ -564,6 +576,22 @@ mod tests {
 
     fn on(ui: &Ui, id: crate::core::ViewId) -> bool {
         ui.widget::<Switch>(id).is_some_and(|s| s.on)
+    }
+
+    #[test]
+    fn dragging_holds_the_lens_without_a_pointer() {
+        let (mut ui, win, id, log) = scene(Switch::new().on(true));
+        let _ = ui.set(id, Prop::Dragging, Value::Bool(true));
+        ui.prepare_frame(win);
+        assert_eq!(ui.get(id, Prop::Dragging), Some(Value::Bool(true)));
+        let layers = ui.inspect_layers(id);
+        assert!(layers.iter().any(|l| l.name == "Lens"), "{layers:?}");
+        assert!(!layers.iter().any(|l| l.name == "Thumb"));
+        let _ = ui.set(id, Prop::Dragging, Value::Bool(false));
+        ui.prepare_frame(win);
+        let layers = ui.inspect_layers(id);
+        assert!(layers.iter().any(|l| l.name == "Thumb"));
+        assert!(log.borrow().is_empty());
     }
 
     #[test]

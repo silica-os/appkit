@@ -38,6 +38,8 @@ impl Component for Page {
             captioned("On", switch(&s1.binding())),
             captioned("Off", switch(&s2.binding())),
             captioned("Disabled", switch(&s1.binding()).disabled(true)),
+            captioned("Pressed", switch(&s1.binding()).pressed(true)),
+            captioned("Dragging: the lens", switch(&s2.binding()).dragging(true)),
         ))
         .spacing(24.0)
         .alignment(1);
