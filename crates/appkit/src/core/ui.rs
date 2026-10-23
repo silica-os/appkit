@@ -2451,8 +2451,24 @@ impl Ui {
             {
                 items += cn.raster.items;
                 cacheable &= cn.raster.cacheable && cn.anim.is_none();
-                let at = cn.frame.origin() + cn.modifiers.offset;
-                bounds = bounds.union(cn.raster.bounds.translate(at));
+                let (aoff, ascale) = cn
+                    .anim
+                    .as_ref()
+                    .map_or((Point::ZERO, 1.0), |a| (a.offset.get(), a.scale.get()));
+                let at = cn.frame.origin() + cn.modifiers.offset + aoff;
+                // A scaled child reaches past its frame (around a pivot that may be anywhere
+                // in it): its bounds grow by the scale on every side.
+                let s = cn.modifiers.scale * ascale;
+                let mut b = cn.raster.bounds;
+                if s > 1.0 + 1e-6 && !b.is_empty() {
+                    let grow = (s - 1.0)
+                        * cn.frame
+                            .width
+                            .max(cn.frame.height)
+                            .max(b.width.max(b.height));
+                    b = b.inflate(grow, grow);
+                }
+                bounds = bounds.union(b.translate(at));
             }
         }
         let frame = self.frame_counter;
@@ -2557,7 +2573,8 @@ impl Ui {
             let bounds = clip.unwrap_or(Rect::from_size(w.size));
             canvas.fill_rect(bounds, theme.colors.surface_window);
         }
-        self.paint_view(root, canvas, opts, false);
+        let cull = clip.or_else(|| self.window(window).map(|w| Rect::from_size(w.size)));
+        self.paint_view(root, canvas, opts, false, cull);
         let veil = self.veil_of(window);
         if veil > 0.0
             && let Some(w) = self.window(window)
@@ -2591,6 +2608,7 @@ impl Ui {
         canvas: &mut dyn crate::render::Painter,
         opts: PaintOptions,
         dimmed: bool,
+        cull: Option<Rect>,
     ) {
         let Some(n) = self.tree.get(id) else { return };
         if n.flags.contains(NodeFlags::HIDDEN) || n.modifiers.opacity <= 0.0 {
@@ -2601,13 +2619,25 @@ impl Ui {
             Some(a) => (a.offset.get(), a.opacity.get(), a.scale.get()),
             None => (Point::ZERO, 1.0, 1.0),
         };
-        let pivot = n.anim.as_ref().and_then(|a| a.origin);
-        canvas.save();
-        canvas.translate((
+        let at = Point::new(
             n.frame.x + m.offset.x + aoff.x,
             n.frame.y + m.offset.y + aoff.y,
-        ));
+        );
         let scale = m.scale * ascale;
+        // A subtree wholly outside what is repainted is not drawn at all; under a scale of its
+        // own it is drawn whole.
+        let cull = match cull {
+            Some(c) if (scale - 1.0).abs() <= 1e-6 => {
+                if !n.raster.bounds.translate(at).intersects(c) {
+                    return;
+                }
+                Some(c.translate(Point::new(-at.x, -at.y)))
+            }
+            _ => None,
+        };
+        let pivot = n.anim.as_ref().and_then(|a| a.origin);
+        canvas.save();
+        canvas.translate((at.x, at.y));
         if (scale - 1.0).abs() > 1e-6 {
             let c = pivot.map_or((n.frame.width / 2.0, n.frame.height / 2.0), |p| (p.x, p.y));
             canvas.translate(c);
@@ -2634,7 +2664,7 @@ impl Ui {
             canvas.restore();
             return;
         }
-        self.paint_content(id, canvas, opts, dimmed || dim_here, size);
+        self.paint_content(id, canvas, opts, dimmed || dim_here, size, cull);
         if layered {
             canvas.restore();
         }
@@ -2650,6 +2680,7 @@ impl Ui {
         opts: PaintOptions,
         dimmed: bool,
         size: Size,
+        cull: Option<Rect>,
     ) {
         let Some(n) = self.tree.get(id) else { return };
         let m = &n.modifiers;
@@ -2683,7 +2714,7 @@ impl Ui {
             }
         }
         for c in &n.children {
-            self.paint_view(*c, canvas, opts, dimmed);
+            self.paint_view(*c, canvas, opts, dimmed, cull);
         }
         if clips {
             canvas.restore();
@@ -2728,7 +2759,7 @@ impl Ui {
             });
             let size = n.frame.size();
             return canvas.layer_texture(key, version, st.bounds, scale, &mut |p| {
-                self.paint_content(id, p, opts, dimmed, size)
+                self.paint_content(id, p, opts, dimmed, size, None)
             });
         }
         {
@@ -2752,7 +2783,7 @@ impl Ui {
         }
         let size = n.frame.size();
         let Some(image) = raster::draw_image(st.bounds, scale, |c| {
-            self.paint_content(id, c, opts, dimmed, size)
+            self.paint_content(id, c, opts, dimmed, size, None)
         }) else {
             return false;
         };

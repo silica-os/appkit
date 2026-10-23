@@ -69,13 +69,35 @@ struct PaintU {
     fwd_b: [f32; 4],
     h0: [f32; 4],
     h1: [f32; 4],
+    /// An atlas clip: the cell (device pixels x0, y0, x1, y1).
+    k0: [f32; 4],
+    /// An atlas clip: inverted, sampled from the atlas.
+    k1: [f32; 4],
     stops_t: [[f32; 4]; 2],
     stops_c: [[f32; 4]; 8],
 }
 
+/// A vertex of a batched draw: a quad that is a solid colour, or an atlas coverage (R8)
+/// tinted by it. Quads with the same clip and texture go out in one draw.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct BatchV {
+    pos: [f32; 2],
+    /// Atlas coordinates (0–1); negative for a solid colour.
+    uv: [f32; 2],
+    /// Premultiplied.
+    color: [f32; 4],
+}
+
+const BATCH_ATTRS: [wgpu::VertexAttribute; 3] =
+    wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4];
+const PATH_ATTRS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![0 => Float32x2];
+
 /// Which pipeline a draw uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Mode {
+    /// Batched quads ([`BatchV`]).
+    Batch,
     /// Writes the winding of a path into the stencil (non-zero).
     StencilNonZero,
     /// Writes the parity of a path into the stencil.
@@ -121,6 +143,8 @@ pub struct GpuContext {
     pipelines: RefCell<HashMap<Key, wgpu::RenderPipeline>>,
     images: RefCell<HashMap<u64, wgpu::TextureView>>,
     atlas: RefCell<atlas::Atlas>,
+    /// Path coverages (kept apart from the glyphs: shapes that change size churn it).
+    paths: RefCell<atlas::Atlas>,
     layers: RefCell<layers::LayerCache>,
 }
 
@@ -268,6 +292,7 @@ impl GpuContext {
         );
         let white = white_tex.create_view(&wgpu::TextureViewDescriptor::default());
         let atlas = RefCell::new(atlas::Atlas::new(&device));
+        let paths = RefCell::new(atlas::Atlas::new(&device));
         let ctx = Rc::new(GpuContext {
             instance,
             adapter_handle: adapter,
@@ -283,6 +308,7 @@ impl GpuContext {
             pipelines: RefCell::new(HashMap::new()),
             images: RefCell::new(HashMap::new()),
             atlas,
+            paths,
             layers: RefCell::new(layers::LayerCache::default()),
         });
         Some((ctx, surface))
@@ -374,6 +400,7 @@ impl GpuContext {
             _ => wgpu::StencilState::default(),
         };
         let (vs, fs) = match key.mode {
+            Mode::Batch => ("vs_batch", "fs_batch"),
             Mode::Filter { blur: true } => ("vs", "fs_blur"),
             Mode::Filter { blur: false } => ("vs", "fs_copy"),
             Mode::StencilNonZero | Mode::StencilEvenOdd => ("vs_stencil", "fs_stencil"),
@@ -388,10 +415,18 @@ impl GpuContext {
                     module: &self.shader,
                     entry_point: Some(vs),
                     compilation_options: Default::default(),
-                    buffers: &[Some(wgpu::VertexBufferLayout {
-                        array_stride: 8,
-                        step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &wgpu::vertex_attr_array![0 => Float32x2],
+                    buffers: &[Some(if key.mode == Mode::Batch {
+                        wgpu::VertexBufferLayout {
+                            array_stride: std::mem::size_of::<BatchV>() as u64,
+                            step_mode: wgpu::VertexStepMode::Vertex,
+                            attributes: &BATCH_ATTRS,
+                        }
+                    } else {
+                        wgpu::VertexBufferLayout {
+                            array_stride: 8,
+                            step_mode: wgpu::VertexStepMode::Vertex,
+                            attributes: &PATH_ATTRS,
+                        }
                     })],
                 },
                 primitive: wgpu::PrimitiveState {
@@ -553,6 +588,36 @@ struct MaskEntry {
     path: Path,
     invert: bool,
     target: Option<Target>,
+    /// The clip is a path atlas cell, sampled in place: no mask is rendered. Only the first
+    /// clip of the stack (the cell holds the path alone, not the clips below).
+    cell: Option<CellMask>,
+}
+
+#[derive(Clone)]
+struct CellMask {
+    view: wgpu::TextureView,
+    /// The cell in device pixels: x0, y0, x1, y1.
+    cell: [f32; 4],
+    /// A device pixel minus this, over the atlas side, is its texel.
+    origin: [f32; 2],
+}
+
+impl MaskEntry {
+    /// The same clip, its mask not rendered yet.
+    fn fresh(&self) -> MaskEntry {
+        MaskEntry {
+            path: self.path.clone(),
+            invert: self.invert,
+            target: None,
+            cell: self.cell.clone(),
+        }
+    }
+}
+
+/// The texture of the top clip and the uniforms that sample it (`h0`, `k0`, `k1`).
+struct MaskBind {
+    view: Option<wgpu::TextureView>,
+    u: [[f32; 4]; 3],
 }
 
 /// One recorded draw of the open pass.
@@ -561,8 +626,14 @@ struct Cmd {
     uniform: u32,
     vertex: u64,
     count: u32,
+    /// Bytes per vertex.
+    stride: u32,
+    /// A batch of quads that later quads with the same state join.
+    batch: bool,
     image: Option<wgpu::TextureView>,
     mask: Option<wgpu::TextureView>,
+    /// `h0`, `k0` and `k1` of the clip.
+    mask_u: [[f32; 4]; 3],
     scissor: [u32; 4],
 }
 
@@ -618,6 +689,8 @@ pub struct GpuCanvas {
     /// The main target has been cleared since it was made.
     started: bool,
     damage: Option<Rect>,
+    /// Device pixels of path coverage this frame may still rasterize.
+    path_budget: u64,
 }
 
 impl std::fmt::Debug for GpuCanvas {
@@ -700,6 +773,7 @@ impl GpuCanvas {
             scratch: None,
             started: false,
             damage: None,
+            path_budget: atlas::PATH_BUDGET,
         }
     }
 
@@ -717,6 +791,7 @@ impl GpuCanvas {
     /// clips to a region repaints only that region. `clear` makes the whole frame transparent.
     pub fn begin(&mut self, clear: bool) {
         self.ctx.layers.borrow_mut().tick();
+        self.path_budget = atlas::PATH_BUDGET;
         self.restore_to(0);
         self.end_pass();
         if clear {
@@ -869,7 +944,7 @@ impl GpuCanvas {
                         pass.set_bind_group(0, bind, &[c.uniform]);
                         pass.set_vertex_buffer(
                             0,
-                            vb.slice(c.vertex..c.vertex + u64::from(c.count) * 8),
+                            vb.slice(c.vertex..c.vertex + u64::from(c.count) * u64::from(c.stride)),
                         );
                         pass.set_scissor_rect(
                             c.scissor[0],
@@ -1071,24 +1146,15 @@ impl GpuCanvas {
             blend,
             format,
         });
-        let mask = self
-            .masks
-            .last()
-            .and_then(|m| m.target.as_ref())
-            .map(|t| t.view.clone());
+        let bind = self.mask_bind();
         let t = self.target_of(self.current());
         let region = t.region;
         let mut paint = *paint;
         paint.inv_b[2] = region[2] as f32;
         paint.inv_b[3] = region[3] as f32;
         paint.h1 = [region[0] as f32, region[1] as f32, 0.0, 0.0];
-        if let Some(m) = self.masks.last().and_then(|m| m.target.as_ref()) {
-            paint.h0 = [
-                m.region[0] as f32,
-                m.region[1] as f32,
-                m.region[2] as f32,
-                m.region[3] as f32,
-            ];
+        if bind.view.is_some() {
+            [paint.h0, paint.k0, paint.k1] = bind.u;
         }
         let sc = [
             sc[0].saturating_sub(region[0]),
@@ -1106,12 +1172,147 @@ impl GpuCanvas {
             uniform: uniform as u32,
             vertex,
             count: verts.len() as u32,
+            stride: 8,
+            batch: false,
             image: image.cloned(),
-            mask,
+            mask: bind.view,
+            mask_u: bind.u,
             scissor: sc,
         });
         let _ = &ctx.nearest;
     }
+
+    /// Draws quads (six vertices each, device pixels) through the batch pipeline: they join
+    /// the last draw when it is a batch with the same clip and texture (a solid quad goes
+    /// with any texture), so a run of glyphs and shapes costs one draw.
+    fn draw_batch(&mut self, verts: &[BatchV], image: Option<&wgpu::TextureView>) {
+        if verts.is_empty() {
+            return;
+        }
+        let Some(sc) = self.scissor_rect() else {
+            return;
+        };
+        if self.scratch.is_none() && !self.masks.is_empty() {
+            let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+            for v in verts {
+                x0 = x0.min(v.pos[0]);
+                y0 = y0.min(v.pos[1]);
+                x1 = x1.max(v.pos[0]);
+                y1 = y1.max(v.pos[1]);
+            }
+            let want = Rect::new(x0, y0, x1 - x0, y1 - y0).intersect(self.scissor_as_rect());
+            if want.is_empty() {
+                return;
+            }
+            self.ensure_masks(want);
+        }
+        self.ensure_pass();
+        let t = self.target_of(self.current());
+        let region = t.region;
+        let format = t.format;
+        let sc = [
+            sc[0].saturating_sub(region[0]),
+            sc[1].saturating_sub(region[1]),
+            sc[2],
+            sc[3],
+        ];
+        let MaskBind {
+            view: mask,
+            u: mask_u,
+        } = self.mask_bind();
+        let vertex = self.vertices.len() as u64;
+        let bytes: &[u8] = bytemuck::cast_slice(verts);
+        if let Some(last) = self.pending.last_mut()
+            && last.batch
+            && last.scissor == sc
+            && last.mask == mask
+            && last.mask_u == mask_u
+            && last.vertex + u64::from(last.count) * u64::from(last.stride) == vertex
+            && (image.is_none() || last.image.is_none() || last.image.as_ref() == image)
+        {
+            if last.image.is_none() {
+                last.image = image.cloned();
+            }
+            last.count += verts.len() as u32;
+            self.vertices.extend_from_slice(bytes);
+            return;
+        }
+        let pipeline = self.ctx.pipeline(Key {
+            mode: Mode::Batch,
+            blend: Blend::Over,
+            format,
+        });
+        let (w, h) = self.target_size();
+        let mut paint = identity_paint(w, h);
+        paint.inv_b[2] = region[2] as f32;
+        paint.inv_b[3] = region[3] as f32;
+        paint.h1 = [region[0] as f32, region[1] as f32, 0.0, 0.0];
+        paint.g1[2] = if self.masks.is_empty() { 0.0 } else { 1.0 };
+        [paint.h0, paint.k0, paint.k1] = mask_u;
+        let uniform = self.uniforms.len();
+        self.uniforms.extend_from_slice(bytemuck::bytes_of(&paint));
+        self.uniforms.resize(uniform + UNIFORM_STRIDE, 0);
+        self.vertices.extend_from_slice(bytes);
+        self.pending.push(Cmd {
+            pipeline,
+            uniform: uniform as u32,
+            vertex,
+            count: verts.len() as u32,
+            stride: std::mem::size_of::<BatchV>() as u32,
+            batch: true,
+            image: image.cloned(),
+            mask,
+            mask_u,
+            scissor: sc,
+        });
+    }
+
+    fn mask_bind(&self) -> MaskBind {
+        let none = MaskBind {
+            view: None,
+            u: [[0.0; 4]; 3],
+        };
+        let Some(m) = self.masks.last() else {
+            return none;
+        };
+        if let Some(c) = &m.cell {
+            let side = atlas::SIDE as f32;
+            return MaskBind {
+                view: Some(c.view.clone()),
+                u: [
+                    [c.origin[0], c.origin[1], side, side],
+                    c.cell,
+                    [if m.invert { 1.0 } else { 0.0 }, 1.0, 0.0, 0.0],
+                ],
+            };
+        }
+        match &m.target {
+            Some(t) => MaskBind {
+                view: Some(t.view.clone()),
+                u: [t.region.map(|v| v as f32), [0.0; 4], [0.0; 4]],
+            },
+            None => none,
+        }
+    }
+}
+
+/// The six vertices of a batched quad.
+fn batch_quad(r: Rect, uv: [f32; 4], color: [f32; 4]) -> [BatchV; 6] {
+    let (x0, y0, x1, y1) = (r.x, r.y, r.right(), r.bottom());
+    let v = |x: f32, y: f32, u: f32, w: f32| BatchV {
+        pos: [x, y],
+        uv: [u, w],
+        color,
+    };
+    let [u0, v0, u1, v1] = uv;
+    [
+        v(x0, y0, u0, v0),
+        v(x1, y0, u1, v0),
+        v(x0, y1, u0, v1),
+        v(x1, y0, u1, v0),
+        v(x1, y1, u1, v1),
+        v(x0, y1, u0, v1),
+    ]
 }
 
 fn quad(r: Rect) -> [[f32; 2]; 6] {
@@ -1477,7 +1678,44 @@ impl GpuCanvas {
             path: outline.clone(),
             invert,
             target: None,
+            cell: None,
         });
+    }
+
+    /// Pushes a clip by `path` (or its complement) as a path atlas cell, sampled in place;
+    /// `false` when it must be a rendered mask (not the first clip, or the atlas does not
+    /// suit it).
+    fn push_cell_mask(&mut self, path: &Path, invert: bool) -> bool {
+        if !self.masks.is_empty() || self.scratch.is_some() || path.is_empty() {
+            return false;
+        }
+        match self.path_cell(&path.bez, path.even_odd, None, 0.0) {
+            atlas::Cell::No => false,
+            atlas::Cell::Empty => {
+                if !invert {
+                    // Nothing inside the clip rectangle is kept.
+                    let [x0, y0, ..] = self.scissor;
+                    self.scissor = [x0, y0, x0, y0];
+                }
+                true
+            }
+            atlas::Cell::Hit(r, slot, view) => {
+                self.masks.push(MaskEntry {
+                    path: Path {
+                        bez: BezPath::new(),
+                        even_odd: false,
+                    },
+                    invert,
+                    target: None,
+                    cell: Some(CellMask {
+                        view,
+                        cell: [r.x, r.y, r.right(), r.bottom()],
+                        origin: [r.x - slot.x as f32, r.y - slot.y as f32],
+                    }),
+                });
+                true
+            }
+        }
     }
 
     /// Makes every mask of the stack cover `want` (device pixels).
@@ -1500,11 +1738,9 @@ impl GpuCanvas {
         };
         let mut redo = false;
         for i in 0..self.masks.len() {
-            let ok = self
-                .masks
-                .get(i)
-                .and_then(|m| m.target.as_ref())
-                .is_some_and(|t| covers(&t.region));
+            let ok = self.masks.get(i).is_some_and(|m| {
+                m.cell.is_some() || m.target.as_ref().is_some_and(|t| covers(&t.region))
+            });
             if ok && !redo {
                 continue;
             }
@@ -1523,7 +1759,11 @@ impl GpuCanvas {
             std::mem::take(&mut self.vertices),
         );
         let mut tail = self.masks.split_off(i);
-        let Some(mut entry) = (!tail.is_empty()).then(|| tail.remove(0)) else {
+        let Some(mut entry) = tail
+            .first()
+            .is_some_and(|m| m.cell.is_none())
+            .then(|| tail.remove(0))
+        else {
             self.masks.extend(tail);
             (self.pass_on, self.pending, self.uniforms, self.vertices) = held;
             return;
@@ -1785,11 +2025,15 @@ impl Painter for GpuCanvas {
     }
 
     fn clip_path(&mut self, path: &Path) {
-        self.push_mask(&path.transformed(self.transform_t()), false);
+        if !self.push_cell_mask(path, false) {
+            self.push_mask(&path.transformed(self.transform_t()), false);
+        }
     }
 
     fn clip_out_path(&mut self, path: &Path) {
-        self.push_mask(&path.transformed(self.transform_t()), true);
+        if !self.push_cell_mask(path, true) {
+            self.push_mask(&path.transformed(self.transform_t()), true);
+        }
     }
 
     fn push_opacity(&mut self, opacity: f32) {
@@ -1836,35 +2080,25 @@ impl Painter for GpuCanvas {
             .collect();
         let base = stack.first().map_or(0, |l| l.2).min(self.masks.len());
         // The clips opened inside the groups: closing the groups drops them.
-        let inner: Vec<(Path, bool)> = self
-            .masks
-            .iter()
-            .skip(base)
-            .map(|m| (m.path.clone(), m.invert))
-            .collect();
+        let inner: Vec<MaskEntry> = self.masks.iter().skip(base).map(MaskEntry::fresh).collect();
         let scissor = self.scissor;
         while !self.layers.is_empty() {
             self.close_layer();
         }
-        for (path, invert) in &inner {
-            self.push_mask(path, *invert);
-        }
+        self.masks.extend(inner.iter().map(MaskEntry::fresh));
         self.scissor = scissor;
         self.backdrop_flat(outline, bd, opacity);
         self.truncate_masks(base);
         for (kind, sc, count) in stack {
             let want = count.saturating_sub(base).min(inner.len());
             self.truncate_masks(base);
-            for (path, invert) in inner.iter().take(want) {
-                self.push_mask(path, *invert);
-            }
+            self.masks
+                .extend(inner.iter().take(want).map(MaskEntry::fresh));
             self.scissor = sc;
             self.push_layer(kind);
         }
         self.truncate_masks(base);
-        for (path, invert) in &inner {
-            self.push_mask(path, *invert);
-        }
+        self.masks.extend(inner.iter().map(MaskEntry::fresh));
         self.scissor = scissor;
     }
 
@@ -1876,9 +2110,12 @@ impl Painter for GpuCanvas {
             self.fill_path(path, &Brush::Solid(color), 1.0);
             return;
         }
-        let dev = path.transformed(self.transform_t());
         let k = self.transform.determinant().abs().sqrt() as f32;
         let s = sigma * k;
+        if self.fill_blurred_atlas(path, s, color) {
+            return;
+        }
+        let dev = path.transformed(self.transform_t());
         let reach = s * 3.0 + 2.0;
         let b = dev
             .bounds()
@@ -1954,6 +2191,11 @@ impl Painter for GpuCanvas {
         if path.is_empty() {
             return;
         }
+        if let Brush::Solid(c) = brush
+            && self.fill_path_atlas(&path.bez, path.even_odd, None, *c, opacity)
+        {
+            return;
+        }
         let p = self.uniform_for(brush, opacity);
         self.cover_fill(&path.bez, path.even_odd, &p, None, Blend::Over);
     }
@@ -1982,7 +2224,17 @@ impl Painter for GpuCanvas {
             y1 = y1.max(c[1]);
         }
         self.mark(Rect::new(x0, y0, x1 - x0, y1 - y0));
-        self.draw(&quad_of(corners), Mode::Simple, Blend::Over, &p, None);
+        if self.scratch.is_some() {
+            self.draw(&quad_of(corners), Mode::Simple, Blend::Over, &p, None);
+            return;
+        }
+        let v = |c: [f32; 2]| BatchV {
+            pos: c,
+            uv: [-1.0, -1.0],
+            color: p.color,
+        };
+        let [a, b, c, d] = corners;
+        self.draw_batch(&[v(a), v(b), v(d), v(b), v(c), v(d)], None);
     }
 
     fn fill_blurred_rounded_rect(
@@ -2035,6 +2287,11 @@ impl Painter for GpuCanvas {
 
     fn stroke_path(&mut self, path: &Path, brush: &Brush, opacity: f32, style: &StrokeStyle) {
         if path.is_empty() || style.width.is_nan() || style.width <= 0.0 {
+            return;
+        }
+        if let Brush::Solid(c) = brush
+            && self.fill_path_atlas(&path.bez, false, Some(style), *c, opacity)
+        {
             return;
         }
         let mut s = kurbo::Stroke::new(f64::from(style.width));

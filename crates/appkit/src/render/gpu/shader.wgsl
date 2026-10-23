@@ -19,6 +19,8 @@ struct Paint {
     fwd_b: vec4<f32>,   // e f
     h0: vec4<f32>,      // clip mask: origin.xy, size.zw (device pixels)
     h1: vec4<f32>,      // the target's origin (device pixels)
+    k0: vec4<f32>,      // atlas clip: the cell x0, y0, x1, y1 (device pixels)
+    k1: vec4<f32>,      // atlas clip: inverted, from the atlas
     stops_t: array<vec4<f32>, 2>,
     stops_c: array<vec4<f32>, 8>,
 }
@@ -237,10 +239,19 @@ fn fs(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
         out = P.color * c;
     }
     if (P.g1.z > 0.5) {
-        let m = textureSampleLevel(t_mask, smp, (d - P.h0.xy) / P.h0.zw, 0.0).x;
-        out = out * m;
+        out = out * mask_at(d);
     }
     return out;
+}
+
+// The clip at device pixel `d`: a rendered mask, or a path atlas cell (nothing outside it).
+fn mask_at(d: vec2<f32>) -> f32 {
+    var m = textureSampleLevel(t_mask, smp, (d - P.h0.xy) / P.h0.zw, 0.0).x;
+    if (P.k1.y > 0.5) {
+        if (any(d < P.k0.xy) || any(d >= P.k0.zw)) { m = 0.0; }
+        if (P.k1.x > 0.5) { m = 1.0 - m; }
+    }
+    return m;
 }
 
 @fragment
@@ -270,4 +281,33 @@ fn fs_copy(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     // Bilinear reduction/copy of the texture into a target of g0.xy texels.
     let uv = frag.xy / P.g0.xy;
     return textureSampleLevel(t_img, smp, uv, 0.0);
+}
+
+// --- Batched quads: a solid colour, or an atlas coverage (R8) tinted by it ------------------
+
+struct BOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) color: vec4<f32>,
+}
+
+@vertex
+fn vs_batch(@location(0) p: vec2<f32>, @location(1) uv: vec2<f32>, @location(2) c: vec4<f32>) -> BOut {
+    var o: BOut;
+    o.pos = vec4<f32>((p.x - P.h1.x) / P.inv_b.z * 2.0 - 1.0, 1.0 - (p.y - P.h1.y) / P.inv_b.w * 2.0, 0.0, 1.0);
+    o.uv = uv;
+    o.color = c;
+    return o;
+}
+
+@fragment
+fn fs_batch(i: BOut) -> @location(0) vec4<f32> {
+    var out = i.color;
+    if (i.uv.x >= 0.0) {
+        out = out * textureSampleLevel(t_img, smp, i.uv, 0.0).x;
+    }
+    if (P.g1.z > 0.5) {
+        out = out * mask_at(i.pos.xy + P.h1.xy);
+    }
+    return out;
 }

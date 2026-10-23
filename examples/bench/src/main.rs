@@ -189,7 +189,7 @@ fn main() {
     if per_key > Duration::from_millis(8) {
         failures.push("typing over 8 ms");
     }
-    gpu_scene();
+    gpu_scene(snapshot.as_deref());
     dock(&mut failures, snapshot.as_deref());
     symbols_grid(&mut failures, snapshot.as_deref());
     if failures.is_empty() {
@@ -427,7 +427,7 @@ fn symbols_grid(failures: &mut Vec<&'static str>, snapshot: Option<&std::path::P
 
 /// The 500 controls at 2× on both backends, a frame each (informational: the GPU is skipped
 /// without an adapter).
-fn gpu_scene() {
+fn gpu_scene(snapshot: Option<&std::path::Path>) {
     let mut ui = Ui::new_headless();
     let win = ui.create_window(WindowKind::Normal, Size::new(1600.0, 1000.0));
     let grid = ui.create(Grid {
@@ -456,6 +456,7 @@ fn gpu_scene() {
     cpu.restore();
     cpu.flush();
     println!("scene 500 controls at 2×, CPU canvas: {:?}", t.elapsed());
+    save(snapshot, "scene-cpu.png", &mut cpu);
     use appkit::render::Painter as _;
     let Some(ctx) = appkit::render::gpu::GpuContext::new() else {
         println!("scene 500 controls at 2×, GPU canvas: no adapter, skipped");
@@ -469,13 +470,26 @@ fn gpu_scene() {
         gpu.scale((2.0, 2.0));
         ui.paint_window(win, &mut gpu, None);
         gpu.restore();
+        let painted = t.elapsed();
         gpu.submit();
-        let _ = gpu.into_pixmap();
+        let submitted = t.elapsed();
+        let pixmap = gpu.into_pixmap();
+        if pass == 1
+            && let Some(dir) = snapshot
+        {
+            let path = dir.join("scene-gpu.png");
+            if let Some(png) = Image::from_pixmap(pixmap).encode_png() {
+                let _ = std::fs::write(&path, png);
+                println!("wrote {}", path.display());
+            }
+        }
         println!(
-            "scene 500 controls at 2×, GPU canvas ({}), {}: {:?} (with readback)",
+            "scene 500 controls at 2×, GPU canvas ({}), {}: {:?} (paint {:?}, submit {:?}, with readback)",
             ctx.adapter(),
             if pass == 0 { "cold" } else { "warm" },
-            t.elapsed()
+            t.elapsed(),
+            painted,
+            submitted - painted,
         );
     }
 }

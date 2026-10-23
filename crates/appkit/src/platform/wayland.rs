@@ -350,6 +350,73 @@ pub struct Platform {
     first_frame_done: bool,
     last_tick: Instant,
     exit: bool,
+    stats: FrameStats,
+}
+
+/// Where the frames' time goes (`APPKIT_FRAME_STATS=1`): the mean and the worst of each stage
+/// over two seconds, on standard error.
+#[derive(Debug)]
+struct FrameStats {
+    on: bool,
+    since: Instant,
+    frames: u32,
+    /// Timers and posted work (the declarative layer's re-renders), advance, layout, paint,
+    /// present, and the time between frames.
+    sum: [f64; 6],
+    max: [f64; 6],
+}
+
+impl FrameStats {
+    const NAMES: [&str; 6] = [
+        "update", "animate", "layout", "paint", "present", "interval",
+    ];
+
+    fn new() -> FrameStats {
+        FrameStats {
+            on: std::env::var_os("APPKIT_FRAME_STATS").is_some(),
+            since: Instant::now(),
+            frames: 0,
+            sum: [0.0; 6],
+            max: [0.0; 6],
+        }
+    }
+
+    fn add(&mut self, stage: usize, since: Instant) {
+        if !self.on {
+            return;
+        }
+        let ms = since.elapsed().as_secs_f64() * 1000.0;
+        if let (Some(s), Some(m)) = (self.sum.get_mut(stage), self.max.get_mut(stage)) {
+            *s += ms;
+            *m = m.max(ms);
+        }
+    }
+
+    fn frame(&mut self) {
+        if !self.on {
+            return;
+        }
+        self.frames += 1;
+        if self.since.elapsed().as_secs_f64() < 2.0 {
+            return;
+        }
+        let n = f64::from(self.frames.max(1));
+        let parts: Vec<String> = Self::NAMES
+            .iter()
+            .zip(self.sum.iter().zip(self.max.iter()))
+            .map(|(name, (s, m))| format!("{name} {:.2}/{:.1}", s / n, m))
+            .collect();
+        eprintln!(
+            "appkit: {} frames in {:.1} s, ms mean/max: {}",
+            self.frames,
+            self.since.elapsed().as_secs_f64(),
+            parts.join(", ")
+        );
+        *self = FrameStats {
+            on: true,
+            ..FrameStats::new()
+        };
+    }
 }
 
 #[derive(Debug, Default)]
@@ -631,6 +698,7 @@ impl Platform {
             start: Instant::now(),
             first_frame_done: false,
             last_tick: Instant::now(),
+            stats: FrameStats::new(),
             exit: false,
             conn,
             qh,
@@ -678,12 +746,14 @@ impl Platform {
                 delay: r.delay_ms,
             };
         }
+        let t = Instant::now();
         self.ui.fire_timers();
         let posted = POSTED.with(|p| std::mem::take(&mut *p.borrow_mut()));
         for f in posted {
             f(&mut self.ui);
         }
         self.ui.flush();
+        self.stats.add(0, t);
         // The system fonts arrived from their loader: text is laid out again.
         if crate::text::fonts::Fonts::with(|f| f.install_system()) {
             self.ui.refresh_all();
@@ -1209,12 +1279,16 @@ impl Platform {
         }
         let now = Instant::now();
         let dt = now.duration_since(self.last_tick).as_secs_f64();
+        self.stats.add(5, self.last_tick);
         self.last_tick = now;
         self.ui.now = self.start.elapsed().as_secs_f64();
         if self.ui.is_animating() {
             self.ui.advance(dt.min(0.1));
         }
+        self.stats.add(1, now);
+        let t = Instant::now();
         let damage = self.ui.prepare_frame(id);
+        self.stats.add(2, t);
         self.ensure_gpu(id);
         let ctx = match &self.gpu {
             GpuState::Ready(c) => Some(c.clone()),
@@ -1230,6 +1304,21 @@ impl Platform {
             let (wu, hu) = (w as u32, h as u32);
             g.present.resize(&ctx, wu, hu);
             let fresh = g.canvas.as_ref().is_none_or(|c| c.size() != (wu, hu));
+            if !fresh && damage.is_empty() {
+                // Nothing changed: the retained frame is still right. The commit still acks a
+                // configure and, while something animates, asks for the next frame.
+                send_glass(s, self.ui.glass_regions(id));
+                let wl = s.role.wl_surface().clone();
+                let animating = self.ui.is_animating();
+                if animating {
+                    wl.frame(&self.qh, wl.clone());
+                }
+                wl.commit();
+                s.frame_pending = animating;
+                s.wants_frame = false;
+                s.gpu = Some(g);
+                return;
+            }
             if fresh {
                 g.canvas = Some(GpuCanvas::new(&ctx, wu, hu));
             }
@@ -1254,8 +1343,11 @@ impl Platform {
                     c.clear_rect(device);
                 }
                 c.scale((scale, scale));
+                let t = Instant::now();
                 self.ui.paint_window(id, c, (!fresh).then_some(logical));
                 c.restore();
+                self.stats.add(3, t);
+                let t = Instant::now();
                 let painted = c.damage().unwrap_or(device);
                 let wl = s.role.wl_surface().clone();
                 send_glass(s, self.ui.glass_regions(id));
@@ -1276,6 +1368,8 @@ impl Platform {
                     );
                     wl.frame(&qh, wl.clone());
                 });
+                self.stats.add(4, t);
+                self.stats.frame();
                 let keep = match outcome {
                     Presented::Done => {
                         let _ = c.take_damage();
