@@ -271,6 +271,20 @@ pub fn toolbar(items: impl crate::IntoChildren) -> Element {
     Element::of(Kind::TOOLBAR).children(items).fill_width()
 }
 
+/// `content` under a 52 pt `bar`, in layers: the content takes the full height (inset by the
+/// bar) and the bar is drawn over it, so the shadows of its controls fall on the content
+/// instead of being covered by it.
+pub(crate) fn under_bar(bar: Element, content: Element) -> Element {
+    crate::overlay((
+        crate::column((content.fill(),))
+            .padding_edges(52.0, 0.0, 0.0, 0.0)
+            .fill(),
+        bar,
+    ))
+    .alignment(0)
+    .fill()
+}
+
 /// A window split into a full-height sidebar and its content (ui-kit `SWindow` with a split
 /// toolbar). `sidebar_bar` are the items of the section above the sidebar (after the window
 /// controls; a hide button closes it), `bar` those of the content's section; `open` holds
@@ -294,21 +308,12 @@ pub fn split_window(
     let mut side_items = sidebar_bar.into_children();
     side_items.push(crate::spacer());
     side_items.push(toggle(open, false, "Hide Sidebar"));
-    let side = crate::column((
+    let side = under_bar(
         toolbar(side_items).prop(Prop::STYLE, PValue::Int(2)),
-        sidebar.fill(),
-    ))
-    .spacing(0.0)
-    .alignment(0)
-    .fill()
+        sidebar,
+    )
     .background_role("Surface/Sidebar");
-    let main = crate::column((
-        toolbar(bar).prop(Prop::STYLE, PValue::Int(1)),
-        content.fill(),
-    ))
-    .spacing(0.0)
-    .alignment(0)
-    .fill();
+    let main = under_bar(toolbar(bar).prop(Prop::STYLE, PValue::Int(1)), content);
     // The grip only needs to be hit: a clear fill makes it so.
     let grip = Element::of(Kind::VIEW).background(appkit_rs::rgba(0));
     let b = open.clone();

@@ -863,10 +863,7 @@ impl Element {
     /// Puts `bar` (a [`crate::controls::toolbar`]) above this content and makes the window's
     /// content full size, so the window buttons sit in the toolbar's first piece.
     pub fn toolbar(self, bar: Element) -> Element {
-        let mut col = crate::column((bar, self.fill()))
-            .spacing(0.0)
-            .alignment(0)
-            .fill();
+        let mut col = crate::controls::under_bar(bar, self);
         col.effects.toolbar = Some(52.0);
         col
     }
