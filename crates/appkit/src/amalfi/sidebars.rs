@@ -22,7 +22,7 @@ pub mod metrics {
     /// A row's width in the kit.
     pub const ROW_WIDTH: f32 = 216.0;
     /// A row's height.
-    pub const ROW_HEIGHT: f32 = 32.0;
+    pub const ROW_HEIGHT: f32 = crate::amalfi::tokens::control_heights::LARGE;
     /// A header's height.
     pub const HEADER_HEIGHT: f32 = 28.0;
     /// The footer's height.
@@ -30,21 +30,21 @@ pub mod metrics {
     /// A row's selection and hover radius.
     pub const ROW_RADIUS: f32 = 8.0;
     /// The row's icon box and its inset.
-    pub const ICON: f32 = 20.0;
+    pub const ICON: f32 = crate::amalfi::tokens::control_icons::SIDEBAR;
     /// Where a row's label starts.
     pub const LABEL_X: f32 = 40.0;
     /// A row's padding at its sides.
-    pub const PADDING: f32 = 12.0;
+    pub const PADDING: f32 = crate::amalfi::tokens::spacing::M;
     /// Gap between a row's label and its trailing part.
-    pub const GAP: f32 = 8.0;
+    pub const GAP: f32 = crate::amalfi::tokens::spacing::S;
     /// A badge's height.
     pub const BADGE_HEIGHT: f32 = 16.0;
     /// An eject button's size.
     pub const EJECT: f32 = 24.0;
     /// Space before a section header.
-    pub const SECTION_GAP: f32 = 8.0;
+    pub const SECTION_GAP: f32 = crate::amalfi::tokens::spacing::S;
     /// The panel's padding.
-    pub const PANEL_PADDING: f32 = 12.0;
+    pub const PANEL_PADDING: f32 = crate::amalfi::tokens::spacing::M;
 }
 
 // ---------------------------------------------------------------------------------------
