@@ -139,32 +139,101 @@ pub struct MenuEntry {
     pub action: Option<Rc<dyn Fn()>>,
     /// A separator row.
     pub separator: bool,
+    /// A section heading row.
+    pub heading: bool,
+    /// The checkmark: `Some(true)` checked, `Some(false)` mixed.
+    pub checked: Option<bool>,
+    /// Drawn in the destructive colour.
+    pub destructive: bool,
+    /// Drawn and treated as disabled although it has an action.
+    pub disabled: bool,
+    /// A Silica Symbols name shown before the title.
+    pub icon: Option<String>,
+    /// The rows of a submenu (the entry then opens it instead of acting).
+    pub submenu: Option<Vec<MenuEntry>>,
 }
 
 impl MenuEntry {
-    /// An item.
-    pub fn item(title: &str, action: impl Fn() + 'static) -> Self {
+    fn base(title: &str) -> Self {
         MenuEntry {
             title: title.to_string(),
             shortcut: None,
-            action: Some(Rc::new(action)),
+            action: None,
             separator: false,
+            heading: false,
+            checked: None,
+            destructive: false,
+            disabled: false,
+            icon: None,
+            submenu: None,
+        }
+    }
+
+    /// An item.
+    pub fn item(title: &str, action: impl Fn() + 'static) -> Self {
+        MenuEntry {
+            action: Some(Rc::new(action)),
+            ..MenuEntry::base(title)
         }
     }
 
     /// A separator.
     pub fn separator() -> Self {
         MenuEntry {
-            title: String::new(),
-            shortcut: None,
-            action: None,
             separator: true,
+            ..MenuEntry::base("")
+        }
+    }
+
+    /// A section heading.
+    pub fn heading(title: &str) -> Self {
+        MenuEntry {
+            heading: true,
+            ..MenuEntry::base(title)
+        }
+    }
+
+    /// An item that opens a submenu of `entries`.
+    pub fn submenu(title: &str, entries: Vec<MenuEntry>) -> Self {
+        MenuEntry {
+            submenu: Some(entries),
+            ..MenuEntry::base(title)
         }
     }
 
     /// With a key equivalent shown.
     pub fn shortcut(mut self, s: &str) -> Self {
         self.shortcut = Some(s.to_string());
+        self
+    }
+
+    /// With a checkmark (`false`: unchecked, no mark).
+    pub fn checked(mut self, checked: bool) -> Self {
+        self.checked = checked.then_some(true);
+        self
+    }
+
+    /// With the mixed-state mark.
+    pub fn mixed(mut self) -> Self {
+        self.checked = Some(false);
+        self
+    }
+
+    /// In the destructive colour.
+    pub fn destructive(mut self) -> Self {
+        self.destructive = true;
+        self
+    }
+
+    /// Disabled.
+    pub fn disabled(mut self) -> Self {
+        self.disabled = true;
+        self
+    }
+
+    /// With an icon (a Silica Symbols name).
+    pub fn icon(mut self, symbol: &str) -> Self {
+        self.icon = Some(symbol.to_string());
         self
     }
 }

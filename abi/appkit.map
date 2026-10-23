@@ -65,6 +65,7 @@ APPKIT_1.0 {
     ak_menu_add_item;
     ak_menu_add_separator;
     ak_menu_add_submenu;
+    ak_menu_set_icon;
     ak_app_set_menu_bar;
     ak_view_popup_menu;
     ak_canvas_save;

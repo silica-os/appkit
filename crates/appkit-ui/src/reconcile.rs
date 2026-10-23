@@ -194,6 +194,47 @@ pub(crate) fn create(elem: Element, sched: &Weak<Scheduler>) -> Option<Instance>
     })
 }
 
+/// A native menu of `entries`; the action of the item with id `n` is `actions[n - 1]`.
+fn build_menu(
+    title: &str,
+    entries: &[MenuEntry],
+    actions: &mut Vec<Option<Rc<dyn Fn()>>>,
+) -> Option<appkit_rs::Menu> {
+    use appkit_rs::menu_flags as mf;
+    let mut menu = appkit_rs::Menu::new(title, None).ok()?;
+    for e in entries {
+        if e.separator {
+            menu = menu.separator().ok()?;
+        } else if let Some(sub) = &e.submenu {
+            let m = build_menu(&e.title, sub, actions)?;
+            menu = menu.submenu(m).ok()?;
+        } else {
+            let mut flags = 0;
+            if e.heading {
+                flags |= mf::HEADING;
+            }
+            if e.action.is_none() || e.disabled {
+                flags |= mf::DISABLED;
+            }
+            match e.checked {
+                Some(true) => flags |= mf::CHECKED,
+                Some(false) => flags |= mf::MIXED,
+                None => {}
+            }
+            if e.destructive {
+                flags |= mf::DESTRUCTIVE;
+            }
+            actions.push(e.action.clone());
+            let id = actions.len() as u32;
+            menu = menu.item(&e.title, e.shortcut.as_deref(), id, flags).ok()?;
+            if let Some(icon) = &e.icon {
+                menu = menu.icon(icon).ok()?;
+            }
+        }
+    }
+    Some(menu)
+}
+
 /// Opens, updates or closes the element's sheet, popover and context menu.
 fn apply_effects(view: &KitView, state: &mut EffectState, want: &Effects, sched: &Weak<Scheduler>) {
     apply_rows(view, &mut state.rows, want.rows.as_ref(), sched);
@@ -205,25 +246,10 @@ fn apply_effects(view: &KitView, state: &mut EffectState, want: &Effects, sched:
             let c2 = cell.clone();
             let conn = view.on(Signal::CONTEXT_MENU, move |v, value| {
                 let entries = c2.borrow().clone();
-                let Ok(mut menu) = appkit_rs::Menu::new("", None) else {
+                let mut actions: Vec<Option<Rc<dyn Fn()>>> = Vec::new();
+                let Some(menu) = build_menu("", &entries, &mut actions) else {
                     return;
                 };
-                for (i, e) in entries.iter().enumerate() {
-                    let next = if e.separator {
-                        menu.separator()
-                    } else {
-                        let flags = if e.action.is_some() {
-                            0
-                        } else {
-                            appkit_rs::menu_flags::DISABLED
-                        };
-                        menu.item(&e.title, e.shortcut.as_deref(), (i + 1) as u32, flags)
-                    };
-                    match next {
-                        Ok(m) => menu = m,
-                        Err(_) => return,
-                    }
-                }
                 let frame = v.frame().unwrap_or_default();
                 let (x, y) = match value {
                     appkit_rs::Value::Point(x, y) => (*x - frame.x, *y - frame.y),
@@ -240,7 +266,7 @@ fn apply_effects(view: &KitView, state: &mut EffectState, want: &Effects, sched:
                         return;
                     }
                     let i = (id - 1) as usize;
-                    if let Some(a) = entries.get(i).and_then(|e| e.action.clone()) {
+                    if let Some(a) = actions.get(i).cloned().flatten() {
                         a();
                     }
                 });
@@ -708,5 +734,34 @@ impl Drop for RootInner {
         for i in self.instance.take() {
             i.remove();
         }
+    }
+}
+
+#[cfg(test)]
+mod menu_tests {
+    use super::*;
+
+    #[test]
+    fn a_menu_with_every_kind_of_row_is_built_and_numbers_its_actions() {
+        let entries = vec![
+            MenuEntry::heading("Document"),
+            MenuEntry::item("Autosave", || {}).checked(true),
+            MenuEntry::item("Ruler", || {}).mixed().icon("copy"),
+            MenuEntry::submenu(
+                "Recent",
+                vec![MenuEntry::item("a", || {}), MenuEntry::item("b", || {})],
+            ),
+            MenuEntry::separator(),
+            MenuEntry::item("Export", || {}).disabled(),
+            MenuEntry::item("Trash", || {}).destructive(),
+        ];
+        let mut actions = Vec::new();
+        assert!(build_menu("", &entries, &mut actions).is_some());
+        // Every row but the separator and the submenu itself has an id; the submenu's rows count.
+        assert_eq!(actions.len(), 7);
+        assert!(
+            actions.first().is_some_and(Option::is_none),
+            "a heading does nothing"
+        );
     }
 }

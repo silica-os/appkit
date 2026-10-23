@@ -1655,6 +1655,14 @@ impl Menu {
         Ok(self)
     }
 
+    /// Gives the last item added a symbol (or an absolute icon path).
+    pub fn icon(self, symbol: &str) -> Result<Menu> {
+        let s = cstring(symbol)?;
+        // SAFETY: the menu is ours; the string is alive for the call.
+        check(unsafe { f::ak_menu_set_icon(self.ptr, s.as_ptr()) })?;
+        Ok(self)
+    }
+
     /// Adds a submenu.
     pub fn submenu(self, sub: Menu) -> Result<Menu> {
         let raw = sub.into_raw();

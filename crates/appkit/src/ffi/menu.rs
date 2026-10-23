@@ -111,6 +111,22 @@ pub extern "C" fn ak_menu_add_separator(menu: *mut AKMenu) -> AKStatus {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn ak_menu_set_icon(menu: *mut AKMenu, symbol: *const c_char) -> AKStatus {
+    guard(AK_ERROR_PLATFORM, || {
+        let (Some(b), Ok(symbol)) = (building(menu), req_str(symbol)) else {
+            return set_last(AK_ERROR_INVALID_ARGUMENT);
+        };
+        match b.menu.items.last_mut() {
+            Some(item) if !item.separator => {
+                item.icon = Some(symbol.to_string());
+                set_last(AK_OK)
+            }
+            _ => set_last(AK_ERROR_INVALID_ARGUMENT),
+        }
+    })
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn ak_menu_add_submenu(menu: *mut AKMenu, submenu: *mut AKMenu) -> AKStatus {
     guard(AK_ERROR_PLATFORM, || {
         if menu == submenu {
