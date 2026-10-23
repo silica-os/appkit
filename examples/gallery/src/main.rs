@@ -228,15 +228,18 @@ impl Component for Gallery {
             rows.push(row_for(1 + PAGES.len() + n, "circle"));
         }
         // DocPage: the title, then the page, 36 in and at most 1100 wide.
-        let body = column((
-            label(name_of(current)).text_style("Title 1"),
-            content_of(current, go),
-        ))
-        .spacing(12.0)
-        .alignment(0)
-        .padding(36.0)
-        .max_width(1100.0)
-        .fill_width();
+        // Home carries its own heading.
+        let title = if current == 0 {
+            view(Kind::VIEW).hidden(true)
+        } else {
+            label(name_of(current)).text_style("Title 1")
+        };
+        let body = column((title, content_of(current, go)))
+            .spacing(12.0)
+            .alignment(0)
+            .padding(36.0)
+            .max_width(1100.0)
+            .fill_width();
         row((
             column((
                 brand.padding_xy(8.0, 8.0),
