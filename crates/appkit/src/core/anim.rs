@@ -69,6 +69,9 @@ pub struct NodeAnim {
     pub opacity: Animated<f32>,
     /// Scale multiplier.
     pub scale: Animated<f32>,
+    /// The point the scale is about, in the view's own coordinates (`None`: its centre). A
+    /// popover grows from the tip of its arrow.
+    pub origin: Option<Point>,
 }
 
 impl Default for NodeAnim {
@@ -77,6 +80,7 @@ impl Default for NodeAnim {
             offset: Animated::new(Point::ZERO),
             opacity: Animated::new(1.0),
             scale: Animated::new(1.0),
+            origin: None,
         }
     }
 }
@@ -266,7 +270,12 @@ impl Ui {
                 Timing::curve(motion::FADE_STANDARD_CURVE, motion::FADE_STANDARD)
             }
         };
+        // A popover grows out of the tip of its arrow (`transform-origin` in SPopover).
+        let pivot = (kind == Presentation::Popover)
+            .then(|| self.popover_pivot(window))
+            .flatten();
         let Some(a) = self.anim_mut(root) else { return };
+        a.origin = pivot;
         a.opacity.jump(0.0);
         a.opacity.animate_to(1.0, fade);
         if !reduce {
@@ -285,11 +294,19 @@ impl Ui {
         self.track(root);
     }
 
+    /// The tip of the arrow of the popover in `window`, in the window's coordinates.
+    fn popover_pivot(&self, window: crate::core::window::WindowId) -> Option<Point> {
+        let w = self.window(window)?;
+        let first = self.tree.children(w.root).first().copied()?;
+        let pop = self.widget::<crate::amalfi::popovers::Popover>(first)?;
+        pop.shape.tip(Rect::from_size(w.size))
+    }
+
     /// Closes a window the way the ui-kit leaves: a popover or sheet fades out first (the
     /// platform's own dismissals, which have no surface left to animate, use
     /// [`Ui::close_window`]). Other windows close at once.
     pub fn dismiss_window(&mut self, window: crate::core::window::WindowId) {
-        let Some((root, _)) = self.presentation(window) else {
+        let Some((root, kind)) = self.presentation(window) else {
             self.close_window(window);
             return;
         };
@@ -301,6 +318,10 @@ impl Ui {
         };
         if let Some(a) = self.anim_mut(root) {
             a.opacity.animate_to(0.0, Timing::curve(curve, dur));
+            // A popover also shrinks back to 0.96 as it fades.
+            if kind == Presentation::Popover && !reduce {
+                a.scale.animate_to(0.96, Timing::curve(curve, dur));
+            }
         }
         self.track(root);
         self.after(f64::from(dur) + 0.02, move |ui| ui.close_window(window));
@@ -394,6 +415,43 @@ mod tests {
             ui.advance(1.0 / 60.0);
         }
         assert_eq!(anim_of(&ui, pop), (1.0, 1.0, Point::ZERO));
+    }
+
+    #[test]
+    fn a_popover_grows_from_the_tip_of_its_arrow_and_shrinks_as_it_leaves() {
+        let mut ui = Ui::new_headless();
+        let win = parent(&mut ui);
+        let content = ui.create(crate::amalfi::text::Text::new("Hello"));
+        let anchor = Rect::new(100.0, 40.0, 40.0, 20.0);
+        let pop = crate::amalfi::popovers::present(
+            &mut ui,
+            win,
+            anchor,
+            content,
+            crate::amalfi::popovers::Side::Below,
+            16.0,
+        );
+        let root = ui.window(pop).map(|w| w.root).expect("root");
+        let size = ui.window(pop).map(|w| w.size).expect("size");
+        let origin = ui
+            .tree
+            .get(root)
+            .and_then(|n| n.anim.as_ref())
+            .and_then(|a| a.origin)
+            .expect("a pivot");
+        // Below its anchor the arrow is on the top edge, over the anchor's centre.
+        assert_eq!(origin.y, 0.0);
+        assert!(
+            origin.x > 0.0 && origin.x < size.width,
+            "{origin:?} in {size:?}"
+        );
+        for _ in 0..120 {
+            ui.advance(1.0 / 60.0);
+        }
+        ui.dismiss_window(pop);
+        ui.advance(0.05);
+        let (o, k, _) = anim_of(&ui, pop);
+        assert!(o < 1.0 && (0.96..1.0).contains(&k), "{o} {k}");
     }
 
     #[test]

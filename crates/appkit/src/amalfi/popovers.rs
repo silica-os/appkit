@@ -481,4 +481,24 @@ mod tests {
         };
         assert!(at.bottom() <= anchor.y + 0.01);
     }
+
+    #[test]
+    fn escape_closes_a_popover() {
+        use crate::core::event::{Key, KeyEvent, Mods};
+        let (mut ui, win) = parent();
+        let content = ui.create(Text::new("Hello"));
+        let popup = present(
+            &mut ui,
+            win,
+            Rect::new(100.0, 40.0, 40.0, 20.0),
+            content,
+            Side::Below,
+            16.0,
+        );
+        assert!(ui.window(popup).is_some());
+        ui.set_focus(content, true);
+        ui.key(popup, KeyEvent::press(Key::Escape, Mods::empty()));
+        ui.advance(1.0);
+        assert!(ui.window(popup).is_none());
+    }
 }

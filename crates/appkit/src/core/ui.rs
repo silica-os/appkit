@@ -1262,6 +1262,23 @@ impl Ui {
             .any(|a| self.tree.flags(*a).contains(NodeFlags::HIDDEN))
     }
 
+    /// Dismisses `window` when it is a popup showing a popover.
+    fn dismiss_popover(&mut self, window: WindowId) -> bool {
+        let is_popover = self.window(window).is_some_and(|w| {
+            matches!(w.kind, WindowKind::Popup { .. })
+                && self
+                    .tree
+                    .children(w.root)
+                    .first()
+                    .and_then(|c| self.tree.widget(*c))
+                    .is_some_and(|c| c.kind() == "Popover")
+        });
+        if is_popover {
+            self.dismiss_window(window);
+        }
+        is_popover
+    }
+
     // ----- Focus -------------------------------------------------------------------------
 
     /// Gives the keyboard focus to `id` (`keyboard`: from keyboard navigation, the halo
@@ -1931,7 +1948,10 @@ impl Ui {
                     self.focus_next(window, key.mods.contains(Mods::SHIFT))
                 }
                 Key::Enter if key.mods.is_empty() => self.activate_marked(window, Prop::IsDefault),
-                Key::Escape if key.mods.is_empty() => self.activate_marked(window, Prop::IsCancel),
+                Key::Escape if key.mods.is_empty() => {
+                    // Escape closes a popover (`SPopover`); a cancel button comes first.
+                    self.activate_marked(window, Prop::IsCancel) || self.dismiss_popover(window)
+                }
                 _ => false,
             };
         }
@@ -2462,6 +2482,7 @@ impl Ui {
             Some(a) => (a.offset.get(), a.opacity.get(), a.scale.get()),
             None => (Point::ZERO, 1.0, 1.0),
         };
+        let pivot = n.anim.as_ref().and_then(|a| a.origin);
         canvas.save();
         canvas.translate((
             n.frame.x + m.offset.x + aoff.x,
@@ -2469,7 +2490,7 @@ impl Ui {
         ));
         let scale = m.scale * ascale;
         if (scale - 1.0).abs() > 1e-6 {
-            let c = (n.frame.width / 2.0, n.frame.height / 2.0);
+            let c = pivot.map_or((n.frame.width / 2.0, n.frame.height / 2.0), |p| (p.x, p.y));
             canvas.translate(c);
             canvas.scale((scale, scale));
             canvas.translate((-c.0, -c.1));
