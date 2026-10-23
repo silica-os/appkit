@@ -7,6 +7,7 @@ use crate::render::path::PathBuilder;
 use crate::amalfi::foundation::{control_shadow, focus_halo_named};
 use crate::amalfi::theme::Theme;
 use crate::amalfi::tokens;
+use crate::color::Color;
 use crate::core::a11y::{A11y, Action, Role};
 use crate::core::event::{Button, Event, Handled, Key};
 use crate::core::layout::Proposal;
@@ -16,7 +17,7 @@ use crate::core::widget::{EventCx, FocusKind, Interaction, LayoutCx, PaintCx, Pr
 use crate::geom::{Point, Rect, Size};
 use crate::motion::{Animated, Timing};
 use crate::shape::Shape;
-use crate::style::{Border, BorderPosition, Style};
+use crate::style::{Blur, Border, BorderPosition, Shadow, Style};
 
 /// Fixed measures (silica_ui's `AmalfiSliderMetrics`).
 pub mod metrics {
@@ -100,26 +101,37 @@ pub fn paint_thumb(cx: &mut PaintCx<'_>, prefix: &str, rect: Rect, look: ThumbLo
     }
 }
 
-/// The lens over a dragged thumb: `Lens` (a `Glass/Clear` capsule) and `Core` (the thumb's
-/// disc on it). `rect` is the lens, `core` the disc.
-pub fn paint_lens(cx: &mut PaintCx<'_>, prefix: &str, rect: Rect, core: Rect, opacity: f32) {
-    let theme = *cx.theme();
+/// The glass lens a dragged thumb becomes (ui-kit `.s-slider__thumb` while dragging,
+/// `.s-switch__thumb.is-lens`): no fill, a 1 pt `Glass/Rim Dark` ring, `Glass/Rim Light`
+/// (0 1 1) and a white 25 % glow (0 0 3) inside, `blur(1px) saturate(1.2)` behind. `drop` is
+/// the shadow under it (the switch's lens has `Shadow/2`, the slider's none).
+pub fn lens_style(theme: &Theme, opacity: f32, drop: Option<Shadow>) -> Style {
     let c = theme.colors;
-    let mut style = theme.material_style("Glass/Clear");
-    style.opacity = opacity;
+    let mut style = Style::default()
+        .with_border(Border::inside(c.glass_rim_dark, 1.0))
+        .with_inner_shadow(Shadow::new(c.glass_rim_light, 0.0, 1.0, 1.0))
+        .with_inner_shadow(Shadow::new(Color::rgba(255, 255, 255, 0x40), 0.0, 0.0, 3.0))
+        .with_blur(Blur::Background {
+            radius: 1.0,
+            saturation: 1.2,
+            brightness: 1.0,
+        })
+        .with_opacity(opacity);
+    if let Some(d) = drop {
+        style = style.with_shadow(d);
+    }
+    style
+}
+
+/// Records the lens over a dragged thumb as the one element it is: `Lens` (corners half its
+/// height). `rect` is the lens.
+pub fn paint_lens(cx: &mut PaintCx<'_>, prefix: &str, rect: Rect, opacity: f32) {
+    let theme = *cx.theme();
     cx.rec.layer(
         &format!("{prefix}Lens"),
         rect,
-        Shape::rounded((rect.width.min(rect.height) / 2.0 - 1.0).max(0.0)),
-        style,
-    );
-    cx.rec.layer(
-        &format!("{prefix}Core"),
-        core,
-        Shape::rounded(metrics::THUMB / 2.0),
-        Style::fill(c.surface_control)
-            .with_border(Border::inside(c.line_border, 1.0))
-            .with_opacity(opacity),
+        Shape::rounded(rect.width.min(rect.height) / 2.0),
+        lens_style(&theme, opacity, None),
     );
 }
 
@@ -657,18 +669,10 @@ impl Widget for Slider {
         }
         if self.core.shows_lens() || self.core.dragged {
             let lens = self.lens_rect(self.core.lens_growth()).translate(o);
-            let c = self.thumb_rect().translate(o).center();
-            let core = Rect::new(
-                c.x - metrics::THUMB / 2.0,
-                c.y - metrics::THUMB / 2.0,
-                metrics::THUMB,
-                metrics::THUMB,
-            );
             paint_lens(
                 cx,
                 &format!("{prefix}Lens thumb/"),
                 lens,
-                core,
                 self.core.lens_opacity(),
             );
         }
@@ -965,13 +969,7 @@ impl Widget for Dial {
                 metrics::THUMB + (metrics::LENS_SHORT - metrics::THUMB) * g,
             );
             let lens = whole(Rect::new(c.x - w / 2.0, c.y - h / 2.0, w, h));
-            let core = Rect::new(
-                c.x - metrics::THUMB / 2.0,
-                c.y - metrics::THUMB / 2.0,
-                metrics::THUMB,
-                metrics::THUMB,
-            );
-            paint_lens(cx, "Lens thumb/", lens, core, self.core.lens_opacity());
+            paint_lens(cx, "Lens thumb/", lens, self.core.lens_opacity());
         }
     }
 
@@ -1121,13 +1119,7 @@ impl Widget for LensThumb {
 
     fn paint(&mut self, cx: &mut PaintCx<'_>) {
         let b = cx.bounds();
-        let core = Rect::new(
-            b.x + (b.width - metrics::THUMB) / 2.0,
-            b.y + (b.height - metrics::THUMB) / 2.0,
-            metrics::THUMB,
-            metrics::THUMB,
-        );
-        paint_lens(cx, "", b, core, 1.0);
+        paint_lens(cx, "", b, 1.0);
     }
 
     fn hit(&self, _p: Point, _size: Size) -> bool {
@@ -1138,6 +1130,24 @@ impl Widget for LensThumb {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_lens_is_the_css_one_for_sliders_and_switches() {
+        let t = Theme::light();
+        let slider = lens_style(&t, 1.0, None);
+        // No fill, the rims inside, `blur(1px) saturate(1.2)` behind, no shadow.
+        assert!(slider.fills.is_empty() && slider.shadows.is_empty());
+        assert_eq!(slider.borders.len(), 1);
+        assert_eq!(slider.inner_shadows.len(), 2);
+        assert!(matches!(
+            slider.blurs.first(),
+            Some(Blur::Background { radius, saturation, .. })
+                if (*radius - 1.0).abs() < 1e-3 && (*saturation - 1.2).abs() < 1e-3
+        ));
+        // The switch's lens adds `Shadow/2`.
+        let switch = lens_style(&t, 1.0, t.shadow(2));
+        assert_eq!(switch.shadows.first().copied(), t.shadow(2));
+    }
     use crate::core::event::{KeyEvent, Mods};
     use crate::core::ui::Ui;
     use crate::core::window::{WindowId, WindowKind};

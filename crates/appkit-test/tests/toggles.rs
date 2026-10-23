@@ -268,8 +268,10 @@ fn switches_match_the_kit() {
             scene.ui.pointer_move(w, away, Mods::empty());
             scene.ui.pointer_move(w, start, Mods::empty());
             scene.settle();
-            // The kit's lens refracts the track beneath it; the region is left out of the
-            // pixels (the layer's geometry is checked).
+            // The kit's lens (`Glass/Clear`) is stale: the live ui-kit CSS is the reference, so
+            // the layer is not compared (the lib tests check it); its region is left out of
+            // the pixels.
+            scene.skip_trees = vec!["Lens".to_string()];
             if let Some(l) = scene.master.rect_in_master("Lens") {
                 scene.extra_mask.push(l.inflate(1.0, 1.0));
             }

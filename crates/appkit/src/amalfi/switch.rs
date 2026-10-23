@@ -5,6 +5,7 @@
 use crate::amalfi::foundation::{
     ControlSize, Interaction as Transitions, Label, control_shadow, focus_halo_named,
 };
+use crate::amalfi::sliders::lens_style;
 use crate::amalfi::theme::Theme;
 use crate::amalfi::tokens::{self, typography};
 use crate::color::Color;
@@ -324,14 +325,16 @@ impl Widget for Switch {
             let centre_x = track.x + x + m.thumb / 2.0;
             let centre_y = track.y + m.track.height / 2.0;
             let rect = Rect::new(centre_x - side / 2.0, centre_y - side / 2.0, side, side);
-            let mut style = theme.material_style("Glass/Clear");
-            if !self.dragging {
-                style.opacity = presence;
-            }
+            // The CSS lens: the rims and `blur(1px) saturate(1.2)` of the slider's, over `Shadow/2`.
+            let style = lens_style(
+                &theme,
+                if self.dragging { 1.0 } else { presence },
+                theme.shadow(2),
+            );
             cx.rec.layer(
                 &format!("{prefix}Lens"),
                 rect,
-                Shape::rounded((side / 2.0 - 1.0).max(0.0)),
+                Shape::rounded(side / 2.0),
                 style,
             );
         }
