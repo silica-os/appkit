@@ -33,7 +33,7 @@ pub mod metrics {
     /// Default width of a field.
     pub const WIDTH: f32 = 200.0;
     /// Gap between a field's parts.
-    pub const GAP: f32 = 4.0;
+    pub const GAP: f32 = crate::amalfi::tokens::spacing::XS;
     /// The border.
     pub const BORDER: f32 = 1.0;
     /// The border of a focused field or one with an error.
@@ -45,9 +45,9 @@ pub mod metrics {
     /// The error halo is the error colour at this opacity.
     pub const ERROR_HALO_OPACITY: f32 = 0.3;
     /// The clear button's side.
-    pub const CLEAR_BUTTON: f32 = 20.0;
+    pub const CLEAR_BUTTON: f32 = crate::amalfi::tokens::control_heights::MINI;
     /// The clear button's glyph.
-    pub const CLEAR_GLYPH: f32 = 16.0;
+    pub const CLEAR_GLYPH: f32 = crate::amalfi::tokens::control_icons::SMALL;
     /// A value field's width.
     pub const VALUE_FIELD_WIDTH: f32 = 56.0;
     /// A text area's size.
@@ -57,19 +57,19 @@ pub mod metrics {
     /// A token field's width.
     pub const TOKEN_FIELD_WIDTH: f32 = 260.0;
     /// A token field's padding.
-    pub const TOKEN_FIELD_LEFT: f32 = 4.0;
+    pub const TOKEN_FIELD_LEFT: f32 = crate::amalfi::tokens::spacing::XS;
     /// A token field's padding at its end.
-    pub const TOKEN_FIELD_RIGHT: f32 = 8.0;
+    pub const TOKEN_FIELD_RIGHT: f32 = crate::amalfi::tokens::spacing::S;
     /// A token's height.
-    pub const TOKEN_HEIGHT: f32 = 20.0;
+    pub const TOKEN_HEIGHT: f32 = crate::amalfi::tokens::control_heights::MINI;
     /// A token's padding at its start.
-    pub const TOKEN_PAD_LEFT: f32 = 8.0;
+    pub const TOKEN_PAD_LEFT: f32 = crate::amalfi::tokens::spacing::S;
     /// A token's padding at its end.
-    pub const TOKEN_PAD_RIGHT: f32 = 4.0;
+    pub const TOKEN_PAD_RIGHT: f32 = crate::amalfi::tokens::spacing::XS;
     /// A token's remove glyph.
-    pub const TOKEN_REMOVE: f32 = 16.0;
+    pub const TOKEN_REMOVE: f32 = crate::amalfi::tokens::control_icons::SMALL;
     /// Text boxes are a multiple of this wide (the 4 pt grid).
-    pub const STEP: f32 = 4.0;
+    pub const STEP: f32 = crate::amalfi::tokens::grid::BASE;
 
     /// A field's height.
     pub fn height(size: ControlSize) -> f32 {
@@ -114,7 +114,7 @@ pub mod metrics {
     }
 
     /// The combo button's chevron.
-    pub const COMBO_GLYPH: f32 = 16.0;
+    pub const COMBO_GLYPH: f32 = crate::amalfi::tokens::control_icons::SMALL;
 }
 
 fn text_token(size: ControlSize) -> &'static TypeStyle {
