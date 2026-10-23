@@ -218,7 +218,13 @@ impl GpuContext {
                 None => Lookup::Empty,
             };
         }
-        let r = match rasterize(font, coords, glyph, size8, sub) {
+        let started_at = std::time::Instant::now();
+        let rastered = rasterize(font, coords, glyph, size8, sub);
+        super::profile(|p| {
+            p.glyphs += 1;
+            p.glyph_us += started_at.elapsed().as_micros() as u64;
+        });
+        let r = match rastered {
             Rastered::Cell(r) => r,
             Rastered::Empty => {
                 atlas.slots.insert(key, None);
@@ -574,7 +580,13 @@ impl GpuCanvas {
                 // The box moves to its quarter pixel (at most 1/8 px), inside the margin.
                 let to_cell = Affine::translate((qx / step - ox + 1.0, qy / step - oy + 1.0))
                     * Affine::new([a, 0.0, 0.0, d, 0.0, 0.0]);
-                let Some(r) = rasterize_path(bez, even_odd, stroke, blur, to_cell, w, h) else {
+                let started_at = std::time::Instant::now();
+                let rastered = rasterize_path(bez, even_odd, stroke, blur, to_cell, w, h);
+                super::profile(|p| {
+                    p.path_cells += 1;
+                    p.path_us += started_at.elapsed().as_micros() as u64;
+                });
+                let Some(r) = rastered else {
                     self.ctx.paths.borrow_mut().cells.insert(key, None);
                     return Cell::Empty;
                 };

@@ -630,6 +630,11 @@ impl Widget for SegmentedControl {
         "SegmentedControl"
     }
 
+    fn paints_unclipped(&self) -> bool {
+        // The lens grows past the control: over a scroll view's or a group's edge.
+        self.lens.get() > 0.0
+    }
+
     fn measure(&mut self, cx: &mut LayoutCx<'_>, _p: Proposal) -> Size {
         let theme = cx.theme();
         self.compute(&theme);
@@ -1755,6 +1760,11 @@ impl PaneControl {
 impl Widget for PaneControl {
     fn kind(&self) -> &'static str {
         "PaneControl"
+    }
+
+    fn paints_unclipped(&self) -> bool {
+        // The lens grows past the control: over a scroll view's or a group's edge.
+        self.lens.get() > 0.0
     }
 
     fn measure(&mut self, cx: &mut LayoutCx<'_>, _p: Proposal) -> Size {

@@ -412,6 +412,24 @@ impl FrameStats {
             self.since.elapsed().as_secs_f64(),
             parts.join(", ")
         );
+        let p = crate::render::gpu::take_profile();
+        let per = |v: u32| f64::from(v) / n;
+        eprintln!(
+            "appkit gpu per frame: passes {:.1}, draws {:.1}, buffers {:.1}, binds {:.1}, \
+             targets {:.1}, backdrops {:.1}, path cells {:.1} ({:.2} ms), glyphs {:.1} \
+             ({:.2} ms), encode {:.2} ms",
+            per(p.passes),
+            per(p.draws),
+            per(p.buffers),
+            per(p.binds),
+            per(p.targets),
+            per(p.backdrops),
+            per(p.path_cells),
+            p.path_us as f64 / 1000.0 / n,
+            per(p.glyphs),
+            p.glyph_us as f64 / 1000.0 / n,
+            p.encode_us as f64 / 1000.0 / n,
+        );
         *self = FrameStats {
             on: true,
             ..FrameStats::new()

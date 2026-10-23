@@ -708,6 +708,11 @@ impl Widget for Slider {
         "Slider"
     }
 
+    fn paints_unclipped(&self) -> bool {
+        // The lens grows past the control: over a scroll view's or a group's edge.
+        self.core.growth.get() > 0.0
+    }
+
     fn measure(&mut self, _cx: &mut LayoutCx<'_>, p: Proposal) -> Size {
         let room = if self.vertical { p.height } else { p.width };
         let glyphs = 2.0 * self.glyph_offset();

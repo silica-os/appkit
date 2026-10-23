@@ -162,6 +162,12 @@ pub trait Widget: AsAny {
         false
     }
 
+    /// Whether the view draws over the clips of its containers (a control's drag lens, which
+    /// grows past a scroll view or a group). It is painted after the rest of the window.
+    fn paints_unclipped(&self) -> bool {
+        false
+    }
+
     /// Whether the core dims the whole view when it is disabled (Amalfi: 35 %).
     fn dims_when_disabled(&self) -> bool {
         true

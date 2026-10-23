@@ -411,8 +411,9 @@ impl Widget for DisclosureGroup {
     }
 
     fn clips_children(&self) -> bool {
-        // The content slides in and out under the header.
-        true
+        // The content slides in and out under the header; open, it is not cut (the shadows
+        // and the lenses of its controls reach past the group).
+        self.open_factor() < 1.0
     }
 
     fn measure(&mut self, cx: &mut LayoutCx<'_>, p: Proposal) -> Size {
@@ -662,7 +663,6 @@ pub fn disclosure_group(
     content: crate::core::ViewId,
 ) -> crate::core::ViewId {
     let g = ui.create(DisclosureGroup::new(title).expanded(expanded));
-    let _ = ui.set(g, Prop::ClipsChildren, Value::Bool(true));
     ui.add_child(g, content);
     g
 }

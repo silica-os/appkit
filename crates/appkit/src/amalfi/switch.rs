@@ -236,6 +236,11 @@ impl Widget for Switch {
         "Switch"
     }
 
+    fn paints_unclipped(&self) -> bool {
+        // The lens grows past the control: over a scroll view's or a group's edge.
+        self.lens.get() > 0.0
+    }
+
     fn measure(&mut self, cx: &mut LayoutCx<'_>, p: Proposal) -> Size {
         let m = self.metrics();
         if self.label.is_none() {

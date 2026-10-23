@@ -34,6 +34,49 @@ mod layers;
 mod present;
 pub use present::{PresentSurface, Presented};
 
+/// What the GPU canvas did since the last [`take_profile`] (`APPKIT_FRAME_STATS`): counts and
+/// the CPU time of the costly steps, to see where a frame goes on a slow driver.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Profile {
+    /// Render passes encoded.
+    pub passes: u32,
+    /// Draw calls.
+    pub draws: u32,
+    /// Buffers created.
+    pub buffers: u32,
+    /// Bind groups created.
+    pub binds: u32,
+    /// Offscreen targets created (layers, masks, filters).
+    pub targets: u32,
+    /// Backdrop (glass) filters.
+    pub backdrops: u32,
+    /// Path cells rasterized on the CPU, and their time in µs.
+    pub path_cells: u32,
+    pub path_us: u64,
+    /// Glyphs rasterized, and their time in µs.
+    pub glyphs: u32,
+    pub glyph_us: u64,
+    /// Time encoding passes, in µs.
+    pub encode_us: u64,
+}
+
+thread_local! {
+    static PROFILE: std::cell::Cell<Profile> = std::cell::Cell::new(Profile::default());
+}
+
+pub(crate) fn profile(f: impl FnOnce(&mut Profile)) {
+    PROFILE.with(|p| {
+        let mut v = p.get();
+        f(&mut v);
+        p.set(v);
+    });
+}
+
+/// The counters since the last call, reset.
+pub fn take_profile() -> Profile {
+    PROFILE.with(std::cell::Cell::take)
+}
+
 use crate::color::Color;
 use crate::geom::{Rect, Transform};
 use crate::render::Painter;
@@ -44,6 +87,8 @@ use crate::render::path::Path;
 
 /// Samples per pixel of the targets.
 const SAMPLES: u32 = 4;
+/// Submits a free target waits to be reused before its textures are dropped (2 s at 60 Hz).
+const KEEP_IDLE_TARGET: u32 = 120;
 /// The format of the colour targets (premultiplied RGBA8, like the CPU canvas's pixmap).
 const COLOR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 /// The format of the clip masks.
@@ -518,10 +563,13 @@ struct Target {
     format: wgpu::TextureFormat,
     /// The device pixels it covers: x, y, width, height.
     region: [u32; 4],
+    /// Submits since it went back to the free list unused.
+    idle: u32,
 }
 
 impl Target {
     fn new(ctx: &GpuContext, region: [u32; 4], format: wgpu::TextureFormat) -> Target {
+        profile(|p| p.targets += 1);
         let (w, h) = (region[2].max(1), region[3].max(1));
         let size = wgpu::Extent3d {
             width: w,
@@ -562,6 +610,7 @@ impl Target {
             color,
             format,
             region,
+            idle: 0,
         }
     }
 }
@@ -819,6 +868,7 @@ impl GpuCanvas {
         let Some(want) = self.pass_on.take() else {
             return;
         };
+        let started_at = std::time::Instant::now();
         let cmds = std::mem::take(&mut self.pending);
         let uniforms = std::mem::take(&mut self.uniforms);
         let vertices = std::mem::take(&mut self.vertices);
@@ -939,6 +989,7 @@ impl GpuCanvas {
                                 ],
                             });
                             binds.push((key, bind));
+                            profile(|p| p.binds += 1);
                             binds.len() - 1
                         }
                     };
@@ -969,6 +1020,12 @@ impl GpuCanvas {
         if is_main {
             self.started = true;
         }
+        profile(|p| {
+            p.passes += 1;
+            p.draws += cmds.len() as u32;
+            p.buffers += if ub.is_some() { 2 } else { 0 };
+            p.encode_us += started_at.elapsed().as_micros() as u64;
+        });
     }
 
     /// Submits what was recorded.
@@ -986,6 +1043,11 @@ impl GpuCanvas {
         }
         let retired = std::mem::take(&mut self.retired);
         self.free.extend(retired);
+        // A size that stopped coming back (a finished resize or animation) frees its textures.
+        for t in &mut self.free {
+            t.idle += 1;
+        }
+        self.free.retain(|t| t.idle <= KEEP_IDLE_TARGET);
     }
 
     fn current(&self) -> Where {
@@ -2062,6 +2124,7 @@ impl Painter for GpuCanvas {
     }
 
     fn backdrop(&mut self, outline: &Path, bd: Backdrop) {
+        profile(|p| p.backdrops += 1);
         if self.layers.is_empty() {
             self.backdrop_flat(outline, bd, 1.0);
             return;
@@ -2446,6 +2509,7 @@ impl GpuCanvas {
         {
             let mut t = self.free.swap_remove(i);
             t.region = region;
+            t.idle = 0;
             return t;
         }
         Target::new(&self.ctx, region, format)

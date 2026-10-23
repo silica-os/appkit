@@ -141,6 +141,14 @@ pub enum Request {
     PopupMenu(Box<crate::core::menu::PopupMenuRequest>),
 }
 
+/// A view painted after its window, over the clips of its containers.
+struct Lifted {
+    id: ViewId,
+    transform: Transform,
+    alpha: f32,
+    dimmed: bool,
+}
+
 /// A compositor glass region (see [`Ui::glass_regions`]).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GlassRegion {
@@ -262,6 +270,11 @@ pub struct Ui {
     raster_cache: bool,
     /// Bytes taken by those images.
     raster_bytes: std::cell::Cell<usize>,
+    /// While a window paints: the clips its ancestors put on the view being painted, the
+    /// opacity they apply, and the views that draw over those clips, painted last.
+    paint_clips: std::cell::Cell<u32>,
+    paint_alpha: std::cell::Cell<f32>,
+    lifted: std::cell::RefCell<Vec<Lifted>>,
     /// The screens (the platform keeps them current).
     pub(crate) outputs: Vec<crate::core::shell::OutputInfo>,
 }
@@ -310,6 +323,9 @@ impl Ui {
             frame_counter: 0,
             raster_cache: false,
             raster_bytes: std::cell::Cell::new(0),
+            paint_clips: std::cell::Cell::new(0),
+            paint_alpha: std::cell::Cell::new(1.0),
+            lifted: std::cell::RefCell::new(Vec::new()),
             outputs: Vec::new(),
         }
     }
@@ -2428,7 +2444,10 @@ impl Ui {
             );
         });
         let own_items = (n.display.items.len() + n.display_over.items.len()) as u32;
-        let own_cacheable = list_cacheable(&n.display) && list_cacheable(&n.display_over);
+        // A view drawn over its containers' clips is not baked into their images.
+        let own_cacheable = list_cacheable(&n.display)
+            && list_cacheable(&n.display_over)
+            && !n.widget.as_deref().is_some_and(|w| w.paints_unclipped());
         let mut content_changed = needs_paint
             || n.raster.own != local
             || n.raster.children != children_sig
@@ -2574,7 +2593,26 @@ impl Ui {
             canvas.fill_rect(bounds, theme.colors.surface_window);
         }
         let cull = clip.or_else(|| self.window(window).map(|w| Rect::from_size(w.size)));
+        self.paint_clips.set(0);
+        self.paint_alpha.set(1.0);
+        self.lifted.borrow_mut().clear();
         self.paint_view(root, canvas, opts, false, cull);
+        // The views that reach past their containers (a drag lens): over the window, with the
+        // damage clip only. A lifted view inside a lifted view was painted with it.
+        let lifted = std::mem::take(&mut *self.lifted.borrow_mut());
+        let base = canvas.transform().invert();
+        for l in lifted {
+            let Some(base) = base else { break };
+            canvas.save();
+            canvas.concat(l.transform.then(base));
+            let layered = l.alpha < 1.0;
+            if layered {
+                canvas.push_opacity(l.alpha);
+            }
+            let size = self.tree.get(l.id).map_or(Size::ZERO, |n| n.frame.size());
+            self.paint_content(l.id, canvas, opts, l.dimmed, size, None);
+            canvas.restore();
+        }
         let veil = self.veil_of(window);
         if veil > 0.0
             && let Some(w) = self.window(window)
@@ -2651,13 +2689,26 @@ impl Ui {
         if dim_here {
             alpha *= crate::amalfi::tokens::states::DISABLED_OPACITY;
         }
+        if self.paint_clips.get() > 0 && n.widget.as_deref().is_some_and(|w| w.paints_unclipped()) {
+            self.lifted.borrow_mut().push(Lifted {
+                id,
+                transform: canvas.transform(),
+                alpha: alpha * self.paint_alpha.get(),
+                dimmed: dimmed || dim_here,
+            });
+            canvas.restore();
+            return;
+        }
         let layered = alpha < 1.0;
+        let outer_alpha = self.paint_alpha.get();
         if layered {
             canvas.save();
             canvas.push_opacity(alpha);
+            self.paint_alpha.set(outer_alpha * alpha);
         }
         let size = n.frame.size();
         if self.raster_cache && self.draw_cached(id, canvas, opts, dimmed || dim_here) {
+            self.paint_alpha.set(outer_alpha);
             if layered {
                 canvas.restore();
             }
@@ -2665,6 +2716,7 @@ impl Ui {
             return;
         }
         self.paint_content(id, canvas, opts, dimmed || dim_here, size, cull);
+        self.paint_alpha.set(outer_alpha);
         if layered {
             canvas.restore();
         }
@@ -2712,11 +2764,14 @@ impl Ui {
             } else {
                 canvas.clip_rect(Rect::from_size(size));
             }
+            self.paint_clips.set(self.paint_clips.get() + 1);
         }
         for c in &n.children {
             self.paint_view(*c, canvas, opts, dimmed, cull);
         }
         if clips {
+            self.paint_clips
+                .set(self.paint_clips.get().saturating_sub(1));
             canvas.restore();
         }
         n.display_over.paint(canvas, opts);
@@ -3100,6 +3155,60 @@ mod tests {
         ui.close_window(win);
         assert!(!ui.tree.contains(a));
         assert!(ui.tree.is_empty());
+    }
+
+    /// Paints 20 points past both sides of its frame; `lifted` says it draws over clips.
+    struct Overflow {
+        lifted: Rc<Cell<bool>>,
+    }
+
+    impl Widget for Overflow {
+        fn kind(&self) -> &'static str {
+            "Overflow"
+        }
+        fn measure(&mut self, _cx: &mut LayoutCx<'_>, _p: Proposal) -> Size {
+            Size::new(40.0, 20.0)
+        }
+        fn paints_unclipped(&self) -> bool {
+            self.lifted.get()
+        }
+        fn paint(&mut self, cx: &mut PaintCx<'_>) {
+            let r = Rect::new(-20.0, 0.0, 80.0, 20.0);
+            let red = crate::color::Color::rgb(255, 0, 0);
+            cx.rec.layer("Wide", r, Shape::RECT, Style::fill(red));
+        }
+    }
+
+    #[test]
+    fn a_lifted_view_draws_over_its_containers_clip() {
+        let mut ui = Ui::new_headless();
+        let win = ui.create_window(WindowKind::Normal, Size::new(200.0, 100.0));
+        let row = ui.create(Stack::row(0.0));
+        let clip = ui.create(Stack::row(0.0));
+        ui.set(clip, Prop::ClipsChildren, Value::Bool(true))
+            .unwrap();
+        let lifted = Rc::new(Cell::new(false));
+        let v = ui.create(Overflow {
+            lifted: lifted.clone(),
+        });
+        ui.add_child(clip, v);
+        ui.add_child(row, clip);
+        ui.set_content(win, row);
+        ui.show_window(win);
+        ui.prepare_frame(win);
+        let r = ui.tree.window_rect(v);
+        // Inside the frame, and 10 points left of it (past the clip).
+        let inside = ((r.center().x * 2.0) as u32, (r.center().y * 2.0) as u32);
+        let past = (((r.x - 10.0) * 2.0) as u32, inside.1);
+        let red = |p: [u8; 4]| p[0] > 200 && p[1] < 50 && p[2] < 50;
+        let img = ui.snapshot(win, 2.0).unwrap();
+        assert!(red(img.pixel(inside.0, inside.1)));
+        assert!(!red(img.pixel(past.0, past.1)), "clipped by its container");
+        lifted.set(true);
+        ui.request_paint(v);
+        let img = ui.snapshot(win, 2.0).unwrap();
+        assert!(red(img.pixel(inside.0, inside.1)));
+        assert!(red(img.pixel(past.0, past.1)), "drawn over the clip");
     }
 
     #[test]
