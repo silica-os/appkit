@@ -669,3 +669,29 @@ fn a_scroll_view_takes_its_mode_axis_and_hold() {
     assert_eq!(s.get_int(Prop::STYLE).unwrap(), 1);
     assert_eq!(s.get_int(Prop::VALUE).unwrap(), 1);
 }
+
+struct FieldOptions;
+
+impl Component for FieldOptions {
+    fn body(&self, cx: &mut Cx) -> Element {
+        let text = cx.state(|| "abc".to_string());
+        column((
+            text_field("x", &text.binding())
+                .id("f")
+                .clearable(true)
+                .error("Bad"),
+            inline_button_field("y", &text.binding(), "Browse", || {}).id("inline"),
+            combo_button(|| {}).id("cb"),
+        ))
+    }
+}
+
+#[test]
+fn fields_take_clear_error_inline_button_and_combo_button() {
+    let _rt = Headless::new().unwrap();
+    let root = mount(host(), || FieldOptions);
+    let f = root.host().find("f").unwrap();
+    assert!(f.get_bool(Prop::SHOWS_CLEAR).unwrap_or(true));
+    assert!(root.host().find("inline").is_some());
+    assert!(root.host().find("cb").is_some());
+}

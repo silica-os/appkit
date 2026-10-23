@@ -21,6 +21,9 @@ impl Component for Page {
         let note = cx.state(String::new);
         let qty = cx.state(|| 3.0f64);
         let disabled = cx.state(|| false);
+        let clearable = cx.state(|| false);
+        let failing = cx.state(|| false);
+        let path = cx.state(String::new);
         let s = size.get() as i64;
         let d = disabled.get();
         let fruits = ["Apple", "Pear", "Plum", "Fig"];
@@ -28,6 +31,8 @@ impl Component for Page {
             text_field("Placeholder", &name.binding())
                 .width(220.0)
                 .control_size(s)
+                .clearable(clearable.get())
+                .error(if failing.get() { "Invalid name" } else { "" })
                 .disabled(d),
             search_field("Search", &query.binding())
                 .width(220.0)
@@ -50,9 +55,8 @@ impl Component for Page {
         let controls = column((
             field("Size", segmented(&SIZES, &size.binding())),
             checkbox("disabled", &disabled.binding()),
-            label("Clearable and error are not options of AppKit's fields.")
-                .text_style("Caption")
-                .color("Text/Tertiary"),
+            checkbox("clearable", &clearable.binding()),
+            checkbox("error", &failing.binding()),
         ))
         .spacing(10.0)
         .alignment(0);
@@ -109,12 +113,8 @@ impl Component for Page {
             .alignment(0),
             column((
                 h2("Inline button"),
-                super::wrapped(
-                    "The text field with a Browse button inside is not in AppKit: not shown.",
-                    "Callout",
-                    "Text/Tertiary",
-                    680.0,
-                ),
+                inline_button_field("Choose a folder", &path.binding(), "Browse", || {})
+                    .width(260.0),
             ))
             .spacing(10.0)
             .alignment(0),
@@ -159,7 +159,7 @@ impl Component for Page {
                     h3("Open"),
                     label("Click the arrow of a combo box to open its list.").color("Text/Secondary"),
                     h2("Combo button"),
-                    super::wrapped("The combo button (a push button joined to a menu) is not in AppKit: not shown.", "Callout", "Text/Tertiary", 680.0),
+                    row((combo_button(|| {}), combo_button(|| {}).control_size(3))).spacing(12.0),
                 ))
                 .spacing(14.0)
                 .alignment(0),

@@ -719,6 +719,17 @@ impl Element {
         self.prop(Prop::STYLE, PValue::Int(s))
     }
 
+    /// A text field's clear button, shown while there is text.
+    pub fn clearable(self, on: bool) -> Self {
+        self.prop(Prop::SHOWS_CLEAR, PValue::Bool(on))
+    }
+
+    /// A text field's error look (the terracotta border and the warning glyph) with `message`
+    /// for assistive technologies; an empty message clears it.
+    pub fn error(self, message: &str) -> Self {
+        self.prop(Prop::SUBTITLE, PValue::Str(Rc::from(message)))
+    }
+
     /// The axes of a scroll view that have a bar: 0 both, 1 vertical only, 2 horizontal only.
     pub fn scroll_axis(self, axis: i64) -> Self {
         self.prop(Prop::VALUE, PValue::Int(axis))

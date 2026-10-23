@@ -533,3 +533,24 @@ pub fn sidebar_footer(add: impl Fn() + 'static, settings: impl Fn() + 'static) -
         button("gear", "Settings", Box::new(settings)),
     ])
 }
+
+/// A text field with a small borderless button inside its trailing edge (a path with
+/// "Browse"); `action` runs on the button.
+pub fn inline_button_field(
+    placeholder: &str,
+    text: &Binding<String>,
+    button_title: &str,
+    action: impl Fn() + 'static,
+) -> Element {
+    text_field(placeholder, text).children(
+        crate::button(button_title)
+            .style(3)
+            .control_size(1)
+            .on_activate(action),
+    )
+}
+
+/// The round chevron button of a combo box on its own (the kit's combo button).
+pub fn combo_button(action: impl Fn() + 'static) -> Element {
+    Element::of(Kind::COMBO_BUTTON).on(Signal::ACTIVATED, move |_| action())
+}
