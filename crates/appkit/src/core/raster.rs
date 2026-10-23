@@ -94,7 +94,7 @@ pub fn list_cacheable(list: &DisplayList) -> bool {
 /// The device scale of `canvas` when its matrix is an axis-aligned uniform scale and
 /// translation that puts `bounds` on whole device pixels (an image then draws exactly
 /// what the subtree would); `None` otherwise.
-pub fn aligned_scale(canvas: &Canvas, bounds: Rect) -> Option<f32> {
+pub fn aligned_scale(canvas: &dyn crate::render::Painter, bounds: Rect) -> Option<f32> {
     let m = canvas.transform().m;
     if m[1].abs() > 1e-6 || m[2].abs() > 1e-6 {
         return None;
@@ -124,7 +124,7 @@ pub fn draw_image(bounds: Rect, scale: f32, subtree: impl FnOnce(&mut Canvas)) -
 }
 
 /// Draws a cached image at its bounds (the canvas is in view coordinates).
-pub fn blit(canvas: &mut Canvas, cached: &Cached) {
+pub fn blit(canvas: &mut dyn crate::render::Painter, cached: &Cached) {
     let w = cached.image.width() as f32 / cached.scale;
     let h = cached.image.height() as f32 / cached.scale;
     canvas.draw_image(

@@ -189,6 +189,7 @@ fn main() {
     if per_key > Duration::from_millis(8) {
         failures.push("typing over 8 ms");
     }
+    gpu_scene();
     dock(&mut failures, snapshot.as_deref());
     symbols_grid(&mut failures, snapshot.as_deref());
     if failures.is_empty() {
@@ -421,5 +422,60 @@ fn symbols_grid(failures: &mut Vec<&'static str>, snapshot: Option<&std::path::P
     // A static page: its full repaint fits a 60 Hz frame (what changes is repainted alone).
     if again > FRAME * 2 {
         failures.push("symbols grid repaint over 16.7 ms");
+    }
+}
+
+/// The 500 controls at 2× on both backends, a frame each (informational: the GPU is skipped
+/// without an adapter).
+fn gpu_scene() {
+    let mut ui = Ui::new_headless();
+    let win = ui.create_window(WindowKind::Normal, Size::new(1600.0, 1000.0));
+    let grid = ui.create(Grid {
+        columns: 20,
+        column_spacing: 8.0,
+        row_spacing: 8.0,
+        alignment: Alignment::TOP_LEADING,
+    });
+    for i in 0..500 {
+        let v = if i % 2 == 0 {
+            ui.create(PushButton::new("Button").variant(PushVariant::Secondary))
+        } else {
+            ui.create(Toggle::checkbox().label("Check"))
+        };
+        ui.add_child(grid, v);
+    }
+    ui.set_content(win, grid);
+    ui.show_window(win);
+    let _ = ui.prepare_frame(win);
+    let (w, h) = (3200, 2000);
+    let mut cpu = Canvas::new(w, h);
+    let t = Instant::now();
+    cpu.save();
+    cpu.scale((2.0, 2.0));
+    ui.paint_window(win, &mut cpu, None);
+    cpu.restore();
+    cpu.flush();
+    println!("scene 500 controls at 2×, CPU canvas: {:?}", t.elapsed());
+    use appkit::render::Painter as _;
+    let Some(ctx) = appkit::render::gpu::GpuContext::new() else {
+        println!("scene 500 controls at 2×, GPU canvas: no adapter, skipped");
+        return;
+    };
+    let mut gpu = appkit::render::gpu::GpuCanvas::new(&ctx, w, h);
+    for pass in 0..2 {
+        let t = Instant::now();
+        gpu.begin(true);
+        gpu.save();
+        gpu.scale((2.0, 2.0));
+        ui.paint_window(win, &mut gpu, None);
+        gpu.restore();
+        gpu.submit();
+        let _ = gpu.into_pixmap();
+        println!(
+            "scene 500 controls at 2×, GPU canvas ({}), {}: {:?} (with readback)",
+            ctx.adapter(),
+            if pass == 0 { "cold" } else { "warm" },
+            t.elapsed()
+        );
     }
 }

@@ -207,7 +207,7 @@ impl DisplayList {
     }
 
     /// Replays the list on `canvas` (in the view's coordinates).
-    pub fn paint(&self, canvas: &mut Canvas, opts: PaintOptions) {
+    pub fn paint(&self, canvas: &mut dyn crate::render::Painter, opts: PaintOptions) {
         let base = canvas.save_count();
         for item in &self.items {
             match item {
@@ -258,7 +258,9 @@ impl DisplayList {
                 }
                 DisplayItem::Custom { rect, draw, .. } => {
                     canvas.save();
-                    draw(canvas, *rect);
+                    if let Some(c) = canvas.as_canvas() {
+                        draw(c, *rect);
+                    }
                     canvas.restore();
                 }
             }
@@ -270,7 +272,7 @@ impl DisplayList {
 /// Paints one symbol glyph: font size = icon box, the glyph centred in the box
 /// horizontally, its em box (ascender = em, descender 0) filling it vertically.
 pub fn paint_glyph(
-    canvas: &mut Canvas,
+    canvas: &mut dyn crate::render::Painter,
     rect: Rect,
     ch: char,
     size: f32,
