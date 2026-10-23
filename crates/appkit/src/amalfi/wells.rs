@@ -21,23 +21,23 @@ use crate::text::Align;
 /// Fixed measures.
 pub mod metrics {
     /// A swatch chip's side.
-    pub const CHIP: f32 = 24.0;
+    pub const CHIP: f32 = crate::amalfi::tokens::control_heights::SMALL;
     /// The selection ring's width.
     pub const RING: f32 = 2.0;
     /// Space between chips.
-    pub const GAP: f32 = 8.0;
+    pub const GAP: f32 = crate::amalfi::tokens::spacing::S;
     /// Space around a row of chips.
-    pub const ROW_PADDING: f32 = 4.0;
+    pub const ROW_PADDING: f32 = crate::amalfi::tokens::spacing::XS;
     /// The colour panel's corner radius.
-    pub const PANEL_RADIUS: f32 = 16.0;
+    pub const PANEL_RADIUS: f32 = crate::amalfi::tokens::radii::POPOVER;
     /// The colour panel's padding: left, top, right, bottom.
     pub const PANEL_PADDING: (f32, f32, f32, f32) = (12.0, 14.0, 12.0, 16.0);
     /// The colour panel's title height.
     pub const PANEL_TITLE: f32 = 18.0;
     /// A swatch row's height.
-    pub const ROW_HEIGHT: f32 = 32.0;
+    pub const ROW_HEIGHT: f32 = crate::amalfi::tokens::control_heights::LARGE;
     /// Space between a colour well and its panel.
-    pub const PANEL_GAP: f32 = 4.0;
+    pub const PANEL_GAP: f32 = crate::amalfi::tokens::spacing::XS;
 }
 
 // ---------------------------------------------------------------------------------------
