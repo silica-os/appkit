@@ -3,6 +3,7 @@
 //! panes, and the single items the kit also has as masters.
 
 use crate::amalfi::foundation::{ControlSize, Label, control_shadow, focus_halo_named, whole};
+use crate::amalfi::sliders::{ThumbRest, morph_style};
 use crate::amalfi::theme::Theme;
 use crate::amalfi::tokens::{self, TypeStyle, control_heights, typography};
 use crate::color::Color;
@@ -15,14 +16,12 @@ use crate::core::widget::{EventCx, FocusKind, Interaction, LayoutCx, PaintCx, Pr
 use crate::geom::{Point, Rect, Size};
 use crate::motion::{Animated, Timing};
 use crate::shape::Shape;
-use crate::style::{Blur, Border, Shadow, Style};
+use crate::style::{Border, Style};
 use crate::text::Align;
 
 /// How much a segmented control grows while held down (ui-kit `--press-scale-segmented`).
 const PRESS_SCALE_SEGMENTED: f32 = 1.035;
 /// The lens blurs what is behind it by 1 pt, saturated 1.2, with corners 1.1 × the item's height.
-const LENS_BLUR: f32 = 1.0;
-const LENS_SATURATION: f32 = 1.2;
 const LENS_RADIUS: f32 = 1.1;
 
 /// Fixed measures.
@@ -251,28 +250,12 @@ impl ItemLook {
 /// `blur(1px) saturate(1.2)` behind, corners `item * 1.1`.
 fn paint_thumb(cx: &mut PaintCx<'_>, theme: &Theme, rect: Rect, item_h: f32, t: f32) {
     let c = &theme.colors;
-    let fade =
-        |col: Color, k: f32| Color::rgba(col.r, col.g, col.b, (f32::from(col.a) * k).round() as u8);
-    let mut style = Style::fill(fade(c.surface_control, 1.0 - t))
-        .with_border(Border::inside(c.line_border.lerp(c.glass_rim_dark, t), 1.0));
-    let mut drop = control_shadow(theme);
-    drop.color = fade(drop.color, 1.0 - t);
-    style = style.with_shadow(drop);
-    if t > 0.0 {
-        style = style
-            .with_inner_shadow(Shadow::new(fade(c.glass_rim_light, t), 0.0, 1.0, 1.0))
-            .with_inner_shadow(Shadow::new(
-                fade(Color::rgba(255, 255, 255, 0x40), t),
-                0.0,
-                0.0,
-                3.0,
-            ))
-            .with_blur(Blur::Background {
-                radius: LENS_BLUR * t,
-                saturation: 1.0 + (LENS_SATURATION - 1.0) * t,
-                brightness: 1.0,
-            });
-    }
+    let rest = ThumbRest {
+        fill: c.surface_control,
+        border: Some(c.line_border),
+        shadow: control_shadow(theme),
+    };
+    let style = morph_style(theme, t, rest, None);
     let radius = item_h / 2.0 + (item_h * LENS_RADIUS - item_h / 2.0) * t;
     cx.rec.layer("Thumb", rect, Shape::rounded(radius), style);
 }
@@ -2307,8 +2290,8 @@ mod tests {
         assert_eq!(lens.shadows[0].color.a, 0);
         assert!(matches!(
             lens.blurs.first(),
-            Some(crate::style::Blur::Background { radius, saturation, .. })
-                if (*radius - 1.0).abs() < 1e-3 && (*saturation - 1.2).abs() < 1e-3
+            Some(crate::style::Blur::Glass(g))
+                if g.radius.abs() < 1e-6 && (g.saturation - 1.2).abs() < 1e-3 && g.magnification > 1.0
         ));
         assert!((radii[0] - item_h * 1.1).abs() < 0.01, "{radii:?}");
         assert!(i + 2 >= n, "the lens is drawn after the items ({i} of {n})");
@@ -2335,37 +2318,6 @@ mod tests {
         out
     }
 
-    /// A separable Gaussian of `sigma` pixels over a `w` x `h` plane (edges clamped).
-    fn gaussian(v: &[f32], w: usize, h: usize, sigma: f32) -> Vec<f32> {
-        let r = (sigma * 3.0).ceil() as isize;
-        let k: Vec<f32> = (-r..=r)
-            .map(|i| (-((i * i) as f32) / (2.0 * sigma * sigma)).exp())
-            .collect();
-        let total: f32 = k.iter().sum();
-        let pass = |src: &[f32], horizontal: bool| -> Vec<f32> {
-            let mut out = vec![0.0; src.len()];
-            for y in 0..h {
-                for x in 0..w {
-                    let mut acc = 0.0;
-                    for (i, wt) in k.iter().enumerate() {
-                        let d = i as isize - r;
-                        let (xx, yy) = if horizontal {
-                            ((x as isize + d).clamp(0, w as isize - 1) as usize, y)
-                        } else {
-                            (x, (y as isize + d).clamp(0, h as isize - 1) as usize)
-                        };
-                        acc += src.get(yy * w + xx).copied().unwrap_or(0.0) * wt;
-                    }
-                    if let Some(o) = out.get_mut(y * w + x) {
-                        *o = acc / total;
-                    }
-                }
-            }
-            out
-        };
-        pass(&pass(v, true), false)
-    }
-
     fn std_dev(v: &[f32]) -> f32 {
         let n = v.len().max(1) as f32;
         let m = v.iter().sum::<f32>() / n;
@@ -2373,7 +2325,7 @@ mod tests {
     }
 
     #[test]
-    fn the_label_under_the_lens_is_blurred_once_by_one_point() {
+    fn the_label_under_the_lens_is_bent_and_magnified_not_blurred() {
         // Reduced motion: no scale, so the held and the resting renders line up.
         let (mut ui, win, id, _log) =
             scene(SegmentedControl::texts(&["Day", "Week", "Month"]).selected(&[1]));
@@ -2394,8 +2346,7 @@ mod tests {
             (item.width - 12.0) * 2.0,
             (item.height - 6.0) * 2.0,
         );
-        let (w, h) = (r.width as usize, r.height as usize);
-        let reference = gaussian(&grey(&rest, r), w, h, 2.0);
+        let reference = grey(&rest, r);
 
         let _ = ui.set(id, Prop::Pressed, Value::Bool(true));
         // Barely started, then settled: the lens only ever gets to its one blur.
@@ -2415,12 +2366,20 @@ mod tests {
         }
         let later = ui.snapshot(win, 2.0).expect("later");
         assert_eq!(held.bytes(), later.bytes());
-        // The text under the lens has the contrast of one σ = 1 pt (2 px) blur: the box passes that stand in for a Gaussian
-        // are 7 % too wide at this size.
+        // Refraction moves pixels under the lens ...
+        let diff: f32 = grey(&held, r)
+            .iter()
+            .zip(&reference)
+            .map(|(a, b)| (a - b).abs())
+            .sum::<f32>()
+            / reference.len().max(1) as f32;
+        assert!(diff > 0.5, "the lens changes nothing ({diff:.2})");
+        // ... but does not blur them: the edge contrast of the label is kept (a 1 pt blur
+        // would cost a third of it).
         let (got, want) = (std_dev(&grey(&held, r)), std_dev(&reference));
         assert!(
-            (got - want).abs() <= want * 0.03,
-            "contrast {got:.2}, a single 1 pt blur gives {want:.2}"
+            got >= want * 0.85,
+            "contrast {got:.2} under the lens, {want:.2} at rest"
         );
     }
 

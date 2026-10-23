@@ -148,7 +148,7 @@ fn horizontal_and_vertical_sliders_match_the_kit() {
             scene.ui.pointer_move(w, start, m);
             scene.settle();
             // Stale kit lens (see above).
-            scene.skip_trees = vec!["Lens thumb".to_string()];
+            scene.skip_trees = vec!["Lens thumb".to_string(), "Thumb".to_string()];
             if let Some(l) = scene.master.rect_in_master("Lens thumb/Lens") {
                 scene.extra_mask.push(l.inflate(1.0, 1.0));
             }

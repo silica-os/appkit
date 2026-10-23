@@ -17,7 +17,7 @@ use crate::core::widget::{EventCx, FocusKind, Interaction, LayoutCx, PaintCx, Pr
 use crate::geom::{Point, Rect, Size};
 use crate::motion::{Animated, Timing};
 use crate::shape::Shape;
-use crate::style::{Blur, Border, BorderPosition, Shadow, Style};
+use crate::style::{Blur, Border, BorderPosition, Glass, Shadow, Style};
 
 /// Fixed measures (silica_ui's `AmalfiSliderMetrics`).
 pub mod metrics {
@@ -101,38 +101,118 @@ pub fn paint_thumb(cx: &mut PaintCx<'_>, prefix: &str, rect: Rect, look: ThumbLo
     }
 }
 
-/// The glass lens a dragged thumb becomes (ui-kit `.s-slider__thumb` while dragging,
-/// `.s-switch__thumb.is-lens`): no fill, a 1 pt `Glass/Rim Dark` ring, `Glass/Rim Light`
-/// (0 1 1) and a white 25 % glow (0 0 3) inside, `blur(1px) saturate(1.2)` behind. `drop` is
-/// the shadow under it (the switch's lens has `Shadow/2`, the slider's none).
-pub fn lens_style(theme: &Theme, opacity: f32, drop: Option<Shadow>) -> Style {
+/// Records the thumb as the one element it is while it turns into the lens: `Thumb`, in
+/// `rect`, its corners half the shorter side, at morph `t`.
+pub fn paint_morph(cx: &mut PaintCx<'_>, prefix: &str, rect: Rect, t: f32, pressed: bool) {
+    let theme = *cx.theme();
     let c = theme.colors;
-    let mut style = Style::default()
-        .with_border(Border::inside(c.glass_rim_dark, 1.0))
-        .with_inner_shadow(Shadow::new(c.glass_rim_light, 0.0, 1.0, 1.0))
-        .with_inner_shadow(Shadow::new(Color::rgba(255, 255, 255, 0x40), 0.0, 0.0, 3.0))
-        .with_blur(Blur::Background {
-            radius: 1.0,
-            saturation: 1.2,
-            brightness: 1.0,
-        })
-        .with_opacity(opacity);
-    if let Some(d) = drop {
+    let rest = ThumbRest {
+        fill: if pressed {
+            c.surface_control_pressed
+        } else {
+            c.surface_control
+        },
+        border: Some(c.line_border),
+        shadow: control_shadow(&theme),
+    };
+    cx.rec.layer(
+        &format!("{prefix}Thumb"),
+        rect,
+        Shape::rounded(rect.width.min(rect.height) / 2.0),
+        morph_style(&theme, t, rest, None),
+    );
+}
+
+/// The clear glass of a lens at morph `t` (0: none, 1: full): the `Glass/Clear` refraction at
+/// the rim and the slight magnification of what is under it, `saturate(1.2)` from the CSS and
+/// no frosting (σ 0), so text under the lens stays sharp, only bent and magnified. The CSS has
+/// no liquid glass and uses `blur(1px)`; AppKit does the real thing.
+pub fn lens_glass(theme: &Theme, t: f32) -> Blur {
+    let t = t.clamp(0.0, 1.0);
+    let m = theme.material("Glass/Clear");
+    let (distortion, depth, chromatic, magnification) = m.map_or((0.3, 0.5, 0.08, 1.1), |m| {
+        (
+            m.distortion,
+            m.depth,
+            m.chromatic_aberration,
+            m.magnification,
+        )
+    });
+    Blur::Glass(Glass {
+        radius: 0.0,
+        saturation: 1.0 + 0.2 * t,
+        brightness: 1.0,
+        distortion: distortion * t,
+        depth,
+        chromatic_aberration: chromatic * t,
+        // The rims are the CSS ones below.
+        specular: false,
+        magnification: 1.0 + (magnification - 1.0) * t,
+    })
+}
+
+/// What a solid thumb looks like at rest, for [`morph_style`].
+#[derive(Debug, Clone, Copy)]
+pub struct ThumbRest {
+    /// The fill.
+    pub fill: Color,
+    /// The 1 pt ring (none for the switch's white thumb).
+    pub border: Option<Color>,
+    /// The drop shadow.
+    pub shadow: Shadow,
+}
+
+fn faded(c: Color, k: f32) -> Color {
+    Color::rgba(
+        c.r,
+        c.g,
+        c.b,
+        (f32::from(c.a) * k.clamp(0.0, 1.0)).round() as u8,
+    )
+}
+
+/// The style of a thumb that is turning into a lens, `t` = 0 the solid thumb and 1 the lens: one
+/// element whose fill, ring, shadows and glass all move together (ui-kit `.s-slider__thumb`,
+/// `.s-switch__thumb`, `.s-segmented__thumb`). The lens: no fill, a 1 pt `Glass/Rim Dark` ring,
+/// `Glass/Rim Light` (0 1 1) and a white 25 % glow (0 0 3) inside, `lens_drop` under it.
+pub fn morph_style(theme: &Theme, t: f32, rest: ThumbRest, lens_drop: Option<Shadow>) -> Style {
+    let t = t.clamp(0.0, 1.0);
+    let c = theme.colors;
+    let mut style = Style::fill(faded(rest.fill, 1.0 - t));
+    let ring = match rest.border {
+        Some(b) => b.lerp(c.glass_rim_dark, t),
+        None => faded(c.glass_rim_dark, t),
+    };
+    style = style.with_border(Border::inside(ring, 1.0));
+    let mut drop = rest.shadow;
+    drop.color = faded(drop.color, 1.0 - t);
+    style = style.with_shadow(drop);
+    if let Some(mut d) = lens_drop.filter(|_| t > 0.0) {
+        d.color = faded(d.color, t);
         style = style.with_shadow(d);
+    }
+    if t > 0.0 {
+        style = style
+            .with_inner_shadow(Shadow::new(faded(c.glass_rim_light, t), 0.0, 1.0, 1.0))
+            .with_inner_shadow(Shadow::new(
+                faded(Color::rgba(255, 255, 255, 0x40), t),
+                0.0,
+                0.0,
+                3.0,
+            ))
+            .with_blur(lens_glass(theme, t));
     }
     style
 }
 
-/// Records the lens over a dragged thumb as the one element it is: `Lens` (corners half its
-/// height). `rect` is the lens.
-pub fn paint_lens(cx: &mut PaintCx<'_>, prefix: &str, rect: Rect, opacity: f32) {
-    let theme = *cx.theme();
-    cx.rec.layer(
-        &format!("{prefix}Lens"),
-        rect,
-        Shape::rounded(rect.width.min(rect.height) / 2.0),
-        lens_style(&theme, opacity, None),
-    );
+/// The timing of a lens morph: `spring.snappy`, or with Reduce Motion the 150 ms fade (and the
+/// geometry then stays put).
+pub fn morph_timing(reduce: bool) -> Timing {
+    if reduce {
+        Timing::curve(tokens::motion::FADE_QUICK_CURVE, tokens::motion::FADE_QUICK)
+    } else {
+        Timing::Spring(tokens::motion::SPRING_SNAPPY)
+    }
 }
 
 /// The value, the pointer and the keyboard of a slider, shared by the line and the dial.
@@ -148,7 +228,8 @@ struct Core {
     grab: Point,
     down_at: Point,
     growth: Animated<f32>,
-    opacity: Animated<f32>,
+    /// Reduce Motion: the lens does not grow.
+    reduced: bool,
     keyed: Option<f32>,
 }
 
@@ -165,7 +246,7 @@ impl Core {
             grab: Point::ZERO,
             down_at: Point::ZERO,
             growth: Animated::new(0.0),
-            opacity: Animated::new(0.0),
+            reduced: false,
             keyed: None,
         }
     }
@@ -205,31 +286,35 @@ impl Core {
         self.dragged = on;
         let v = if on { 1.0 } else { 0.0 };
         self.growth.jump(v);
-        self.opacity.jump(v);
     }
 
+    /// The morph, 0 (the thumb) to 1 (the lens); the spring may overshoot a little.
     fn lens_growth(&self) -> f32 {
         self.growth.get().clamp(0.0, 1.2)
     }
 
+    /// How far the lens is the lens, for its style.
     fn lens_opacity(&self) -> f32 {
-        tokens::motion::FADE_QUICK_CURVE.transform(self.opacity.get().clamp(0.0, 1.0))
+        self.growth.get().clamp(0.0, 1.0)
+    }
+
+    /// How far its rectangle has grown (none with Reduce Motion).
+    fn grown(&self) -> f32 {
+        if self.reduced {
+            0.0
+        } else {
+            self.lens_growth()
+        }
     }
 
     fn shows_lens(&self) -> bool {
-        self.lens_opacity() > 0.0 && self.lens_growth() > 0.0
+        self.growth.get() > 0.0
     }
 
     fn start_drag(&mut self, reduce: bool) {
         self.dragged = true;
-        if reduce {
-            self.growth.jump(1.0);
-            self.opacity.animate_to(1.0, Timing::None);
-            return;
-        }
-        self.opacity.jump(1.0);
-        self.growth
-            .animate_to(1.0, Timing::Spring(tokens::motion::SPRING_SNAPPY));
+        self.reduced = reduce;
+        self.growth.animate_to(1.0, morph_timing(reduce));
     }
 
     fn end(&mut self, cx: &mut EventCx<'_>, reduce: bool) {
@@ -240,12 +325,8 @@ impl Core {
         self.pressed = false;
         if self.dragged {
             self.dragged = false;
-            let t = if reduce {
-                Timing::None
-            } else {
-                Timing::curve(tokens::motion::FADE_QUICK_CURVE, tokens::motion::FADE_QUICK)
-            };
-            self.opacity.animate_to(0.0, t);
+            self.reduced = reduce;
+            self.growth.animate_to(0.0, morph_timing(reduce));
             cx.animate();
         }
         cx.emit(Signal::EditingEnded, Value::Float(f64::from(self.value)));
@@ -253,12 +334,7 @@ impl Core {
     }
 
     fn tick(&mut self, dt: f32) -> bool {
-        let a = self.growth.tick(dt);
-        let b = self.opacity.tick(dt);
-        if !self.dragged && !b && self.opacity.get() <= 0.0 && self.growth.get() != 0.0 {
-            self.growth.jump(0.0);
-        }
-        a || b
+        self.growth.tick(dt)
     }
 
     fn step(&self) -> f32 {
@@ -659,22 +735,23 @@ impl Widget for Slider {
             return;
         }
         let thumb = self.thumb_rect().translate(o);
-        if !self.core.dragged {
+        let focused = cx.focus_visible() && !cx.is_disabled();
+        if self.core.shows_lens() {
+            let lens = self.lens_rect(self.core.grown()).translate(o);
+            paint_morph(
+                cx,
+                &format!("{prefix}Thumb/"),
+                lens,
+                self.core.lens_opacity(),
+                self.core.pressed,
+            );
+        } else {
             let look = ThumbLook {
                 pressed: self.core.pressed,
                 hovered: cx.is_hovered() && !cx.is_disabled(),
-                focused: cx.focus_visible() && !cx.is_disabled(),
+                focused,
             };
             paint_thumb(cx, &format!("{prefix}Thumb/"), thumb, look);
-        }
-        if self.core.shows_lens() || self.core.dragged {
-            let lens = self.lens_rect(self.core.lens_growth()).translate(o);
-            paint_lens(
-                cx,
-                &format!("{prefix}Lens thumb/"),
-                lens,
-                self.core.lens_opacity(),
-            );
         }
     }
 
@@ -953,23 +1030,28 @@ impl Widget for Dial {
             }
         }
         let thumb = Dial::thumb(f).translate(o);
-        if !self.core.dragged {
-            let look = ThumbLook {
-                pressed: self.core.pressed,
-                hovered: cx.is_hovered() && !cx.is_disabled(),
-                focused: cx.focus_visible() && !cx.is_disabled(),
-            };
-            paint_thumb(cx, "Thumb/", thumb, look);
-        }
-        if self.core.shows_lens() || self.core.dragged {
-            let g = self.core.lens_growth();
+        if self.core.shows_lens() {
+            let g = self.core.grown();
             let c = thumb.center();
             let (w, h) = (
                 metrics::THUMB + (metrics::LENS_LONG - metrics::THUMB) * g,
                 metrics::THUMB + (metrics::LENS_SHORT - metrics::THUMB) * g,
             );
             let lens = whole(Rect::new(c.x - w / 2.0, c.y - h / 2.0, w, h));
-            paint_lens(cx, "Lens thumb/", lens, self.core.lens_opacity());
+            paint_morph(
+                cx,
+                "Thumb/",
+                lens,
+                self.core.lens_opacity(),
+                self.core.pressed,
+            );
+        } else {
+            let look = ThumbLook {
+                pressed: self.core.pressed,
+                hovered: cx.is_hovered() && !cx.is_disabled(),
+                focused: cx.focus_visible() && !cx.is_disabled(),
+            };
+            paint_thumb(cx, "Thumb/", thumb, look);
         }
     }
 
@@ -1119,7 +1201,18 @@ impl Widget for LensThumb {
 
     fn paint(&mut self, cx: &mut PaintCx<'_>) {
         let b = cx.bounds();
-        paint_lens(cx, "", b, 1.0);
+        let theme = *cx.theme();
+        let rest = ThumbRest {
+            fill: theme.colors.surface_control,
+            border: Some(theme.colors.line_border),
+            shadow: control_shadow(&theme),
+        };
+        cx.rec.layer(
+            "Lens",
+            b,
+            Shape::rounded(b.width.min(b.height) / 2.0),
+            morph_style(&theme, 1.0, rest, None),
+        );
     }
 
     fn hit(&self, _p: Point, _size: Size) -> bool {
@@ -1131,22 +1224,121 @@ impl Widget for LensThumb {
 mod tests {
     use super::*;
 
+    fn rest(t: &Theme) -> ThumbRest {
+        ThumbRest {
+            fill: t.colors.surface_control,
+            border: Some(t.colors.line_border),
+            shadow: control_shadow(t),
+        }
+    }
+
     #[test]
-    fn the_lens_is_the_css_one_for_sliders_and_switches() {
+    fn the_lens_is_clear_liquid_glass_with_the_css_rims() {
         let t = Theme::light();
-        let slider = lens_style(&t, 1.0, None);
-        // No fill, the rims inside, `blur(1px) saturate(1.2)` behind, no shadow.
-        assert!(slider.fills.is_empty() && slider.shadows.is_empty());
-        assert_eq!(slider.borders.len(), 1);
-        assert_eq!(slider.inner_shadows.len(), 2);
-        assert!(matches!(
-            slider.blurs.first(),
-            Some(Blur::Background { radius, saturation, .. })
-                if (*radius - 1.0).abs() < 1e-3 && (*saturation - 1.2).abs() < 1e-3
-        ));
+        let lens = morph_style(&t, 1.0, rest(&t), None);
+        // No fill, the rims inside, no shadow, and real glass behind: refraction and a slight
+        // magnification, saturate(1.2), and no frosting.
+        assert!(lens.fills.iter().all(|f| f.is_invisible()));
+        assert!(lens.shadows.iter().all(|s| s.color.a == 0));
+        assert_eq!(lens.borders.len(), 1);
+        assert_eq!(lens.inner_shadows.len(), 2);
+        let Some(Blur::Glass(g)) = lens.blurs.first().copied() else {
+            panic!("no glass");
+        };
+        assert!(g.radius.abs() < 1e-6, "a clear lens does not frost");
+        assert!((g.saturation - 1.2).abs() < 1e-3);
+        assert!(g.distortion > 0.0 && g.magnification > 1.0);
         // The switch's lens adds `Shadow/2`.
-        let switch = lens_style(&t, 1.0, t.shadow(2));
-        assert_eq!(switch.shadows.first().copied(), t.shadow(2));
+        let switch = morph_style(&t, 1.0, rest(&t), t.shadow(2));
+        assert_eq!(switch.shadows.last().copied(), t.shadow(2));
+    }
+
+    #[test]
+    fn a_dragged_slider_thumb_morphs_into_one_glass_element() {
+        let (mut ui, win, id, _log) = scene(Slider::new().value(0.5));
+        let thumbs = |ui: &mut Ui| -> Vec<(Rect, bool)> {
+            ui.inspect_layers(id)
+                .iter()
+                .filter(|l| l.path.ends_with("Thumb/Thumb"))
+                .map(|l| {
+                    let glass = matches!(
+                        &l.content,
+                        crate::core::InspectedContent::Shape { style, .. }
+                            if matches!(style.blurs.first(), Some(Blur::Glass(_)))
+                    );
+                    (l.frame, glass)
+                })
+                .collect()
+        };
+        let rest = thumbs(&mut ui);
+        assert_eq!(rest.len(), 1);
+        assert!(!rest[0].1);
+        let p = at(&ui, id, 100.0, 10.0);
+        ui.pointer_move(win, p, Mods::empty());
+        ui.pointer_down(win, p, Button::Left, Mods::empty());
+        // Mid-spring: still one element, already growing.
+        ui.advance(0.05);
+        ui.prepare_frame(win);
+        let mid = thumbs(&mut ui);
+        assert_eq!(mid.len(), 1, "{mid:?}");
+        assert!(mid[0].0.width > rest[0].0.width);
+        for _ in 0..60 {
+            ui.advance(1.0 / 60.0);
+        }
+        ui.prepare_frame(win);
+        let held = thumbs(&mut ui);
+        assert_eq!(held.len(), 1);
+        assert!(held[0].1, "the held thumb is glass");
+        assert!(
+            (held[0].0.width - metrics::LENS_LONG).abs() < 0.6,
+            "{held:?}"
+        );
+        ui.pointer_up(win, p, Button::Left, Mods::empty());
+        for _ in 0..60 {
+            ui.advance(1.0 / 60.0);
+        }
+        ui.prepare_frame(win);
+        let back = thumbs(&mut ui);
+        assert!(!back[0].1 && (back[0].0.width - rest[0].0.width).abs() < 0.6);
+    }
+
+    #[test]
+    fn reduced_motion_morphs_the_slider_thumb_without_growing() {
+        let (mut ui, win, id, _log) = scene(Slider::new().value(0.5));
+        let mut a = ui.appearance;
+        a.reduce_motion = true;
+        ui.set_appearance(a);
+        let p = at(&ui, id, 100.0, 10.0);
+        ui.pointer_move(win, p, Mods::empty());
+        ui.pointer_down(win, p, Button::Left, Mods::empty());
+        for _ in 0..30 {
+            ui.advance(1.0 / 60.0);
+        }
+        ui.prepare_frame(win);
+        let w = ui
+            .inspect_layers(id)
+            .iter()
+            .find(|l| l.path.ends_with("Thumb/Thumb"))
+            .map(|l| l.frame.width)
+            .unwrap_or(0.0);
+        assert!((w - metrics::THUMB).abs() < 0.6, "no scale: {w}");
+    }
+
+    #[test]
+    fn the_thumb_and_the_lens_are_one_element() {
+        let t = Theme::light();
+        let at_rest = morph_style(&t, 0.0, rest(&t), None);
+        assert!(at_rest.blurs.is_empty() && at_rest.inner_shadows.is_empty());
+        let half = morph_style(&t, 0.5, rest(&t), None);
+        let Some(Blur::Glass(g)) = half.blurs.first().copied() else {
+            panic!("no glass");
+        };
+        assert!(g.magnification > 1.0 && g.magnification < 1.1 + 1e-3);
+        assert!(
+            half.fills
+                .iter()
+                .any(|f| f.solid().is_some_and(|c| c.a > 0))
+        );
     }
     use crate::core::event::{KeyEvent, Mods};
     use crate::core::ui::Ui;

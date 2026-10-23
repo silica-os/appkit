@@ -5,7 +5,7 @@
 use crate::amalfi::foundation::{
     ControlSize, Interaction as Transitions, Label, control_shadow, focus_halo_named,
 };
-use crate::amalfi::sliders::lens_style;
+use crate::amalfi::sliders::{ThumbRest, morph_style, morph_timing};
 use crate::amalfi::theme::Theme;
 use crate::amalfi::tokens::{self, typography};
 use crate::color::Color;
@@ -15,7 +15,7 @@ use crate::core::layout::Proposal;
 use crate::core::tree::NodeFlags;
 use crate::core::value::{Prop, Signal, Value};
 use crate::core::widget::{EventCx, FocusKind, Interaction, LayoutCx, PaintCx, PropChange, Widget};
-use crate::geom::{Rect, Size};
+use crate::geom::{Point, Rect, Size};
 use crate::motion::{Animated, Timing};
 use crate::shape::Shape;
 use crate::style::{Border, Style};
@@ -118,6 +118,8 @@ pub struct Switch {
     suppress_activate: bool,
     /// The lens held up by `Prop::Dragging`.
     forced_lens: bool,
+    /// Reduce Motion: the lens does not grow.
+    lens_reduced: bool,
 }
 
 impl Switch {
@@ -139,6 +141,7 @@ impl Switch {
             thumb_from: 0.0,
             suppress_activate: false,
             forced_lens: false,
+            lens_reduced: false,
         }
     }
 
@@ -295,49 +298,52 @@ impl Widget for Switch {
             focus_halo_named(cx.rec, &format!("{prefix}Focus Halo"), track, shape, &theme);
         }
 
-        // Thumb.
+        // The thumb, which turns into the lens as one element: its rectangle, corners, fill,
+        // shadows and glass all move together (ui-kit `.s-switch__thumb.is-lens`).
         let x = m.clamp_x(self.thumb.get());
-        if !self.dragging && !self.forced_lens {
-            let stretch = SwitchMetrics::PRESSED_STRETCH * press;
-            let left = if self.on { x - stretch } else { x };
-            cx.rec.layer(
-                &format!("{prefix}Thumb"),
-                Rect::new(
-                    track.x + left,
-                    track.y + SwitchMetrics::INSET,
-                    m.thumb + stretch,
-                    m.thumb,
-                ),
-                Shape::rounded(m.thumb_radius),
-                Style::fill(c.text_on_accent).with_shadow(control_shadow(&theme)),
-            );
+        let morph = self.lens.get().clamp(0.0, 1.0);
+        let stretch = if self.dragging || morph > 0.0 {
+            0.0
+        } else {
+            SwitchMetrics::PRESSED_STRETCH * press
+        };
+        let left = if self.on { x - stretch } else { x };
+        let rest = Rect::new(
+            track.x + left,
+            track.y + SwitchMetrics::INSET,
+            m.thumb + stretch,
+            m.thumb,
+        );
+        let side = m.thumb + m.lens_growth;
+        let centre = Point::new(track.x + x + m.thumb / 2.0, track.y + m.track.height / 2.0);
+        let lens = Rect::new(centre.x - side / 2.0, centre.y - side / 2.0, side, side);
+        let g = if self.lens_reduced {
+            0.0
+        } else {
+            self.lens.get().clamp(0.0, 1.2)
+        };
+        let lerp = |a: f32, b: f32| a + (b - a) * g;
+        let rect = Rect::new(
+            lerp(rest.x, lens.x),
+            lerp(rest.y, lens.y),
+            lerp(rest.width, lens.width),
+            lerp(rest.height, lens.height),
+        );
+        let thumb_rest = ThumbRest {
+            fill: c.text_on_accent,
+            border: None,
+            shadow: control_shadow(&theme),
+        };
+        let mut style = morph_style(&theme, morph, thumb_rest, theme.shadow(2));
+        if morph <= 0.0 {
+            style.borders.clear();
         }
-
-        // The lens over the thumb.
-        let presence = self.lens.get().clamp(0.0, 1.0);
-        if self.dragging || presence > 0.0 {
-            let lens = m.thumb + m.lens_growth;
-            let side = if self.dragging {
-                m.thumb + (lens - m.thumb) * presence
-            } else {
-                lens
-            };
-            let centre_x = track.x + x + m.thumb / 2.0;
-            let centre_y = track.y + m.track.height / 2.0;
-            let rect = Rect::new(centre_x - side / 2.0, centre_y - side / 2.0, side, side);
-            // The CSS lens: the rims and `blur(1px) saturate(1.2)` of the slider's, over `Shadow/2`.
-            let style = lens_style(
-                &theme,
-                if self.dragging { 1.0 } else { presence },
-                theme.shadow(2),
-            );
-            cx.rec.layer(
-                &format!("{prefix}Lens"),
-                rect,
-                Shape::rounded(side / 2.0),
-                style,
-            );
-        }
+        cx.rec.layer(
+            &format!("{prefix}Thumb"),
+            rect,
+            Shape::rounded(lerp(m.thumb_radius, side / 2.0).min(rect.width.min(rect.height) / 2.0)),
+            style,
+        );
 
         // The label.
         if let Some(label) = self.label.clone() {
@@ -388,12 +394,8 @@ impl Widget for Switch {
                     self.dragging = true;
                     self.drag_from = down;
                     self.thumb_from = self.thumb.get();
-                    let timing = if reduce {
-                        Timing::None
-                    } else {
-                        Timing::Spring(tokens::motion::SPRING_SNAPPY)
-                    };
-                    self.lens.animate_to(1.0, timing);
+                    self.lens_reduced = reduce;
+                    self.lens.animate_to(1.0, morph_timing(reduce));
                 }
                 // The lens stays 2 pt inside the track (ui-kit `onMove`).
                 let m = self.metrics();
@@ -424,12 +426,8 @@ impl Widget for Switch {
                     self.dragging = false;
                     self.suppress_activate = true;
                     let on = self.thumb_is_on();
-                    let fade = if reduce {
-                        Timing::None
-                    } else {
-                        Timing::curve(tokens::motion::FADE_QUICK_CURVE, tokens::motion::FADE_QUICK)
-                    };
-                    self.lens.animate_to(0.0, fade);
+                    self.lens_reduced = reduce;
+                    self.lens.animate_to(0.0, morph_timing(reduce));
                     if on != self.on {
                         self.on = on;
                         cx.emit(Signal::ValueChanged, Value::Bool(on));
@@ -587,13 +585,22 @@ mod tests {
         let _ = ui.set(id, Prop::Dragging, Value::Bool(true));
         ui.prepare_frame(win);
         assert_eq!(ui.get(id, Prop::Dragging), Some(Value::Bool(true)));
-        let layers = ui.inspect_layers(id);
-        assert!(layers.iter().any(|l| l.name == "Lens"), "{layers:?}");
-        assert!(!layers.iter().any(|l| l.name == "Thumb"));
+        // One element: the thumb is the lens, with real glass behind it.
+        let glass = |ui: &mut Ui| {
+            let layers = ui.inspect_layers(id);
+            let thumbs: Vec<_> = layers.iter().filter(|l| l.name == "Thumb").collect();
+            assert_eq!(thumbs.len(), 1, "{layers:?}");
+            assert!(!layers.iter().any(|l| l.name == "Lens"));
+            matches!(
+                &thumbs[0].content,
+                crate::core::InspectedContent::Shape { style, .. }
+                    if matches!(style.blurs.first(), Some(crate::style::Blur::Glass(_)))
+            )
+        };
+        assert!(glass(&mut ui));
         let _ = ui.set(id, Prop::Dragging, Value::Bool(false));
         ui.prepare_frame(win);
-        let layers = ui.inspect_layers(id);
-        assert!(layers.iter().any(|l| l.name == "Thumb"));
+        assert!(!glass(&mut ui));
         assert!(log.borrow().is_empty());
     }
 

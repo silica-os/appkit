@@ -271,7 +271,7 @@ fn switches_match_the_kit() {
             // The kit's lens (`Glass/Clear`) is stale: the live ui-kit CSS is the reference, so
             // the layer is not compared (the lib tests check it); its region is left out of
             // the pixels.
-            scene.skip_trees = vec!["Lens".to_string()];
+            scene.skip_trees = vec!["Lens".to_string(), "Thumb".to_string()];
             if let Some(l) = scene.master.rect_in_master("Lens") {
                 scene.extra_mask.push(l.inflate(1.0, 1.0));
             }
