@@ -128,6 +128,20 @@ name = "appkit-inspector"
 version = "0.1.0"
 
 [[package]]
+name = "appkit-materials"
+version = "0.1.0"
+dependencies = [
+ "appkit-ui",
+]
+
+[[package]]
+name = "appkit-motion"
+version = "0.1.0"
+dependencies = [
+ "appkit-ui",
+]
+
+[[package]]
 name = "appkit-rs"
 version = "0.1.0"
 dependencies = [
@@ -145,6 +159,13 @@ version = "0.1.0"
 dependencies = [
  "appkit",
  "serde_json",
+]
+
+[[package]]
+name = "appkit-touchpad"
+version = "0.1.0"
+dependencies = [
+ "appkit-ui",
 ]
 
 [[package]]

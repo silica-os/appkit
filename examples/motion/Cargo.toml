@@ -1,0 +1,18 @@
+[package]
+name = "appkit-motion"
+description = "The motion tokens, played"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "appkit-motion"
+path = "src/main.rs"
+
+[dependencies]
+appkit-ui = { path = "../../crates/appkit-ui" }
+
+[lints]
+workspace = true

@@ -2,8 +2,6 @@
 
 use appkit_ui::prelude::*;
 
-use super::{page, section};
-
 /// The page.
 pub struct Page;
 
@@ -22,4 +20,24 @@ impl Component for Page {
             .corner_radius(20.0);
         page(vec![section("Glass: Thin, Regular, Thick", backdrop)])
     }
+}
+
+/// A titled block of the page.
+fn section(title: &str, content: Element) -> Element {
+    column((
+        label(title).text_style("Headline").color("Text/Secondary"),
+        content,
+    ))
+    .spacing(8.0)
+    .alignment(0)
+}
+
+/// The page: its sections, top to bottom.
+fn page(sections: Vec<Element>) -> Element {
+    column(sections)
+        .spacing(20.0)
+        .alignment(0)
+        .padding(24.0)
+        .fill_width()
+        .align(0)
 }

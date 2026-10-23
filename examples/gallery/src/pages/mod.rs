@@ -4,16 +4,13 @@ use appkit_ui::prelude::*;
 
 mod alerts;
 mod buttons;
-mod callouts;
 mod collections;
 mod dialogs;
 mod disclosure;
 mod fields;
 mod forms;
 mod group_boxes;
-mod materials;
 mod menus;
-mod motion;
 mod panels;
 mod popovers;
 mod popup;
@@ -28,7 +25,6 @@ mod steppers;
 mod titlebars;
 mod toggles;
 mod tooltips;
-mod touchpad;
 mod wells;
 mod windows;
 
@@ -50,40 +46,63 @@ macro_rules! page {
             build: || component($m::Page),
         }
     };
+    ($name:expr, $symbol:expr, $m:ident, $only:expr) => {
+        Entry {
+            name: $name,
+            symbol: $symbol,
+            build: || component($m::Page($only)),
+        }
+    };
 }
 
-/// Every page: the families of the kit, the motion page and the Settings example.
+/// Every page, in the order and under the names of the ui-kit Library (`pages.js`). The
+/// families the Library has no page for (Collections, Panels, Status Bar) sit in their
+/// alphabetical place.
 pub const PAGES: &[Entry] = &[
     page!("Alerts", "warning", alerts),
     page!("Buttons", "square", buttons),
-    page!("Callouts", "message", callouts),
     page!("Collections", "list-bullet", collections),
+    page!("Color Wells", "palette", wells, &[1]),
+    page!("Combo Boxes", "chevron-down", fields, &[5]),
     page!("Dialogs", "compose", dialogs),
-    page!("Disclosure", "chevron-right", disclosure),
-    page!("Fields", "text-size", fields),
+    page!("Disclosure Controls", "chevron-right", disclosure),
     page!("Forms", "list-bullet", forms),
     page!("Group Boxes", "square", group_boxes),
-    page!("Materials", "drop", materials),
+    page!("Image Wells", "photo", wells, &[2]),
     page!("Menus", "list-bullet", menus),
-    page!("Pop-up and Pull-down", "chevron-down", popup),
-    page!("Popovers", "message", popovers),
     page!("Panels", "palette", panels),
-    page!("Progress", "gauge", progress),
+    page!("Pop-up and Pull-down Buttons", "chevron-down", popup),
+    page!("Popovers", "message", popovers),
+    page!("Progress Indicators", "gauge", progress),
     page!("Scrollbars", "chevron-down", scrollbars),
-    page!("Segments", "window-split", segments),
+    page!("Search Fields", "search", fields, &[3]),
+    page!("Segmented Controls", "window-split", segments),
     page!("Sidebars", "sidebar", sidebars),
     page!("Sliders", "sliders", sliders),
     page!("Status Bar", "minus", statusbar),
     page!("Steppers", "plus", steppers),
-    page!("Titlebars", "window", titlebars),
-    page!("Toggles", "square", toggles),
+    page!("Text Fields", "text-size", fields, &[1, 2, 4]),
+    page!("Titlebars and toolbars", "window", titlebars),
+    page!("Toggles - Checkboxes", "square", toggles, &[1]),
+    page!("Toggles - Radio Buttons", "square", toggles, &[2]),
+    page!("Toggles - Switches", "square", toggles, &[3]),
     page!("Tooltips", "info", tooltips),
-    page!("Touchpad", "arrow-left-right", touchpad),
-    page!("Wells", "palette", wells),
     page!("Windows", "window", windows),
-    page!("Motion", "waveform", motion),
     page!("Example: Settings", "gear", settings),
 ];
+
+/// The sections of a page that a sidebar entry shows: `only` lists them (1-based; empty: all).
+pub fn pick(only: &[usize], sections: Vec<Element>) -> Vec<Element> {
+    if only.is_empty() {
+        return sections;
+    }
+    sections
+        .into_iter()
+        .enumerate()
+        .filter(|(i, _)| only.contains(&(i + 1)))
+        .map(|(_, e)| e)
+        .collect()
+}
 
 /// A titled block of a page.
 pub fn section(title: &str, content: Element) -> Element {

@@ -2,10 +2,10 @@
 
 use appkit_ui::prelude::*;
 
-use super::{captioned, page, section};
+use super::{captioned, page, pick, section};
 
 /// The page.
-pub struct Page;
+pub struct Page(pub &'static [usize]);
 
 impl Component for Page {
     fn body(&self, cx: &mut Cx) -> Element {
@@ -43,10 +43,13 @@ impl Component for Page {
         ))
         .spacing(24.0)
         .alignment(1);
-        page(vec![
-            section("Checkboxes", checks),
-            section("Radio buttons", radios),
-            section("Switches", switches),
-        ])
+        page(pick(
+            self.0,
+            vec![
+                section("Checkboxes", checks),
+                section("Radio buttons", radios),
+                section("Switches", switches),
+            ],
+        ))
     }
 }

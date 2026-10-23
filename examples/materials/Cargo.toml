@@ -1,0 +1,18 @@
+[package]
+name = "appkit-materials"
+description = "The glass materials over a coloured backdrop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "appkit-materials"
+path = "src/main.rs"
+
+[dependencies]
+appkit-ui = { path = "../../crates/appkit-ui" }
+
+[lints]
+workspace = true

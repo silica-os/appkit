@@ -3,10 +3,10 @@
 use appkit_ui::kit::Kind;
 use appkit_ui::prelude::*;
 
-use super::{captioned, page, section};
+use super::{captioned, page, pick, section};
 
 /// The page.
-pub struct Page;
+pub struct Page(pub &'static [usize]);
 
 impl Component for Page {
     fn body(&self, cx: &mut Cx) -> Element {
@@ -18,9 +18,12 @@ impl Component for Page {
             .collect::<Vec<_>>())
         .spacing(24.0)
         .alignment(1);
-        page(vec![
-            section("Colour wells", styles),
-            section("Image well", view(Kind::IMAGE_WELL).frame(96.0, 96.0)),
-        ])
+        page(pick(
+            self.0,
+            vec![
+                section("Colour wells", styles),
+                section("Image well", view(Kind::IMAGE_WELL).frame(96.0, 96.0)),
+            ],
+        ))
     }
 }
