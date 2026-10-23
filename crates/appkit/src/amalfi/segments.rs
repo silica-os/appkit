@@ -942,15 +942,26 @@ impl Widget for SegmentedControl {
                 }
                 None => PropChange::Unknown,
             },
-            Prop::SelectedRows => match value {
-                Value::IntList(l) => {
-                    self.selected = l.iter().filter_map(|i| usize::try_from(*i).ok()).collect();
-                    self.selected.sort_unstable();
-                    self.selected.dedup();
-                    PropChange::Paint
+            // An integer list, or (through the ABI) the indices as a list of strings.
+            Prop::SelectedRows => {
+                let list: Option<Vec<usize>> = match value {
+                    Value::IntList(l) => {
+                        Some(l.iter().filter_map(|i| usize::try_from(*i).ok()).collect())
+                    }
+                    other => other
+                        .as_str_list()
+                        .map(|l| l.iter().filter_map(|s| s.parse().ok()).collect()),
+                };
+                match list {
+                    Some(mut l) => {
+                        l.sort_unstable();
+                        l.dedup();
+                        self.selected = l;
+                        PropChange::Paint
+                    }
+                    None => PropChange::Unknown,
                 }
-                _ => PropChange::Unknown,
-            },
+            }
             Prop::ControlSize => match value.as_int().and_then(ControlSize::from_int) {
                 Some(s) => {
                     self.size = s;

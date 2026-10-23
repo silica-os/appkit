@@ -802,3 +802,11 @@ fn the_clipboard_is_written_through_the_abi() {
     let host = host();
     assert!(host.request_paste().is_ok());
 }
+
+#[test]
+fn the_selected_segments_of_a_multiple_control_reach_the_widget() {
+    let _rt = Headless::new().unwrap();
+    let root = mount(host(), || Segs);
+    let multi = root.host().find("multi").unwrap();
+    assert_eq!(multi.get_ints(Prop::SELECTED_ROWS).unwrap(), vec![0, 2]);
+}
