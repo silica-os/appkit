@@ -22,7 +22,7 @@ use crate::style::Style;
 /// Fixed measures of the kit.
 pub mod metrics {
     /// The corner radius.
-    pub const RADIUS: f32 = 16.0;
+    pub const RADIUS: f32 = crate::amalfi::tokens::radii::POPOVER;
     /// How far the arrow sticks out of the body.
     pub const ARROW_DEPTH: f32 = 8.0;
     /// Half the width of the arrow's base.
@@ -34,9 +34,9 @@ pub mod metrics {
     /// The arrow's distance from the start or end of its edge.
     pub const ARROW_INSET: f32 = 30.0;
     /// The space between the body's edge and a form or text content.
-    pub const PADDING: f32 = 16.0;
+    pub const PADDING: f32 = crate::amalfi::tokens::spacing::L;
     /// The space around a list.
-    pub const LIST_PADDING: f32 = 8.0;
+    pub const LIST_PADDING: f32 = crate::amalfi::tokens::spacing::S;
 }
 
 /// The edge of a popover that carries the arrow (the side facing what it points at).
