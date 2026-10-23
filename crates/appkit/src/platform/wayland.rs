@@ -2302,7 +2302,9 @@ impl PointerHandler for Platform {
                         }
                     };
                     let (dx, dy) = (step(&horizontal), step(&vertical));
-                    let phase = if horizontal.stop || vertical.stop {
+                    // A stop ends the gesture only when nothing moved in this frame: a
+                    // compositor may stop one axis while the other still scrolls.
+                    let phase = if (horizontal.stop || vertical.stop) && dx == 0.0 && dy == 0.0 {
                         Phase::Ended
                     } else if precise {
                         Phase::Changed
