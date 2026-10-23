@@ -17,16 +17,15 @@ use crate::style::{Border, Style};
 /// Fixed measures (silica_ui's `AmalfiScrollbarMetrics`).
 pub mod metrics {
     /// The thin overlay thumb.
-    pub const THIN_THUMB: f32 = 4.0;
+    pub const THIN_THUMB: f32 = crate::amalfi::tokens::spacing::XS;
     /// The thumb of an expanded overlay bar and of a legacy bar.
-    pub const THUMB: f32 = 8.0;
+    pub const THUMB: f32 = crate::amalfi::tokens::spacing::S;
     /// The shortest thumb.
     pub const MIN_THUMB: f32 = 24.0;
     /// The corner's side.
-    pub const CORNER: f32 = 16.0;
-    /// Seconds an overlay bar stays after the scrolling stops (an assumption: the reference
-    /// does not measure it).
-    pub const HIDE_DELAY: f64 = 1.0;
+    pub const CORNER: f32 = crate::amalfi::tokens::spacing::L;
+    /// Seconds an overlay bar stays after the scrolling stops (`SScrollArea`: 900 ms).
+    pub const HIDE_DELAY: f64 = 0.9;
 }
 
 /// The two kinds of scrollbar.
@@ -43,8 +42,8 @@ impl ScrollbarStyle {
     /// The bar's thickness.
     pub fn thickness(self) -> f32 {
         match self {
-            ScrollbarStyle::Overlay => 12.0,
-            ScrollbarStyle::Legacy => 16.0,
+            ScrollbarStyle::Overlay => crate::amalfi::tokens::spacing::M,
+            ScrollbarStyle::Legacy => crate::amalfi::tokens::spacing::L,
         }
     }
 }
@@ -58,6 +57,9 @@ pub struct BarLook {
     pub style: ScrollbarStyle,
     /// How far an overlay bar has expanded (track and wider thumb), 0-1.
     pub expansion: f32,
+    /// How far the thumb has grown from thin to wide, 0-1; it springs (`spring.snappy`) where
+    /// the track fades. `None`: as far as the bar has expanded.
+    pub growth: Option<f32>,
     /// The pointer is over a legacy bar.
     pub hovered: bool,
     /// The thumb is being dragged.
@@ -76,8 +78,9 @@ pub fn paint_bar(cx: &mut PaintCx<'_>, prefix: &str, rect: Rect, look: &BarLook)
         1.0
     };
     let thickness = look.style.thickness();
+    let g = look.growth.unwrap_or(t);
     let thumb_t = if overlay {
-        metrics::THIN_THUMB + (metrics::THUMB - metrics::THIN_THUMB) * t
+        (metrics::THIN_THUMB + (metrics::THUMB - metrics::THIN_THUMB) * g).max(0.0)
     } else {
         metrics::THUMB
     };
@@ -138,6 +141,7 @@ impl Scrollbar {
                 axis: Axis::Vertical,
                 style: ScrollbarStyle::Overlay,
                 expansion: 0.0,
+                growth: None,
                 hovered: false,
                 dragging: false,
                 thumb: None,
@@ -233,6 +237,10 @@ pub struct ScrollView {
     viewport: Size,
     shown: Animated<f32>,
     expanded: Animated<f32>,
+    grow: Animated<f32>,
+    area: bool,
+    glide: Animated<Point>,
+    gliding: bool,
     hovered: Option<Axis>,
     drag: Option<(Axis, f32, f32)>,
     last_scroll: f64,
@@ -253,6 +261,11 @@ struct Touch {
     /// How far the content is pulled past an edge (positive: past the far edge).
     over: Animated<Point>,
 }
+
+/// A click in the track and the page keys scroll this much of a page.
+const PAGE: f32 = 0.9;
+/// An arrow key scrolls this many points.
+const ARROW_STEP: f32 = 40.0;
 
 /// Kinetic scrolling slows by this factor per millisecond (the reference desktop's value; the
 /// ui-kit tokens carry none).
@@ -277,6 +290,10 @@ impl ScrollView {
             viewport: Size::ZERO,
             shown: Animated::new(0.0),
             expanded: Animated::new(0.0),
+            grow: Animated::new(0.0),
+            area: false,
+            glide: Animated::new(Point::ZERO),
+            gliding: false,
             hovered: None,
             drag: None,
             last_scroll: f64::NEG_INFINITY,
@@ -412,20 +429,103 @@ impl ScrollView {
         }
     }
 
+    /// Scrolls smoothly to `to` (a click in the track, the page keys).
+    fn glide_to(&mut self, cx: &mut EventCx<'_>, to: Point) {
+        let to = self.clamp(to);
+        if to == self.offset {
+            return;
+        }
+        self.glide.jump(self.offset);
+        self.glide.animate_to(
+            to,
+            Timing::curve(
+                tokens::motion::FADE_STANDARD_CURVE,
+                tokens::motion::FADE_STANDARD,
+            ),
+        );
+        self.gliding = true;
+        cx.animate();
+    }
+
+    fn tick_glide(&mut self, cx: &mut EventCx<'_>, dt: f32) -> bool {
+        if !self.gliding {
+            return false;
+        }
+        let more = self.glide.tick(dt);
+        let p = self.glide.get();
+        self.set_offset_keep_glide(cx, p);
+        if !more {
+            self.gliding = false;
+        }
+        more
+    }
+
+    fn set_offset_keep_glide(&mut self, cx: &mut EventCx<'_>, p: Point) {
+        let was = self.gliding;
+        self.set_offset(cx, p);
+        self.gliding = was;
+    }
+
+    /// The scrolling keys (they reach the view when what has the focus leaves them alone).
+    fn key(&mut self, cx: &mut EventCx<'_>, k: &crate::core::event::KeyEvent) -> Handled {
+        use crate::core::event::{Key, Mods};
+        if k.mods.intersects(Mods::LOGO | Mods::CTRL | Mods::ALT) {
+            return Handled::No;
+        }
+        let max = self.max_offset();
+        let (w, h) = (self.viewport.width, self.viewport.height);
+        let mut to = self.offset;
+        match k.key {
+            Key::Down if self.vertical => to.y += ARROW_STEP,
+            Key::Up if self.vertical => to.y -= ARROW_STEP,
+            Key::Right if self.horizontal => to.x += ARROW_STEP,
+            Key::Left if self.horizontal => to.x -= ARROW_STEP,
+            Key::PageDown if self.vertical => to.y += h * PAGE,
+            Key::PageUp if self.vertical => to.y -= h * PAGE,
+            Key::Space if self.vertical => {
+                to.y += if k.mods.contains(Mods::SHIFT) { -h } else { h } * PAGE;
+            }
+            Key::Home if self.vertical => to.y = 0.0,
+            Key::End if self.vertical => to.y = max.y,
+            Key::Home if self.horizontal => to.x = 0.0,
+            Key::End if self.horizontal => to.x = max.x,
+            _ => return Handled::No,
+        }
+        let _ = w;
+        let before = self.offset;
+        let to = self.clamp(to);
+        if to == before {
+            return Handled::No;
+        }
+        match k.key {
+            Key::Down | Key::Up | Key::Left | Key::Right | Key::Home | Key::End => {
+                self.gliding = false;
+                self.set_offset(cx, to);
+            }
+            _ => self.glide_to(cx, to),
+        }
+        Handled::Yes
+    }
+
     fn held_now(&self) -> bool {
-        self.hovered.is_some() || self.drag.is_some() || self.hold != Hold::None
+        self.hovered.is_some() || self.area || self.drag.is_some() || self.hold != Hold::None
     }
 
     fn sync_animation(&mut self, cx: &mut EventCx<'_>) {
         let reduce = cx.theme().appearance.reduce_motion;
-        let quick = if reduce {
-            Timing::None
-        } else {
-            Timing::curve(tokens::motion::FADE_QUICK_CURVE, tokens::motion::FADE_QUICK)
-        };
+        let quick = Timing::curve(tokens::motion::FADE_QUICK_CURVE, tokens::motion::FADE_QUICK);
         let expand = self.hovered.is_some() || self.drag.is_some() || self.hold == Hold::Expanded;
-        self.expanded
-            .animate_to(if expand { 1.0 } else { 0.0 }, quick);
+        let target = if expand { 1.0 } else { 0.0 };
+        self.expanded.animate_to(target, quick);
+        // The thumb's cross-axis geometry springs; with Reduce Motion it takes the short fade.
+        self.grow.animate_to(
+            target,
+            if reduce {
+                Timing::curve(tokens::motion::FADE_QUICK_CURVE, tokens::motion::FADE_QUICK)
+            } else {
+                Timing::Spring(tokens::motion::SPRING_SNAPPY)
+            },
+        );
         if self.held_now() {
             self.shown.animate_to(1.0, quick);
         }
@@ -682,6 +782,7 @@ impl Widget for ScrollView {
                 axis,
                 style: self.style,
                 expansion: if overlay { expansion } else { 1.0 },
+                growth: overlay.then(|| self.grow.get()),
                 hovered: self.hovered == Some(axis) || self.hold != Hold::None,
                 dragging: self.drag.is_some_and(|(a, _, _)| a == axis),
                 thumb: self.thumb(axis, length),
@@ -740,10 +841,20 @@ impl Widget for ScrollView {
                 }
                 Handled::No
             }
+            Event::PointerEnter => {
+                // Pointing anywhere at the area shows the bars.
+                self.area = true;
+                self.sync_animation(cx);
+                Handled::No
+            }
             Event::PointerLeave => {
-                if self.hovered.take().is_some() {
-                    self.sync_animation(cx);
+                self.hovered = None;
+                if std::mem::take(&mut self.area) {
+                    // They fade out unless the content scrolled a moment ago.
+                    self.waiting = true;
                 }
+                self.sync_animation(cx);
+                cx.animate();
                 Handled::No
             }
             Event::PointerDown {
@@ -773,15 +884,15 @@ impl Widget for ScrollView {
                     self.drag = Some((axis, at, from));
                     self.sync_animation(cx);
                 } else {
-                    // A click on the track pages toward it.
-                    let sign = if at < off { -1.0 } else { 1.0 };
+                    // A click on the track scrolls 90 % of a page toward it, smoothly.
+                    let sign = if at < off + ext / 2.0 { -1.0 } else { 1.0 };
                     let mut o = self.offset;
                     if axis == Axis::Vertical {
-                        o.y += sign * self.viewport.height;
+                        o.y += sign * self.viewport.height * PAGE;
                     } else {
-                        o.x += sign * self.viewport.width;
+                        o.x += sign * self.viewport.width * PAGE;
                     }
-                    self.set_offset(cx, o);
+                    self.glide_to(cx, o);
                 }
                 Handled::Yes
             }
@@ -838,12 +949,14 @@ impl Widget for ScrollView {
             } => self.touch_scroll(cx, *dx, *dy, *phase),
             Event::Scroll { dx, dy, .. } => {
                 // A wheel: no momentum, no rubber band.
+                self.gliding = false;
                 self.stop_touch(cx);
                 let o = Point::new(self.offset.x + dx, self.offset.y + dy);
                 let before = self.offset;
                 self.set_offset(cx, o);
                 Handled::from(self.offset != before)
             }
+            Event::Key(k) if k.pressed => self.key(cx, k),
             Event::Hold {
                 phase: Phase::Began,
                 ..
@@ -859,8 +972,9 @@ impl Widget for ScrollView {
 
     fn tick(&mut self, cx: &mut EventCx<'_>, dt: f32) -> bool {
         let moving = self.tick_touch(cx, dt);
-        let a = self.shown.tick(dt);
+        let a = self.shown.tick(dt) | self.grow.tick(dt);
         let b = self.expanded.tick(dt);
+        let gliding = self.tick_glide(cx, dt);
         if a || b {
             cx.request_paint();
         }
@@ -874,12 +988,9 @@ impl Widget for ScrollView {
                 self.shown.animate_to(
                     0.0,
                     if reduce {
-                        Timing::None
+                        Timing::curve(tokens::motion::FADE_QUICK_CURVE, tokens::motion::FADE_QUICK)
                     } else {
-                        Timing::curve(
-                            tokens::motion::FADE_STANDARD_CURVE,
-                            tokens::motion::FADE_STANDARD,
-                        )
+                        Timing::curve(tokens::motion::FADE_SLOW_CURVE, tokens::motion::FADE_SLOW)
                     },
                 );
                 cx.request_paint();
@@ -887,18 +998,20 @@ impl Widget for ScrollView {
                 waiting = true;
             }
         }
-        a || b || waiting || moving || self.shown.is_animating()
+        a || b || waiting || moving || gliding || self.shown.is_animating()
     }
 
     fn attached(&mut self, cx: &mut EventCx<'_>) {
         // Held bars are shown from the first frame.
         if self.hold != Hold::None {
             self.shown.jump(1.0);
-            self.expanded.jump(if self.hold == Hold::Expanded {
+            let v = if self.hold == Hold::Expanded {
                 1.0
             } else {
                 0.0
-            });
+            };
+            self.expanded.jump(v);
+            self.grow.jump(v);
         }
         cx.request_paint();
     }
@@ -1333,10 +1446,92 @@ mod tests {
         ui.pointer_move(win, p, Mods::empty());
         ui.pointer_down(win, p, Button::Left, Mods::empty());
         ui.pointer_up(win, p, Button::Left, Mods::empty());
-        // One viewport (164) further.
+        // It scrolls smoothly: nothing at once, then 90 % of a viewport (164) further.
         assert_eq!(
             ui.get(sv, Prop::ScrollOffset),
-            Some(Value::Point(Point::new(0.0, 164.0)))
+            Some(Value::Point(Point::ZERO))
+        );
+        for _ in 0..40 {
+            ui.advance(0.02);
+        }
+        let Some(Value::Point(o)) = ui.get(sv, Prop::ScrollOffset) else {
+            panic!("no offset");
+        };
+        assert!((o.y - 147.6).abs() < 0.5, "{o:?}");
+    }
+
+    #[test]
+    fn keys_scroll_and_the_area_shows_the_bars() {
+        use crate::core::event::{Key, KeyEvent};
+        let (mut ui, win, sv) = scene(ScrollbarStyle::Overlay);
+        let r = ui.tree.window_rect(sv);
+        // Pointing anywhere at the area shows the bars, without scrolling.
+        ui.pointer_move(win, Point::new(r.x + 20.0, r.y + 20.0), Mods::empty());
+        for _ in 0..20 {
+            ui.advance(0.02);
+        }
+        assert_eq!(
+            ui.widget::<ScrollView>(sv).map(|s| s.shown.get()),
+            Some(1.0)
+        );
+        // They stay while it is pointed at, and go when the pointer leaves.
+        for _ in 0..100 {
+            ui.advance(0.05);
+        }
+        assert_eq!(
+            ui.widget::<ScrollView>(sv).map(|s| s.shown.get()),
+            Some(1.0)
+        );
+        ui.pointer_leave(win);
+        for _ in 0..40 {
+            ui.advance(0.05);
+        }
+        assert_eq!(
+            ui.widget::<ScrollView>(sv).map(|s| s.shown.get()),
+            Some(0.0)
+        );
+        // Keys that reach the view scroll it.
+        let _ = ui.send(sv, &Event::Key(KeyEvent::press(Key::Down, Mods::empty())));
+        assert_eq!(
+            ui.get(sv, Prop::ScrollOffset),
+            Some(Value::Point(Point::new(0.0, 40.0)))
+        );
+        let _ = ui.send(sv, &Event::Key(KeyEvent::press(Key::End, Mods::empty())));
+        let Some(Value::Point(o)) = ui.get(sv, Prop::ScrollOffset) else {
+            panic!("no offset");
+        };
+        assert!(o.y > 200.0);
+        let _ = ui.send(sv, &Event::Key(KeyEvent::press(Key::Home, Mods::empty())));
+        assert_eq!(
+            ui.get(sv, Prop::ScrollOffset),
+            Some(Value::Point(Point::ZERO))
+        );
+    }
+
+    #[test]
+    fn the_thumb_grows_on_a_spring_and_a_disabled_view_does_not_scroll() {
+        let (mut ui, win, sv) = scene(ScrollbarStyle::Overlay);
+        let r = ui.tree.window_rect(sv);
+        ui.pointer_move(win, Point::new(r.right() - 6.0, r.y + 20.0), Mods::empty());
+        ui.advance(0.1);
+        let g = ui
+            .widget::<ScrollView>(sv)
+            .map(|s| s.grow.get())
+            .unwrap_or(0.0);
+        assert!(g > 0.0 && g < 1.5);
+        for _ in 0..50 {
+            ui.advance(0.02);
+        }
+        let g = ui
+            .widget::<ScrollView>(sv)
+            .map(|s| s.grow.get())
+            .unwrap_or(0.0);
+        assert!((g - 1.0).abs() < 0.01);
+        let _ = ui.set(sv, Prop::Disabled, Value::Bool(true));
+        ui.scroll(win, r.center(), 0.0, 20.0, false, Phase::None);
+        assert_eq!(
+            ui.get(sv, Prop::ScrollOffset),
+            Some(Value::Point(Point::ZERO))
         );
     }
 

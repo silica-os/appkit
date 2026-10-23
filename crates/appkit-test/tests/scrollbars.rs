@@ -70,6 +70,7 @@ fn bars_and_the_corner_match_the_kit() {
                     ScrollbarStyle::Overlay
                 },
                 expansion: if state == "Thin" { 0.0 } else { 1.0 },
+                growth: None,
                 hovered: state == "Hover",
                 dragging: state == "Dragging",
                 thumb: Some(if vertical { (16.0, 64.0) } else { (20.0, 88.0) }),

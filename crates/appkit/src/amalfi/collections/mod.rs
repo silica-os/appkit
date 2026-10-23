@@ -408,6 +408,7 @@ pub(crate) fn paint_scroller(cx: &mut PaintCx<'_>, area: Rect, rows: &Rows, hove
             axis: Axis::Vertical,
             style,
             expansion: 0.0,
+            growth: None,
             hovered: false,
             dragging: false,
             thumb: Some((offset, extent)),
