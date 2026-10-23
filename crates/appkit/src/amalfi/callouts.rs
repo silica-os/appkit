@@ -43,7 +43,7 @@ impl CalloutShape {
             edge,
             align,
             offset: None,
-            radius: 16.0,
+            radius: crate::amalfi::tokens::radii::POPOVER,
             arrow_width: 20.0,
             arrow_height: 8.0,
             base_radius: 4.0,
