@@ -36,7 +36,7 @@ use crate::color::Color;
 use crate::geom::{Rect, Transform};
 use crate::render::Painter;
 use crate::render::backdrop::{self, Backdrop};
-use crate::render::canvas::{Brush, StrokeStyle};
+use crate::render::canvas::{Brush, Canvas, StrokeStyle};
 use crate::render::image::Image;
 use crate::render::path::Path;
 
@@ -390,6 +390,11 @@ impl GpuContext {
             });
         self.pipelines.borrow_mut().insert(key, pipeline.clone());
         pipeline
+    }
+
+    /// Drops the cached texture of a one-off image (the draws already recorded keep it alive).
+    fn forget_image(&self, image: &Image) {
+        self.images.borrow_mut().remove(&image.id());
     }
 
     /// The texture of `image`, uploaded once.
@@ -2127,6 +2132,30 @@ impl Painter for GpuCanvas {
             bb.width() as f32,
             bb.height() as f32,
         ));
+    }
+
+    fn custom(&mut self, rect: Rect, draw: &dyn Fn(&mut Canvas, Rect)) {
+        if rect.is_empty() || !rect.width.is_finite() || !rect.height.is_finite() {
+            return;
+        }
+        // Rasterize on the CPU at the device scale of the current transform, then draw the
+        // result as an image over `rect`.
+        let [a, b, c, d, ..] = self.transform.as_coeffs();
+        let sx = a.hypot(b) as f32;
+        let sy = c.hypot(d) as f32;
+        if !(sx.is_finite() && sy.is_finite()) || sx <= 0.0 || sy <= 0.0 {
+            return;
+        }
+        let iw = (rect.width * sx).ceil().clamp(1.0, 8192.0);
+        let ih = (rect.height * sy).ceil().clamp(1.0, 8192.0);
+        let mut cpu = Canvas::new(iw as u32, ih as u32);
+        cpu.scale((iw / rect.width, ih / rect.height));
+        cpu.translate((-rect.x, -rect.y));
+        draw(&mut cpu, rect);
+        let image = Image::from_pixmap(cpu.into_pixmap());
+        self.draw_image(&image, rect, 1.0);
+        // A one-off texture: not kept in the image cache.
+        self.ctx.forget_image(&image);
     }
 
     fn fill_glyphs(

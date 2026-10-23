@@ -194,3 +194,29 @@ fn the_frame_is_retained_and_damage_is_reported() {
     );
     assert_eq!(damage, Some(Rect::new(0.0, 0.0, 8.0, 8.0)));
 }
+
+#[test]
+fn custom_drawing_is_rasterized_and_agrees_with_the_cpu() {
+    let Some(ctx) = context() else { return };
+    let mut r = Recorder::new();
+    r.push_opacity(0.8);
+    r.custom(
+        "Custom",
+        Rect::new(10.0, 12.0, 60.0, 40.0),
+        Rc::new(|c, rect| {
+            c.translate((rect.x, rect.y));
+            c.fill_rect(Rect::new(0.0, 0.0, 30.0, 40.0), Color::rgb(220, 40, 40));
+            c.fill_rect(Rect::new(30.0, 10.0, 30.0, 20.0), Color::rgb(40, 40, 220));
+        }),
+    );
+    r.pop();
+    let list = r.finish();
+    let (cpu, gpu) = render_both(&ctx, 100, 80, &list);
+    let (mean, _) = diff(&cpu, &gpu);
+    assert!(mean < 1.5, "mean {mean}");
+    let px = gpu.data_as_u8_slice();
+    let at = |x: usize, y: usize| &px[(y * 100 + x) * 4..(y * 100 + x) * 4 + 4];
+    assert!(at(20, 30)[0] > 100 && at(20, 30)[3] > 150, "red part drawn");
+    assert!(at(60, 30)[2] > 100, "blue part drawn");
+    assert_eq!(at(90, 70)[3], 0, "nothing outside");
+}

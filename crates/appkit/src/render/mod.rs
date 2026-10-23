@@ -20,6 +20,16 @@ use canvas::{Brush, Canvas, StrokeStyle};
 pub trait Painter {
     /// The CPU canvas behind this painter, when it is one (custom drawing, the raster cache).
     fn as_canvas(&mut self) -> Option<&mut Canvas>;
+    /// Runs a custom drawing callback (written for the CPU canvas) over `rect`, in the current
+    /// transform. A painter that is not the CPU canvas rasterizes it into an image and draws
+    /// that, clipped to `rect`.
+    fn custom(&mut self, rect: Rect, draw: &dyn Fn(&mut Canvas, Rect)) {
+        if let Some(c) = self.as_canvas() {
+            c.save();
+            draw(c, rect);
+            c.restore();
+        }
+    }
     /// Pushes the transform and the open layers.
     fn save(&mut self);
     /// Pops to the matching save.

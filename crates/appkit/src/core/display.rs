@@ -258,9 +258,7 @@ impl DisplayList {
                 }
                 DisplayItem::Custom { rect, draw, .. } => {
                     canvas.save();
-                    if let Some(c) = canvas.as_canvas() {
-                        draw(c, *rect);
-                    }
+                    canvas.custom(*rect, &**draw);
                     canvas.restore();
                 }
             }
