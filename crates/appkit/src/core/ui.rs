@@ -2522,7 +2522,12 @@ impl Ui {
         Rect::new(0.0, top, size.width, (size.height - top).max(0.0))
     }
 
-    pub fn paint_window(&self, window: WindowId, canvas: &mut Canvas, clip: Option<Rect>) {
+    pub fn paint_window(
+        &self,
+        window: WindowId,
+        canvas: &mut dyn crate::render::Painter,
+        clip: Option<Rect>,
+    ) {
         let Some(root) = self.window(window).map(|w| w.root) else {
             return;
         };
@@ -2571,7 +2576,13 @@ impl Ui {
         canvas.restore();
     }
 
-    fn paint_view(&self, id: ViewId, canvas: &mut Canvas, opts: PaintOptions, dimmed: bool) {
+    fn paint_view(
+        &self,
+        id: ViewId,
+        canvas: &mut dyn crate::render::Painter,
+        opts: PaintOptions,
+        dimmed: bool,
+    ) {
         let Some(n) = self.tree.get(id) else { return };
         if n.flags.contains(NodeFlags::HIDDEN) || n.modifiers.opacity <= 0.0 {
             return;
@@ -2626,7 +2637,7 @@ impl Ui {
     fn paint_content(
         &self,
         id: ViewId,
-        canvas: &mut Canvas,
+        canvas: &mut dyn crate::render::Painter,
         opts: PaintOptions,
         dimmed: bool,
         size: Size,
@@ -2672,7 +2683,7 @@ impl Ui {
     fn draw_cached(
         &self,
         id: ViewId,
-        canvas: &mut Canvas,
+        canvas: &mut dyn crate::render::Painter,
         opts: PaintOptions,
         dimmed: bool,
     ) -> bool {

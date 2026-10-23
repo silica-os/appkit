@@ -13,7 +13,6 @@ use parley::{
 use crate::amalfi::tokens::TypeStyle;
 use crate::color::Color;
 use crate::geom::{Point, Rect, Size};
-use crate::render::canvas::Canvas;
 use crate::text::fonts::{Fonts, UI_FAMILY};
 
 /// Horizontal alignment of lines.
@@ -480,7 +479,7 @@ impl TextLayout {
     }
 
     /// Paints the text with its top-left at `origin`.
-    pub fn paint(&self, canvas: &mut Canvas, origin: Point) {
+    pub fn paint(&self, canvas: &mut dyn crate::render::Painter, origin: Point) {
         for (range, color) in &self.backgrounds {
             for r in self.selection_rects(range.clone()) {
                 canvas.fill_rect(r.translate(origin), *color);
@@ -494,17 +493,20 @@ impl TextLayout {
                 let run = glyph_run.run();
                 let style = glyph_run.style();
                 let color = style.brush;
-                let glyphs = glyph_run.positioned_glyphs().map(|g| vello_cpu::Glyph {
-                    id: g.id,
-                    x: origin.x + g.x,
-                    y: origin.y + g.y,
-                });
+                let glyphs: Vec<vello_cpu::Glyph> = glyph_run
+                    .positioned_glyphs()
+                    .map(|g| vello_cpu::Glyph {
+                        id: g.id,
+                        x: origin.x + g.x,
+                        y: origin.y + g.y,
+                    })
+                    .collect();
                 let coords: Vec<i16> = run
                     .normalized_coords()
                     .iter()
                     .map(|c| c.to_bits())
                     .collect();
-                canvas.fill_glyphs(run.font(), run.font_size(), &coords, glyphs, color);
+                canvas.fill_glyphs(run.font(), run.font_size(), &coords, &glyphs, color);
                 let metrics = run.font_metrics();
                 let x = origin.x + glyph_run.offset();
                 let w = glyph_run.advance();

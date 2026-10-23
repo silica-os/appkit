@@ -13,7 +13,7 @@
 use crate::color::Color;
 use crate::geom::{Point, Rect};
 use crate::render::backdrop::Backdrop;
-use crate::render::canvas::{Brush, Canvas, StrokeStyle};
+use crate::render::canvas::{Brush, StrokeStyle};
 use crate::render::path::{Path, PathBuilder};
 use crate::shape::Shape;
 
@@ -359,7 +359,7 @@ impl Default for PaintOptions {
 
 /// Paints `style` for `shape` in `rect`.
 pub fn paint_style(
-    canvas: &mut Canvas,
+    canvas: &mut dyn crate::render::Painter,
     rect: Rect,
     shape: &Shape,
     style: &Style,
@@ -412,7 +412,7 @@ fn analytic_radius(shape: &Shape, rect: Rect) -> Option<f32> {
 
 /// Drop shadows, outside the shape only.
 pub fn paint_shadows(
-    canvas: &mut Canvas,
+    canvas: &mut dyn crate::render::Painter,
     rect: Rect,
     shape: &Shape,
     outline: &Path,
@@ -442,10 +442,7 @@ pub fn paint_shadows(
                 canvas.fill_blurred_rounded_rect(r, radius, sigma, color, false);
             }
             _ if sigma > 0.0 && sigma.is_finite() => {
-                canvas.save();
-                canvas.push_blur(sigma);
-                canvas.fill_path(&grown.path(r), &Brush::Solid(color), 1.0);
-                canvas.restore();
+                canvas.fill_blurred_path(&grown.path(r), sigma, color);
             }
             _ => canvas.fill_path(&grown.path(r), &Brush::Solid(color), 1.0),
         }
@@ -455,7 +452,7 @@ pub fn paint_shadows(
 
 /// Inner shadows: the outside of the shape, offset and blurred, seen through the shape.
 pub fn paint_inner_shadows(
-    canvas: &mut Canvas,
+    canvas: &mut dyn crate::render::Painter,
     rect: Rect,
     shape: &Shape,
     outline: &Path,
@@ -488,18 +485,17 @@ pub fn paint_inner_shadows(
         let mut outer = PathBuilder::new();
         outer.add_rect(rect.inflate(reach, reach));
         let ring = outer.detach().with(&hole_shape.path(hole_rect), true);
-        canvas.save();
         if sigma > 0.0 && sigma.is_finite() {
-            canvas.push_blur(sigma);
+            canvas.fill_blurred_path(&ring, sigma, color);
+        } else {
+            canvas.fill_path(&ring, &Brush::Solid(color), 1.0);
         }
-        canvas.fill_path(&ring, &Brush::Solid(color), 1.0);
-        canvas.restore();
     }
     canvas.restore();
 }
 
 fn paint_border(
-    canvas: &mut Canvas,
+    canvas: &mut dyn crate::render::Painter,
     rect: Rect,
     shape: &Shape,
     outline: &Path,
@@ -550,7 +546,7 @@ fn paint_border(
 pub use crate::render::backdrop::saturation_brightness_matrix;
 
 fn paint_backdrop(
-    canvas: &mut Canvas,
+    canvas: &mut dyn crate::render::Painter,
     rect: Rect,
     outline: &Path,
     blur: &Blur,
@@ -592,7 +588,7 @@ fn paint_backdrop(
 
 /// The specular highlight on a glass rim: a thin light along the top edge fading down the
 /// sides (1.5 pt, added to what is below), clipped to the outline.
-pub fn paint_specular(canvas: &mut Canvas, rect: Rect, outline: &Path) {
+pub fn paint_specular(canvas: &mut dyn crate::render::Painter, rect: Rect, outline: &Path) {
     let brush = Brush::Linear {
         from: Point::new(rect.x, rect.y),
         to: Point::new(rect.x, rect.y + rect.height.min(24.0)),
@@ -612,8 +608,12 @@ pub fn paint_specular(canvas: &mut Canvas, rect: Rect, outline: &Path) {
 mod tests {
     use super::*;
 
-    fn render(w: u32, h: u32, f: impl FnOnce(&mut Canvas)) -> crate::render::image::Image {
-        let mut c = Canvas::new(w, h);
+    fn render(
+        w: u32,
+        h: u32,
+        f: impl FnOnce(&mut crate::render::canvas::Canvas),
+    ) -> crate::render::image::Image {
+        let mut c = crate::render::canvas::Canvas::new(w, h);
         f(&mut c);
         c.finish()
     }

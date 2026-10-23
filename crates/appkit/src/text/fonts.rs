@@ -271,7 +271,7 @@ pub mod symbols {
     /// Paints one symbol: font size `size`, centred horizontally in `rect`, its em box
     /// (ascender = em, descender 0) filling the box vertically.
     pub fn paint(
-        canvas: &mut crate::render::canvas::Canvas,
+        canvas: &mut dyn crate::render::Painter,
         rect: crate::geom::Rect,
         ch: char,
         size: f32,
@@ -284,8 +284,8 @@ pub mod symbols {
         let x = rect.x + (rect.width - adv * size) / 2.0;
         // Ascender = em: the baseline is the box's bottom when the box is the font size.
         let y = rect.y + (rect.height + size) / 2.0;
-        let glyphs = std::iter::once(vello_cpu::Glyph { id, x, y });
-        canvas.fill_glyphs(&font, size, &[], glyphs, color);
+        let glyphs = [vello_cpu::Glyph { id, x, y }];
+        canvas.fill_glyphs(&font, size, &[], &glyphs, color);
     }
 }
 

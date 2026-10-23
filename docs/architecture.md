@@ -44,8 +44,14 @@ images, glyph runs, clips, layers and backdrops.
   in row bands on threads, without libm calls in the pixel loops.
 - **Blits.** Large copies are split across threads.
 
-A GPU backend on wgpu with the same formulas is planned; the CPU canvas stays for tests,
-previews and machines without a GPU.
+A GPU backend on wgpu (`render::gpu`: Vulkan, GLES as the fallback) implements the same
+`render::Painter` trait with the same formulas: stencil-and-cover paths on a 4x multisampled
+frame, shaders for gradients, images, analytic shadows and the backdrop (blur, saturation,
+refraction), clip masks rendered for the region of each draw, and a retained frame texture with
+damage tracking. `GpuContext::new()` is `None` without an adapter; the CPU canvas then stays,
+and it always makes the snapshots and previews. Not done yet: presenting through a wgpu
+surface on Wayland, caching unchanged layers as textures, a glyph atlas (glyphs are filled as
+outlines).
 
 ## Sources of truth
 
