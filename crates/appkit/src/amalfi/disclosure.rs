@@ -1,11 +1,15 @@
 //! Disclosure (kit `Disclosure`): the triangle and the round button that show whether a
 //! section is collapsed, and the group, a header that shows or hides the content under it.
 
-use crate::amalfi::foundation::{Label, control_shadow, focus_halo_named};
+use crate::amalfi::foundation::{
+    Interaction as Transitions, Label, control_shadow, focus_halo_named,
+};
 use crate::amalfi::tokens::{self, typography};
+use crate::color::Color;
 use crate::core::a11y::{A11y, Action, Role};
 use crate::core::event::{Button, Event, Handled, Key};
 use crate::core::layout::Proposal;
+use crate::core::tree::NodeFlags;
 use crate::core::ui::Ui;
 use crate::core::value::{Prop, Signal, Value};
 use crate::core::widget::{EventCx, FocusKind, Interaction, LayoutCx, PaintCx, PropChange, Widget};
@@ -56,9 +60,16 @@ pub enum DisclosureStyle {
 /// How the pointer touches a control.
 #[derive(Debug, Clone, Copy, Default)]
 struct Touch {
-    hovered: bool,
-    pressed: bool,
+    /// Hover, 0-1 (it fades in with `fade.quick`).
+    hover: f32,
+    /// Press, 0-1.
+    press: f32,
     focused: bool,
+}
+
+/// `c` with no opacity: the colour a wash fades in from.
+fn clear(c: Color) -> Color {
+    Color { a: 0, ..c }
 }
 
 /// Records a disclosure control at `rect` (names under `prefix`). `turn` is how far it has
@@ -81,33 +92,30 @@ fn paint_control(
         metrics::TRIANGLE_RADIUS
     };
     let shape = Shape::rounded(radius);
-    let pressed = touch.pressed;
-    let hovered = touch.hovered && !pressed;
+    let (hover, press) = (touch.hover.clamp(0.0, 1.0), touch.press.clamp(0.0, 1.0));
     let mut bg = Style::default();
     if button {
         bg.fills.push(
-            if pressed {
-                c.surface_control_pressed
-            } else {
-                c.surface_control
-            }
-            .into(),
+            c.surface_control
+                .lerp(c.surface_control_pressed, press)
+                .into(),
         );
         bg.borders.push(Border::inside(c.line_border, 1.0));
         bg.shadows.push(control_shadow(&theme));
-    } else if pressed {
-        bg.fills.push(c.surface_control_pressed.into());
-    } else if hovered {
-        bg.fills.push(c.accent_amalfi_soft.into());
+    } else {
+        // Hover washes `Accent/Amalfi Soft` in, a press `Surface/Control Pressed` over it.
+        let wash = clear(c.accent_amalfi_soft).lerp(c.accent_amalfi_soft, hover);
+        let fill = wash.lerp(c.surface_control_pressed, press);
+        bg.fills.push(fill.into());
     }
     cx.rec
         .layer(&format!("{prefix}Background"), rect, shape.clone(), bg);
-    if button && hovered {
+    if button && hover * (1.0 - press) > 0.0 {
         cx.rec.layer(
             &format!("{prefix}State"),
             rect,
             shape.clone(),
-            Style::fill(c.accent_amalfi_soft),
+            Style::fill(c.accent_amalfi_soft).with_opacity(hover * (1.0 - press)),
         );
     }
     if touch.focused {
@@ -120,10 +128,10 @@ fn paint_control(
         metrics::GLYPH,
         metrics::GLYPH,
     );
-    let color = if button || pressed || hovered {
+    let color = if button {
         c.text_primary
     } else {
-        c.text_secondary
+        c.text_secondary.lerp(c.text_primary, hover.max(press))
     };
     let (name, symbol, quarter) = match (button, expanded) {
         (false, false) => ("Glyph Chevron Right", "chevron-right", 0.25),
@@ -142,9 +150,14 @@ fn paint_control(
     cx.rec.pop();
 }
 
+/// Moves `a` to `target` on a spring; with Reduce Motion the spring becomes the short fade
+/// (`fade.quick`), with no overshoot.
 fn spring(cx: &mut EventCx<'_>, a: &mut Animated<f32>, target: f32, token: tokens::SpringToken) {
     if cx.theme().appearance.reduce_motion {
-        a.jump(target);
+        a.animate_to(
+            target,
+            Timing::curve(tokens::motion::FADE_QUICK_CURVE, tokens::motion::FADE_QUICK),
+        );
     } else {
         a.animate_to(target, Timing::Spring(token));
     }
@@ -158,6 +171,7 @@ pub struct Disclosure {
     /// The look.
     pub style: DisclosureStyle,
     turn: Animated<f32>,
+    transitions: Transitions,
 }
 
 impl Disclosure {
@@ -167,6 +181,7 @@ impl Disclosure {
             expanded: false,
             style: DisclosureStyle::Triangle,
             turn: Animated::new(0.0),
+            transitions: Transitions::default(),
         }
     }
 
@@ -203,11 +218,17 @@ impl Widget for Disclosure {
         let r = cx.bounds();
         let enabled = !cx.is_disabled();
         let touch = Touch {
-            hovered: cx.is_hovered() && enabled,
-            pressed: cx.is_pressed() && enabled,
+            hover: self.transitions.hover(),
+            press: self.transitions.press(),
             focused: cx.focus_visible() && enabled,
         };
-        paint_control(cx, "", r, self.style, self.expanded, self.turn.get(), touch);
+        // The round button swaps its chevron (down, up) without turning it.
+        let turn = if self.style == DisclosureStyle::Button {
+            if self.expanded { 1.0 } else { 0.0 }
+        } else {
+            self.turn.get()
+        };
+        paint_control(cx, "", r, self.style, self.expanded, turn, touch);
     }
 
     fn event(&mut self, cx: &mut EventCx<'_>, event: &Event) -> Handled {
@@ -226,8 +247,20 @@ impl Widget for Disclosure {
         Handled::No
     }
 
+    fn state_changed(&mut self, cx: &mut EventCx<'_>, _old: NodeFlags, new: NodeFlags) {
+        let reduce = cx.theme().appearance.reduce_motion;
+        if self
+            .transitions
+            .update(new, new.contains(NodeFlags::DISABLED), reduce)
+        {
+            cx.animate();
+        }
+    }
+
     fn tick(&mut self, _cx: &mut EventCx<'_>, dt: f32) -> bool {
-        self.turn.tick(dt)
+        let a = self.turn.tick(dt);
+        let b = self.transitions.tick(dt);
+        a || b
     }
 
     fn interaction(&self) -> Interaction {
@@ -304,6 +337,7 @@ pub struct DisclosureGroup {
     title_text: Label,
     hovered: bool,
     pressed: bool,
+    wash: Animated<f32>,
     content_height: f32,
 }
 
@@ -318,6 +352,7 @@ impl DisclosureGroup {
             title_text: Label::default(),
             hovered: false,
             pressed: false,
+            wash: Animated::new(0.0),
             content_height: 0.0,
         }
     }
@@ -343,12 +378,25 @@ impl DisclosureGroup {
         let target = if expanded { 1.0 } else { 0.0 };
         let (mut turn, mut open) = (self.turn, self.open);
         spring(cx, &mut turn, target, tokens::motion::SPRING_SNAPPY);
-        spring(cx, &mut open, target, tokens::motion::SPRING_PANEL);
+        spring(cx, &mut open, target, tokens::motion::SPRING_SNAPPY);
         self.turn = turn;
         self.open = open;
         cx.emit(Signal::ExpandedChanged, Value::Bool(expanded));
         cx.request_layout();
         cx.request_paint();
+        cx.animate();
+    }
+
+    /// Fades the header wash (`fade.quick`) toward hovered or pressed.
+    fn retarget(&mut self, cx: &mut EventCx<'_>) {
+        let on = self.hovered || self.pressed;
+        let reduce = cx.theme().appearance.reduce_motion;
+        let timing = if reduce {
+            Timing::None
+        } else {
+            Timing::curve(tokens::motion::FADE_QUICK_CURVE, tokens::motion::FADE_QUICK)
+        };
+        self.wash.animate_to(if on { 1.0 } else { 0.0 }, timing);
         cx.animate();
     }
 
@@ -412,12 +460,13 @@ impl Widget for DisclosureGroup {
         let prefix = if has_content { "Header/" } else { "" };
         let header = Rect::new(r.x, r.y, r.width, metrics::HEADER_HEIGHT);
         let shape = Shape::rounded(metrics::HEADER_RADIUS);
-        if enabled && (self.hovered || self.pressed) {
+        let wash = self.wash.get().clamp(0.0, 1.0);
+        if enabled && wash > 0.0 {
             cx.rec.layer(
                 &format!("{prefix}Background"),
                 header,
                 shape.clone(),
-                Style::fill(c.accent_amalfi_soft),
+                Style::fill(c.accent_amalfi_soft).with_opacity(wash),
             );
         }
         if enabled && cx.focus_visible() {
@@ -473,12 +522,14 @@ impl Widget for DisclosureGroup {
                 let h = enabled && DisclosureGroup::in_header(local(pos));
                 if h != self.hovered {
                     self.hovered = h;
+                    self.retarget(cx);
                     cx.request_paint();
                 }
                 Handled::No
             }
             Event::PointerLeave => {
                 if std::mem::take(&mut self.hovered) {
+                    self.retarget(cx);
                     cx.request_paint();
                 }
                 Handled::No
@@ -489,6 +540,7 @@ impl Widget for DisclosureGroup {
                 ..
             } if enabled && DisclosureGroup::in_header(local(pos)) => {
                 self.pressed = true;
+                self.retarget(cx);
                 cx.request_paint();
                 Handled::Yes
             }
@@ -509,6 +561,7 @@ impl Widget for DisclosureGroup {
                 ..
             } if self.pressed => {
                 self.pressed = false;
+                self.retarget(cx);
                 if DisclosureGroup::in_header(local(pos)) {
                     let e = !self.expanded;
                     self.set_expanded(cx, e);
@@ -539,10 +592,11 @@ impl Widget for DisclosureGroup {
     fn tick(&mut self, cx: &mut EventCx<'_>, dt: f32) -> bool {
         let a = self.turn.tick(dt);
         let b = self.open.tick(dt);
+        let w = self.wash.tick(dt);
         if b || self.open.is_animating() {
             cx.request_layout();
         }
-        a || b
+        a || b || w
     }
 
     fn interaction(&self) -> Interaction {
@@ -695,5 +749,61 @@ mod tests {
             ui.advance(0.03);
         }
         assert!(!ui.is_animating());
+    }
+
+    #[test]
+    fn hover_fades_in_and_reduce_motion_uses_the_short_fade() {
+        let mut ui = Ui::new_headless();
+        let win = ui.create_window(WindowKind::Normal, Size::new(100.0, 100.0));
+        let d = ui.create(Disclosure::new());
+        ui.set_content(win, d);
+        ui.show_window(win);
+        ui.prepare_frame(win);
+        let p = at(&ui, d, 12.0, 12.0);
+        ui.pointer_move(win, p, Mods::empty());
+        let half = ui
+            .with_widget::<Disclosure, _>(d, |w| w.transitions.hover())
+            .unwrap_or(1.0);
+        assert!(half < 1.0, "the wash starts from nothing");
+        for _ in 0..30 {
+            ui.advance(0.02);
+        }
+        let full = ui
+            .with_widget::<Disclosure, _>(d, |w| w.transitions.hover())
+            .unwrap_or(0.0);
+        assert!((full - 1.0).abs() < 1e-3);
+        // Reduce Motion: the turn is the 150 ms fade, not a jump and not a spring.
+        let mut a = ui.appearance;
+        a.reduce_motion = true;
+        ui.set_appearance(a);
+        ui.pointer_down(win, p, Button::Left, Mods::empty());
+        ui.pointer_up(win, p, Button::Left, Mods::empty());
+        let t0 = ui
+            .with_widget::<Disclosure, _>(d, |w| w.turn.get())
+            .unwrap_or(1.0);
+        assert!(t0 < 0.5);
+        ui.advance(0.2);
+        let t1 = ui
+            .with_widget::<Disclosure, _>(d, |w| w.turn.get())
+            .unwrap_or(0.0);
+        assert!((t1 - 1.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn the_group_header_wash_fades() {
+        let (mut ui, win, g, _) = group();
+        let p = at(&ui, g, 100.0, 14.0);
+        ui.pointer_move(win, p, Mods::empty());
+        let start = ui
+            .with_widget::<DisclosureGroup, _>(g, |w| w.wash.get())
+            .unwrap_or(1.0);
+        assert!(start < 1.0);
+        for _ in 0..30 {
+            ui.advance(0.02);
+        }
+        let end = ui
+            .with_widget::<DisclosureGroup, _>(g, |w| w.wash.get())
+            .unwrap_or(0.0);
+        assert!((end - 1.0).abs() < 1e-3);
     }
 }
