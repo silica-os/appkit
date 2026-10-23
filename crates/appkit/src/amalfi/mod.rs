@@ -14,7 +14,6 @@ pub mod group_box;
 pub mod label;
 pub mod materials;
 pub mod menus;
-pub mod notifications;
 pub mod popovers;
 pub mod progress;
 pub mod scrollbars;

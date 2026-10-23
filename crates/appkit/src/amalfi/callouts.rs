@@ -1,8 +1,7 @@
-//! Callouts (ui-kit `SCallout`, `SDockCallout` and `calloutPath.js`): a glass bubble whose edge
+//! Callouts (ui-kit `SCallout` and `calloutPath.js`): a glass bubble whose edge
 //! flows into an arrow with rounded transitions, drawn as ONE outline. The outline is a polygon
 //! (the body's four corners and the arrow's base, tip and base) with a radius at every vertex:
-//! 16 at the corners, 4 at the arrow's base and 3 at its tip for the popover-like callout; 8 or
-//! 12, 3 and 2 for the Dock's, whose 12 x 6 arrow points down at the tile.
+//! 16 at the corners, 4 at the arrow's base and 3 at its tip; every measure can be changed.
 
 use crate::amalfi::materials::{Tier, glass_style};
 use crate::amalfi::popovers::{Align, Edge};
@@ -15,24 +14,6 @@ use crate::core::widget::{LayoutCx, PaintCx, PropChange, Widget};
 use crate::geom::{Point, Rect, Size};
 use crate::render::path::{Path, PathBuilder};
 use crate::shape::Shape;
-
-/// Fixed measures of the Dock's callouts.
-pub mod dock {
-    /// The arrow's width at its base.
-    pub const ARROW_W: f32 = 12.0;
-    /// The arrow's height.
-    pub const ARROW_H: f32 = 6.0;
-    /// The radius of the arrow's base corners.
-    pub const ARROW_BASE_RADIUS: f32 = 3.0;
-    /// The radius of the arrow's tip.
-    pub const ARROW_TIP_RADIUS: f32 = 2.0;
-    /// The label bubble's corner radius.
-    pub const LABEL_RADIUS: f32 = 8.0;
-    /// The tile menu bubble's corner radius.
-    pub const MENU_RADIUS: f32 = 12.0;
-    /// The space around a menu in its bubble.
-    pub const MENU_INSET: f32 = 4.0;
-}
 
 /// The outline of a callout: a rounded rectangle and, unless `edge` is `None`, an arrow.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -67,20 +48,6 @@ impl CalloutShape {
             arrow_height: 8.0,
             base_radius: 4.0,
             tip_radius: 3.0,
-        }
-    }
-
-    /// The Dock's callout: the arrow under the middle, 12 x 6, radii 3 and 2.
-    pub fn dock(radius: f32) -> CalloutShape {
-        CalloutShape {
-            edge: Some(Edge::Bottom),
-            align: Align::Center,
-            offset: None,
-            radius,
-            arrow_width: dock::ARROW_W,
-            arrow_height: dock::ARROW_H,
-            base_radius: dock::ARROW_BASE_RADIUS,
-            tip_radius: dock::ARROW_TIP_RADIUS,
         }
     }
 
@@ -291,16 +258,10 @@ impl Callout {
         }
     }
 
-    /// The Dock's label bubble: it never takes the pointer.
-    pub fn dock_label() -> Callout {
-        let mut c = Callout::new(CalloutShape::dock(dock::LABEL_RADIUS));
-        c.interactive = false;
-        c
-    }
-
-    /// The Dock's tile menu bubble.
-    pub fn dock_menu() -> Callout {
-        Callout::new(CalloutShape::dock(dock::MENU_RADIUS)).padded(dock::MENU_INSET)
+    /// A callout the pointer goes through (a label).
+    pub fn passive(mut self) -> Callout {
+        self.interactive = false;
+        self
     }
 
     /// With a padding.
@@ -400,28 +361,6 @@ pub fn callout(ui: &mut Ui, callout: Callout, content: ViewId) -> ViewId {
     c
 }
 
-/// The Dock's label bubble around `text`: at least a tile (64) wide, 5 above and below and 16
-/// at the sides of a line of body text.
-pub fn dock_label(ui: &mut Ui, text: &str) -> ViewId {
-    use crate::amalfi::text::{Text, TextRole};
-    use crate::amalfi::tokens::typography;
-    use crate::geom::Insets;
-    let t = ui.create(
-        Text::new(text)
-            .token(&typography::BODY)
-            .role(TextRole::Primary)
-            .layer("Label")
-            .align(crate::text::Align::Center),
-    );
-    let _ = ui.set(
-        t,
-        Prop::Padding,
-        Value::Insets(Insets::new(5.0, 16.0, 5.0, 16.0)),
-    );
-    let _ = ui.set(t, Prop::MinWidth, Value::from(64.0));
-    callout(ui, Callout::dock_label(), t)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -432,7 +371,11 @@ mod tests {
         let rect = Rect::new(0.0, 0.0, 260.0, 128.0);
         assert_eq!(s.body(rect), Rect::new(0.0, 8.0, 260.0, 120.0));
         assert_eq!(s.tip(rect), Some(Point::new(30.0, 0.0)));
-        let d = CalloutShape::dock(8.0);
+        let mut d = CalloutShape::new(Some(Edge::Bottom), Align::Center).radius(8.0);
+        d.arrow_width = 12.0;
+        d.arrow_height = 6.0;
+        d.base_radius = 3.0;
+        d.tip_radius = 2.0;
         let label = Rect::new(0.0, 0.0, 64.0, 34.0);
         assert_eq!(d.body(label), Rect::new(0.0, 0.0, 64.0, 28.0));
         assert_eq!(d.tip(label), Some(Point::new(32.0, 34.0)));
@@ -448,7 +391,11 @@ mod tests {
     #[test]
     fn the_outline_reaches_the_tip_and_stays_in_the_frame() {
         let rect = Rect::new(0.0, 0.0, 64.0, 34.0);
-        let s = CalloutShape::dock(8.0);
+        let mut s = CalloutShape::new(Some(Edge::Bottom), Align::Center).radius(8.0);
+        s.arrow_width = 12.0;
+        s.arrow_height = 6.0;
+        s.base_radius = 3.0;
+        s.tip_radius = 2.0;
         let b = s.path(rect).bounds();
 
         assert!(b.x >= -0.01 && b.right() <= 64.01 && b.y >= -0.01, "{b:?}");
@@ -474,7 +421,12 @@ mod tests {
 
     #[test]
     fn a_label_does_not_take_the_pointer() {
-        assert!(!Callout::dock_label().hit(Point::new(1.0, 1.0), Size::new(64.0, 34.0)));
-        assert!(Callout::dock_menu().hit(Point::new(1.0, 1.0), Size::new(200.0, 110.0)));
+        let shape = CalloutShape::new(None, Align::Center);
+        assert!(
+            !Callout::new(shape)
+                .passive()
+                .hit(Point::new(1.0, 1.0), Size::new(64.0, 34.0))
+        );
+        assert!(Callout::new(shape).hit(Point::new(1.0, 1.0), Size::new(64.0, 34.0)));
     }
 }
