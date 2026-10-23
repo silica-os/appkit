@@ -576,7 +576,7 @@ fn present(view: &KitView, slot: &mut Option<Shown>, want: Option<&Presentation>
                 let _ = host.set_float(Prop::HEIGHT, f64::from(p.size.1));
                 let root = crate::mount(host.clone(), move || FnComponent(c2.borrow().clone()));
                 let d = dismissed.clone();
-                let Ok(window) = view.present_popover(&host, appkit_rs::side::BELOW, move || {
+                let Ok(window) = view.present_popover(&host, p.side, move || {
                     if let Some(d) = &d {
                         d();
                     }

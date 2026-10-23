@@ -241,6 +241,8 @@ impl MenuEntry {
 /// A window presented from a view (sheet or popover).
 #[derive(Clone)]
 pub(crate) struct Presentation {
+    /// Where a popover prefers to open (`appkit_rs::side`).
+    pub(crate) side: u32,
     pub(crate) presented: bool,
     pub(crate) size: (f32, f32),
     pub(crate) content: Rc<dyn Fn() -> Element>,
@@ -783,6 +785,7 @@ impl Element {
     ) -> Self {
         let b = presented.clone();
         self.effects.sheet = Some(Presentation {
+            side: appkit_rs::side::BELOW,
             presented: presented.get(),
             size,
             content: Rc::new(content),
@@ -801,11 +804,27 @@ impl Element {
     ) -> Self {
         let b = presented.clone();
         self.effects.popover = Some(Presentation {
+            side: appkit_rs::side::BELOW,
             presented: presented.get(),
             size,
             content: Rc::new(content),
             dismissed: Some(Rc::new(move || b.set(false))),
         });
+        self
+    }
+
+    /// Where the popover of [`Element::popover`] prefers to open: 0 below (the default), 1 above,
+    /// 2 after, 3 before. It flips to the other side when it does not fit.
+    pub fn popover_side(mut self, side: u32) -> Self {
+        let side = match side {
+            1 => appkit_rs::side::ABOVE,
+            2 => appkit_rs::side::AFTER,
+            3 => appkit_rs::side::BEFORE,
+            _ => appkit_rs::side::BELOW,
+        };
+        if let Some(p) = &mut self.effects.popover {
+            p.side = side;
+        }
         self
     }
 

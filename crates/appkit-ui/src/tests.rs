@@ -542,3 +542,30 @@ fn an_alert_with_a_suppression_checkbox_and_a_field_opens() {
         .field("y", |_| {});
     assert!(spec.glass && spec.suppression.is_some() && spec.field.is_some());
 }
+
+struct SideProbe {
+    seen: Rc<Cell<(u32, u32)>>,
+}
+
+impl Component for SideProbe {
+    fn body(&self, cx: &mut Cx) -> Element {
+        let open = cx.state(|| false);
+        let e = button("x")
+            .popover(&open.binding(), (10.0, 10.0), || label("p"))
+            .popover_side(2);
+        let after = e.effects.popover.as_ref().map_or(99, |p| p.side);
+        let e = e.popover_side(9);
+        let below = e.effects.popover.as_ref().map_or(99, |p| p.side);
+        self.seen.set((after, below));
+        e
+    }
+}
+
+#[test]
+fn a_popover_keeps_its_preferred_side() {
+    let _rt = Headless::new().unwrap();
+    let seen = Rc::new(Cell::new((0, 0)));
+    let s2 = seen.clone();
+    let _root = mount(host(), move || SideProbe { seen: s2.clone() });
+    assert_eq!(seen.get(), (appkit_rs::side::AFTER, appkit_rs::side::BELOW));
+}
