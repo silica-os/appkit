@@ -3,6 +3,7 @@
 pub mod alerts;
 pub mod button;
 pub mod buttons;
+pub mod callouts;
 pub mod collections;
 pub mod dialogs;
 pub mod disclosure;
@@ -11,7 +12,9 @@ pub mod forms;
 pub mod foundation;
 pub mod group_box;
 pub mod label;
+pub mod materials;
 pub mod menus;
+pub mod panels;
 pub mod popovers;
 pub mod progress;
 pub mod scrollbars;
