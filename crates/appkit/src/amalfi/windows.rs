@@ -12,7 +12,7 @@ use crate::style::{Border, Style};
 /// Fixed measures of the kit.
 pub mod metrics {
     /// A window's corner radius.
-    pub const RADIUS: f32 = 18.0;
+    pub const RADIUS: f32 = crate::amalfi::tokens::radii::WINDOW;
     /// A utility window's corner radius.
     pub const UTILITY_RADIUS: f32 = 14.0;
 }

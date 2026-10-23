@@ -22,9 +22,10 @@ use crate::text::Align;
 /// Fixed measures of the kit.
 pub mod metrics {
     /// A window button's diameter.
-    pub const DOT: f32 = 16.0;
+    pub const DOT: f32 = crate::amalfi::tokens::window_controls::DOT;
     /// Gap between window buttons' cells (a 23 pt pitch, docs/spec/windows.md).
-    pub const DOT_GAP: f32 = 7.0;
+    pub const DOT_GAP: f32 =
+        crate::amalfi::tokens::window_controls::PITCH - crate::amalfi::tokens::window_controls::DOT;
     /// The three buttons' width.
     pub const CONTROLS_WIDTH: f32 = 62.0;
 
@@ -253,6 +254,15 @@ impl Widget for Dot {
                 ..Style::default()
             },
         );
+        if cx.focus_visible() && !inactive {
+            crate::amalfi::foundation::focus_halo_named(
+                cx.rec,
+                "Focus Halo",
+                r,
+                Shape::rounded(metrics::DOT / 2.0),
+                &theme,
+            );
+        }
         let t = match self.revealed {
             Some(on) => f32::from(u8::from(on)),
             None => self.glyph_t.get().clamp(0.0, 1.0),
@@ -293,6 +303,31 @@ impl Widget for Dot {
             }
             Event::PointerLeave => {
                 cx.request_paint();
+                Handled::No
+            }
+            // The glyphs of the group show while a button has the keyboard focus
+            // (`.s-lights:focus-within`).
+            Event::FocusIn | Event::FocusOut => {
+                let on = *event == Event::FocusIn;
+                let id = cx.id();
+                let hovered = cx.is_hovered();
+                self.show_glyph(on || hovered);
+                cx.animate();
+                let ui = cx.ui();
+                let group: Vec<ViewId> = ui
+                    .tree
+                    .parent(id)
+                    .map(|p| ui.tree.children(p).to_vec())
+                    .unwrap_or_else(|| vec![id]);
+                for d in group.into_iter().filter(|d| *d != id) {
+                    let hovered = ui.tree.flags(d).contains(NodeFlags::HOVERED);
+                    if ui
+                        .with_widget::<Dot, _>(d, |dot| dot.show_glyph(on || hovered))
+                        .is_some()
+                    {
+                        ui.start_animating(d);
+                    }
+                }
                 Handled::No
             }
             _ => Handled::No,
@@ -1513,6 +1548,27 @@ mod tests {
     fn glyph_opacity(ui: &mut Ui, dot: ViewId) -> f32 {
         ui.with_widget::<Dot, _>(dot, |d| d.glyph_t.get())
             .unwrap_or(-1.0)
+    }
+
+    #[test]
+    fn keyboard_focus_on_a_button_shows_the_glyphs_of_the_group() {
+        let mut ui = Ui::new_headless();
+        let g = window_controls_view(&mut ui);
+        let win = ui.create_window(WindowKind::Normal, Size::new(600.0, 200.0));
+        ui.set_content(win, g);
+        ui.show_window(win);
+        ui.prepare_frame(win);
+        let kids = ui.tree.children(g).to_vec();
+        ui.set_focus(kids[1], true);
+        for _ in 0..20 {
+            ui.advance(0.02);
+        }
+        assert!(kids.iter().all(|k| glyph_opacity(&mut ui, *k) > 0.99));
+        ui.clear_focus(win);
+        for _ in 0..20 {
+            ui.advance(0.02);
+        }
+        assert!(kids.iter().all(|k| glyph_opacity(&mut ui, *k) < 0.01));
     }
 
     #[test]

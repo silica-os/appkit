@@ -214,6 +214,8 @@ pub struct Window {
     /// Height of the toolbar the app draws under Ossido's window buttons (full-size
     /// content; 0: Ossido's title bar).
     pub toolbar_height: f32,
+    /// The opacity of the sheet's veil as last painted (0: none).
+    pub(crate) veil: f32,
 }
 
 impl Window {
@@ -251,6 +253,7 @@ impl Window {
             opaque: !kind_glass(&kind_ref) && !matches!(kind_ref, WindowKind::Lock { .. }),
             decorated: true,
             toolbar_height: 0.0,
+            veil: 0.0,
         }
     }
 }

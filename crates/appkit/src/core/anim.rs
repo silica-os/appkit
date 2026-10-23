@@ -473,6 +473,33 @@ mod tests {
     }
 
     #[test]
+    fn the_window_under_a_sheet_is_veiled_with_the_sheet() {
+        let mut ui = Ui::new_headless();
+        let win = parent(&mut ui);
+        assert_eq!(ui.veil_of(win), 0.0);
+        let sheet = ui.create_window(WindowKind::Sheet { parent: win }, Size::new(200.0, 100.0));
+        let v = boxed(&mut ui);
+        ui.set_content(sheet, v);
+        ui.show_window(sheet);
+        assert_eq!(ui.veil_of(win), 0.0, "it starts clear");
+        ui.advance(0.05);
+        let part = ui.veil_of(win);
+        assert!(part > 0.0 && part < 1.0);
+        for _ in 0..120 {
+            ui.advance(1.0 / 60.0);
+        }
+        assert_eq!(ui.veil_of(win), 1.0);
+        // The parent repaints while the veil changes.
+        ui.dismiss_window(sheet);
+        ui.advance(0.05);
+        assert!(ui.veil_of(win) < 1.0);
+        for _ in 0..30 {
+            ui.advance(1.0 / 60.0);
+        }
+        assert_eq!(ui.veil_of(win), 0.0);
+    }
+
+    #[test]
     fn dismissing_fades_out_in_place_and_then_closes() {
         let mut ui = Ui::new_headless();
         let win = parent(&mut ui);

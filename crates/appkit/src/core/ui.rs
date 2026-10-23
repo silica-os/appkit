@@ -272,6 +272,10 @@ impl Default for Ui {
     }
 }
 
+/// The sheet's veil starts under the 48 pt title bar and is `brand.ink` at 16 % (`SWindow`).
+const VEIL_TOP: f32 = 48.0;
+const VEIL_OPACITY: f32 = 0.16;
+
 impl Ui {
     /// A runtime with no platform (tests, headless rendering).
     pub fn new_headless() -> Ui {
@@ -1940,7 +1944,18 @@ impl Ui {
             .and_then(|w| w.key_anchor)
             .filter(|a| self.tree.contains(*a) && self.is_visible(*a));
         if !handled && let Some(f) = focus.or(anchor) {
-            handled = self.send_bubbling(f, &Event::Key(key.clone())).is_some();
+            let by = self.send_bubbling(f, &Event::Key(key.clone()));
+            handled = by.is_some();
+            // In a dialog, Return in a one-line field also presses the default button
+            // (`SDialog`: `@keydown.enter`).
+            if let Some(v) = by
+                && key.pressed
+                && key.key == Key::Enter
+                && key.mods.is_empty()
+                && self.submits_dialog(v)
+            {
+                self.activate_marked(window, Prop::IsDefault);
+            }
         }
         if !handled && key.pressed {
             handled = match key.key {
@@ -1987,6 +2002,22 @@ impl Ui {
             self.emit(r, Signal::KeyUnhandled, Value::Str(key.key.name()));
         }
         self.flush();
+    }
+
+    /// Whether `v` is a one-line text field inside a dialog.
+    fn submits_dialog(&self, v: ViewId) -> bool {
+        let one_line = self.accessibility_of(v).is_some_and(|a| {
+            matches!(
+                a.role,
+                crate::core::a11y::Role::TextField | crate::core::a11y::Role::PasswordField
+            )
+        });
+        one_line
+            && self
+                .tree
+                .ancestors(v)
+                .into_iter()
+                .any(|a| self.tree.widget(a).is_some_and(|w| w.kind() == "Dialog"))
     }
 
     fn activate_marked(&mut self, window: WindowId, marker: Prop) -> bool {
@@ -2250,6 +2281,19 @@ impl Ui {
             return Rect::ZERO;
         };
         let mut damage = self.window(window).map(|w| w.damage).unwrap_or_default();
+        // The veil under a sheet fades with the sheet (`SWindow`: `.s-veil`).
+        let veil = self.veil_of(window);
+        if let Some(w) = self.window(window)
+            && (w.veil - veil).abs() > 1e-4
+        {
+            damage = damage.union(Self::veil_rect(w.size, w.toolbar_height));
+        }
+        if let Some(w) = self.window_mut(window) {
+            w.veil = veil;
+        }
+        if let Some(WindowKind::Sheet { parent }) = self.window(window).map(|w| w.kind.clone()) {
+            self.request_frame(parent);
+        }
         let theme_root = self.theme_of(root);
         self.frame_counter += 1;
         self.record_subtree(root, Point::ZERO, theme_root, &mut damage);
@@ -2447,6 +2491,27 @@ impl Ui {
 
     /// Paints a prepared window on `canvas` (window coordinates, already scaled to device
     /// pixels by the caller), clipped to `clip` if given.
+    /// How strongly the sheet on `window` shows (its content's opacity; 0: no sheet).
+    pub(crate) fn veil_of(&self, window: WindowId) -> f32 {
+        let Some(sheet) = self
+            .windows
+            .iter()
+            .find(|w| w.visible && w.kind == WindowKind::Sheet { parent: window })
+        else {
+            return 0.0;
+        };
+        self.tree
+            .get(sheet.root)
+            .and_then(|n| n.anim.as_ref())
+            .map_or(1.0, |a| a.opacity.get().clamp(0.0, 1.0))
+    }
+
+    /// The veil's area: under the title bar (48 pt, or the app's toolbar) to the bottom.
+    fn veil_rect(size: Size, toolbar: f32) -> Rect {
+        let top = if toolbar > 0.0 { toolbar } else { VEIL_TOP }.min(size.height);
+        Rect::new(0.0, top, size.width, (size.height - top).max(0.0))
+    }
+
     pub fn paint_window(&self, window: WindowId, canvas: &mut Canvas, clip: Option<Rect>) {
         let Some(root) = self.window(window).map(|w| w.root) else {
             return;
@@ -2469,6 +2534,30 @@ impl Ui {
             canvas.fill_rect(bounds, theme.colors.surface_window);
         }
         self.paint_view(root, canvas, opts, false);
+        let veil = self.veil_of(window);
+        if veil > 0.0
+            && let Some(w) = self.window(window)
+        {
+            // The scrim is `brand.ink` at 16 % in both appearances, rounded like the window at
+            // the bottom.
+            let rect = Self::veil_rect(w.size, w.toolbar_height);
+            let r = crate::amalfi::tokens::radii::WINDOW;
+            let path = crate::shape::smooth_rect_path(
+                rect,
+                crate::geom::Corners {
+                    top_left: 0.0,
+                    top_right: 0.0,
+                    bottom_right: r,
+                    bottom_left: r,
+                },
+                crate::shape::AMALFI_SMOOTHING,
+            );
+            canvas.fill_path(
+                &path,
+                &crate::render::canvas::Brush::Solid(crate::amalfi::tokens::LIGHT.text_primary),
+                VEIL_OPACITY * veil,
+            );
+        }
         canvas.restore();
     }
 
