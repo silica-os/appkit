@@ -21,29 +21,29 @@ use crate::text::Align;
 /// The bubble's measures (silica_ui's `AmalfiTooltipMetrics`).
 pub mod metrics {
     /// Horizontal padding.
-    pub const PAD_X: f32 = 8.0;
+    pub const PAD_X: f32 = crate::amalfi::tokens::spacing::S;
     /// Vertical padding.
-    pub const PAD_Y: f32 = 4.0;
+    pub const PAD_Y: f32 = crate::amalfi::tokens::spacing::XS;
     /// Gap between the label and the shortcut.
-    pub const SHORTCUT_GAP: f32 = 8.0;
+    pub const SHORTCUT_GAP: f32 = crate::amalfi::tokens::spacing::S;
     /// Corner radius.
     pub const RADIUS: f32 = 8.0;
     /// Widest bubble; longer messages wrap.
     pub const MAX_WIDTH: f32 = 224.0;
     /// Distance to the target.
-    pub const DISTANCE: f32 = 8.0;
+    pub const DISTANCE: f32 = crate::amalfi::tokens::spacing::S;
     /// Text boxes are a multiple of this wide (the 4 pt grid).
-    pub const STEP: f32 = 4.0;
+    pub const STEP: f32 = crate::amalfi::tokens::grid::BASE;
 }
 
-/// Seconds the pointer rests before the first tooltip appears. Measured (`motion.md`,
-/// reference appkit-controls: ~1.5 s, appears in one frame); the token `delay.tooltip`
-/// (0.7 s) is the earlier assumption.
-pub const APPEAR_DELAY: f64 = 1.5;
-/// Seconds a tooltip takes to leave (measured: ~450 ms).
-pub const LEAVE_FADE: f32 = 0.45;
-/// Moving to another tooltip within this many seconds of the last one shows it at once.
-pub const SWITCH_WINDOW: f64 = 0.3;
+/// Seconds the pointer rests before the first tooltip appears (`delay.tooltip.first`; STooltip.vue:
+/// 700 ms).
+pub const APPEAR_DELAY: f64 = tokens::motion::DELAY_TOOLTIP_FIRST as f64;
+/// Seconds a tooltip takes to leave (`fade.quick`; STooltip.vue: `.s-tip-leave-active`).
+pub const LEAVE_FADE: f32 = tokens::motion::FADE_QUICK;
+/// Moving to another tooltip within this many seconds of the last one shows it at once
+/// (STooltip.vue: `Date.now() - lastHidden < 400`).
+pub const SWITCH_WINDOW: f64 = 0.4;
 
 /// A tooltip bubble.
 #[derive(Debug)]
@@ -85,7 +85,7 @@ impl Tooltip {
         self.leaving = true;
         self.opacity.animate_to(
             0.0,
-            Timing::curve(tokens::motion::FADE_INSTANT_CURVE, LEAVE_FADE),
+            Timing::curve(tokens::motion::FADE_QUICK_CURVE, LEAVE_FADE),
         );
     }
 
@@ -522,9 +522,9 @@ mod tests {
         let (mut ui, win, a, b) = scene();
         let over_a = ui.tree.window_rect(a).center();
         ui.pointer_move(win, over_a, Mods::empty());
-        run(&mut ui, 1.3);
+        run(&mut ui, 0.6);
         assert!(ui.tooltips.window().is_none());
-        run(&mut ui, 0.4);
+        run(&mut ui, 0.25);
         let Some(popup) = ui.tooltips.window() else {
             panic!("no tooltip after the delay");
         };
@@ -540,15 +540,15 @@ mod tests {
         };
         assert_ne!(second, popup);
         assert!(ui.window(popup).is_none());
-        // Leaving: it fades for 450 ms, then goes.
+        // Leaving: it fades for `fade.quick` (150 ms), then goes.
         ui.pointer_leave(win);
-        run(&mut ui, 0.2);
+        run(&mut ui, 0.1);
         assert!(ui.window(second).is_some());
-        run(&mut ui, 0.4);
+        run(&mut ui, 0.2);
         assert!(ui.window(second).is_none());
         // A pointer that passes through without resting shows nothing.
         ui.pointer_move(win, over_a, Mods::empty());
-        run(&mut ui, 0.5);
+        run(&mut ui, 0.4);
         ui.pointer_leave(win);
         run(&mut ui, 2.0);
         assert!(ui.tooltips.window().is_none());
