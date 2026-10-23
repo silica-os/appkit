@@ -4,7 +4,7 @@
 
 use crate::amalfi::foundation::{Interaction as Transitions, Label};
 use crate::amalfi::theme::Theme;
-use crate::amalfi::tokens::{typography, window_controls};
+use crate::amalfi::tokens::{self, typography, window_controls};
 use crate::color::Color;
 use crate::core::a11y::{A11y, Action, Role};
 use crate::core::event::{Event, Handled, Key};
@@ -14,6 +14,7 @@ use crate::core::ui::Ui;
 use crate::core::value::{Prop, Signal, Value};
 use crate::core::widget::{EventCx, FocusKind, Interaction, LayoutCx, PaintCx, PropChange, Widget};
 use crate::geom::{Point, Rect, Size};
+use crate::motion::{Animated, Timing};
 use crate::shape::Shape;
 use crate::style::{Border, Paint, Shadow, Style};
 use crate::text::Align;
@@ -168,6 +169,8 @@ pub struct Dot {
     pub active: Option<bool>,
     /// Shows the glyph (`None`: while the pointer is over the button or its group).
     pub revealed: Option<bool>,
+    /// The glyph's opacity: it fades with `fade.instant` (`.s-light__glyph`).
+    glyph_t: Animated<f32>,
 }
 
 impl Dot {
@@ -177,7 +180,19 @@ impl Dot {
             kind,
             active: None,
             revealed: None,
+            glyph_t: Animated::new(0.0),
         }
+    }
+
+    /// Fades the glyph in or out.
+    pub fn show_glyph(&mut self, on: bool) {
+        self.glyph_t.animate_to(
+            if on { 1.0 } else { 0.0 },
+            Timing::curve(
+                tokens::motion::FADE_INSTANT_CURVE,
+                tokens::motion::FADE_INSTANT,
+            ),
+        );
     }
 }
 
@@ -238,7 +253,14 @@ impl Widget for Dot {
                 ..Style::default()
             },
         );
-        if hover {
+        let t = match self.revealed {
+            Some(on) => f32::from(u8::from(on)),
+            None => self.glyph_t.get().clamp(0.0, 1.0),
+        };
+        if t > 0.0 {
+            if t < 1.0 {
+                cx.rec.push_opacity(t);
+            }
             cx.rec.glyph(
                 "Glyph",
                 Rect::new(r.x + 2.0, r.y + 2.0, 12.0, 12.0),
@@ -246,7 +268,15 @@ impl Widget for Dot {
                 400,
                 look.glyph,
             );
+            if t < 1.0 {
+                cx.rec.pop();
+            }
         }
+    }
+
+    fn tick(&mut self, cx: &mut EventCx<'_>, dt: f32) -> bool {
+        cx.request_paint();
+        self.glyph_t.tick(dt)
     }
 
     fn event(&mut self, cx: &mut EventCx<'_>, event: &Event) -> Handled {
@@ -255,7 +285,13 @@ impl Widget for Dot {
                 cx.emit(Signal::Activated, Value::None);
                 Handled::Yes
             }
-            Event::PointerEnter | Event::PointerLeave => {
+            Event::PointerEnter => {
+                self.show_glyph(true);
+                cx.animate();
+                cx.request_paint();
+                Handled::No
+            }
+            Event::PointerLeave => {
                 cx.request_paint();
                 Handled::No
             }
@@ -310,11 +346,14 @@ impl Widget for WindowControls {
 
     fn event(&mut self, cx: &mut EventCx<'_>, event: &Event) -> Handled {
         if matches!(event, Event::PointerEnter | Event::PointerLeave) {
-            // The glyphs show on all three while the pointer is over any of them.
+            // The glyphs show on all three while the pointer is over any of them: they fade in
+            // together and out together.
+            let on = matches!(event, Event::PointerEnter);
             let id = cx.id();
             let kids = cx.ui().tree.children(id).to_vec();
             for k in kids {
-                cx.ui().request_paint(k);
+                let _ = cx.ui().with_widget::<Dot, _>(k, |d| d.show_glyph(on));
+                cx.ui().start_animating(k);
             }
         }
         Handled::No
@@ -1271,6 +1310,11 @@ impl Widget for Tab {
         };
         if self.selected || hover > 0.0 {
             let cr = Tab::close_rect(r.width);
+            // `.s-tab__x`: opacity follows the hover with fade.quick (a selected tab: 1).
+            let fading = !self.selected && hover < 1.0;
+            if fading {
+                cx.rec.push_opacity(hover);
+            }
             cx.rec.glyph(
                 "Close",
                 Rect::new(r.x + cr.x, r.y + cr.y, cr.width, cr.height),
@@ -1278,6 +1322,9 @@ impl Widget for Tab {
                 400,
                 icon,
             );
+            if fading {
+                cx.rec.pop();
+            }
         }
         if let Some(symbol) = &self.icon {
             cx.rec.glyph(
@@ -1462,6 +1509,42 @@ mod tests {
     use crate::core::window::WindowKind;
     use std::cell::RefCell;
     use std::rc::Rc;
+
+    fn glyph_opacity(ui: &mut Ui, dot: ViewId) -> f32 {
+        ui.with_widget::<Dot, _>(dot, |d| d.glyph_t.get())
+            .unwrap_or(-1.0)
+    }
+
+    #[test]
+    fn the_glyphs_fade_in_and_out_together_with_fade_instant() {
+        let mut ui = Ui::new_headless();
+        let g = window_controls_view(&mut ui);
+        let win = ui.create_window(WindowKind::Normal, Size::new(600.0, 200.0));
+        ui.set_content(win, g);
+        ui.show_window(win);
+        ui.prepare_frame(win);
+        let kids = ui.tree.children(g).to_vec();
+        assert!(kids.iter().all(|k| glyph_opacity(&mut ui, *k) == 0.0));
+        // The pointer on the first button: all three fade in.
+        let c = ui.tree.window_rect(kids[0]).center();
+        ui.pointer_move(win, c, Mods::empty());
+        ui.advance(0.04);
+        let mid = glyph_opacity(&mut ui, kids[2]);
+        assert!(mid > 0.0 && mid < 1.0, "fading in: {mid}");
+        ui.advance(0.2);
+        assert!(kids.iter().all(|k| glyph_opacity(&mut ui, *k) == 1.0));
+        // Moving to a sibling keeps them; leaving the group fades them out.
+        let c2 = ui.tree.window_rect(kids[1]).center();
+        ui.pointer_move(win, c2, Mods::empty());
+        ui.advance(0.2);
+        assert_eq!(glyph_opacity(&mut ui, kids[0]), 1.0);
+        ui.pointer_move(win, Point::new(400.0, 150.0), Mods::empty());
+        ui.advance(0.04);
+        let mid = glyph_opacity(&mut ui, kids[0]);
+        assert!(mid > 0.0 && mid < 1.0, "fading out: {mid}");
+        ui.advance(0.2);
+        assert!(kids.iter().all(|k| glyph_opacity(&mut ui, *k) == 0.0));
+    }
 
     fn mount(ui: &mut Ui, v: ViewId) -> crate::core::window::WindowId {
         let win = ui.create_window(WindowKind::Normal, Size::new(600.0, 200.0));
