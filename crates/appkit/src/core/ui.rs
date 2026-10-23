@@ -1306,6 +1306,7 @@ impl Ui {
         self.emit(id, Signal::FocusIn, Value::None);
         self.request_paint(id);
         self.requests.push(Request::AccessibilityChanged(window));
+        crate::amalfi::tooltips::hover_changed(self, window);
     }
 
     /// Removes the focus from the window.
@@ -1319,6 +1320,7 @@ impl Ui {
             self.send(o, &Event::FocusOut);
             self.emit(o, Signal::FocusOut, Value::None);
             self.request_paint(o);
+            crate::amalfi::tooltips::hover_changed(self, window);
         }
     }
 
@@ -1662,6 +1664,8 @@ impl Ui {
 
     /// A button went down at `pos`.
     pub fn pointer_down(&mut self, window: WindowId, pos: Point, button: Button, mods: Mods) {
+        // A press hides the tooltip (it comes back when the pointer has left and returned).
+        crate::amalfi::tooltips::dismiss(self);
         if self.sheet_of(window).is_some() {
             // A window with a sheet takes no input until the sheet is dismissed.
             self.requests.push(Request::Beep);
@@ -1879,6 +1883,9 @@ impl Ui {
     /// then the window's keys (Tab, Return for the default button, Escape for cancel); then
     /// the app's shortcuts; else [`Signal::KeyUnhandled`] on the root.
     pub fn key(&mut self, window: WindowId, key: KeyEvent) {
+        if key.pressed && key.key == Key::Escape {
+            crate::amalfi::tooltips::dismiss(self);
+        }
         if self.sheet_of(window).is_some() {
             return;
         }

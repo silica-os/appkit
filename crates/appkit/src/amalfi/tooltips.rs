@@ -344,13 +344,18 @@ impl Presenter {
 
 /// The pointer's hover chain in `window` changed.
 pub(crate) fn hover_changed(ui: &mut Ui, window: WindowId) {
-    let target = ui.window(window).and_then(|w| {
-        w.hover
-            .iter()
-            .rev()
-            .copied()
-            .find(|v| ui.tree.get(*v).is_some_and(|n| n.tooltip.is_some()))
+    let has_tip = |ui: &Ui, v: ViewId| ui.tree.get(v).is_some_and(|n| n.tooltip.is_some());
+    let hovered = ui
+        .window(window)
+        .and_then(|w| w.hover.iter().rev().copied().find(|v| has_tip(ui, *v)));
+    // Keyboard focus shows the tooltip too (`STooltip`: pointer or focus-visible).
+    let focused = ui.focus(window).filter(|v| {
+        ui.tree
+            .flags(*v)
+            .contains(crate::core::tree::NodeFlags::FOCUS_VISIBLE)
+            && has_tip(ui, *v)
     });
+    let target = hovered.or(focused);
     if target == ui.tooltips.target {
         return;
     }
@@ -376,6 +381,14 @@ pub(crate) fn hover_changed(ui: &mut Ui, window: WindowId) {
         });
         ui.tooltips.pending = Some(id);
     }
+}
+
+/// Hides the tooltip now (a press, Escape) and keeps it hidden until its target changes.
+pub(crate) fn dismiss(ui: &mut Ui) {
+    if let Some(t) = ui.tooltips.pending.take() {
+        ui.cancel_timer(t);
+    }
+    hide(ui, true);
 }
 
 /// Removes the bubble: it fades out (`fade`), or goes at once.
@@ -538,6 +551,38 @@ mod tests {
         run(&mut ui, 0.5);
         ui.pointer_leave(win);
         run(&mut ui, 2.0);
+        assert!(ui.tooltips.window().is_none());
+    }
+
+    #[test]
+    fn a_press_or_escape_hides_it_and_keyboard_focus_shows_it() {
+        use crate::core::event::{Button, Key, KeyEvent};
+        let (mut ui, win, a, _b) = scene();
+        let over_a = ui.tree.window_rect(a).center();
+        ui.pointer_move(win, over_a, Mods::empty());
+        run(&mut ui, 1.7);
+        assert!(ui.tooltips.window().is_some());
+        // A press hides it, and it stays hidden while the pointer stays.
+        ui.pointer_down(win, over_a, Button::Left, Mods::empty());
+        ui.pointer_up(win, over_a, Button::Left, Mods::empty());
+        assert!(ui.tooltips.window().is_none());
+        run(&mut ui, 3.0);
+        assert!(ui.tooltips.window().is_none());
+        // Leaving and coming back shows it again; Escape hides it.
+        ui.pointer_leave(win);
+        run(&mut ui, 1.0);
+        ui.pointer_move(win, over_a, Mods::empty());
+        run(&mut ui, 1.7);
+        assert!(ui.tooltips.window().is_some());
+        ui.key(win, KeyEvent::press(Key::Escape, Mods::empty()));
+        assert!(ui.tooltips.window().is_none());
+        // Keyboard focus shows it after the delay and losing the focus hides it.
+        ui.pointer_leave(win);
+        run(&mut ui, 1.0);
+        ui.set_focus(a, true);
+        run(&mut ui, 1.7);
+        assert!(ui.tooltips.window().is_some());
+        ui.clear_focus(win);
         assert!(ui.tooltips.window().is_none());
     }
 }
