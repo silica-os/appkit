@@ -3,7 +3,7 @@
 
 use crate::amalfi::buttons::IconButton;
 use crate::amalfi::foundation::{ControlSize, Interaction as Transitions, Label};
-use crate::amalfi::tokens::typography;
+use crate::amalfi::tokens::{self, typography};
 use crate::core::a11y::{A11y, Action, Role};
 use crate::core::event::{Event, Handled, Key};
 use crate::core::layout::Proposal;
@@ -11,7 +11,8 @@ use crate::core::tree::{NodeFlags, ViewId};
 use crate::core::ui::Ui;
 use crate::core::value::{Prop, Signal, Value};
 use crate::core::widget::{EventCx, FocusKind, Interaction, LayoutCx, PaintCx, PropChange, Widget};
-use crate::geom::{Point, Rect, Size};
+use crate::geom::{Point, Rect, Size, Transform};
+use crate::motion::{Animated, Timing};
 use crate::shape::Shape;
 use crate::style::{Border, Style};
 use crate::text::Align;
@@ -465,6 +466,8 @@ pub struct Header {
     /// Open (the chevron points down).
     pub open: bool,
     text: Label,
+    /// The chevron's turn: 1 open (down), 0 closed (right), `spring.snappy`.
+    turn: Animated<f32>,
 }
 
 impl Header {
@@ -475,6 +478,7 @@ impl Header {
             collapsible: false,
             open: true,
             text: Label::default(),
+            turn: Animated::new(1.0),
         }
     }
 
@@ -482,11 +486,20 @@ impl Header {
     pub fn collapsible(mut self, open: bool) -> Header {
         self.collapsible = true;
         self.open = open;
+        self.turn = Animated::new(if open { 1.0 } else { 0.0 });
         self
     }
 
     fn toggle(&mut self, cx: &mut EventCx<'_>) {
         self.open = !self.open;
+        let target = if self.open { 1.0 } else { 0.0 };
+        if cx.theme().appearance.reduce_motion {
+            self.turn.jump(target);
+        } else {
+            self.turn
+                .animate_to(target, Timing::Spring(tokens::motion::SPRING_SNAPPY));
+            cx.animate();
+        }
         cx.emit(Signal::ExpandedChanged, Value::Bool(self.open));
         cx.request_paint();
     }
@@ -510,9 +523,27 @@ impl Widget for Header {
         let c = theme.colors;
         let r = cx.bounds();
         if self.collapsible {
+            // The glyph of the target state, turned back by what is left of the turn
+            // (the ui-kit rotates one chevron by -90 deg when closed).
+            let t = self.turn.get().clamp(0.0, 1.0);
+            let angle = if self.open {
+                (t - 1.0) * std::f32::consts::FRAC_PI_2
+            } else {
+                t * std::f32::consts::FRAC_PI_2
+            };
+            let rect = Rect::new(r.x + r.width - 24.0, r.y + 12.0, 12.0, 12.0);
+            let turned = angle.abs() > 1e-4;
+            if turned {
+                let m = rect.center();
+                cx.rec.push_transform(
+                    Transform::translate(-m.x, -m.y)
+                        .then(Transform::rotate(angle))
+                        .then(Transform::translate(m.x, m.y)),
+                );
+            }
             cx.rec.glyph(
                 "Disclosure",
-                Rect::new(r.x + r.width - 24.0, r.y + 12.0, 12.0, 12.0),
+                rect,
                 if self.open {
                     "chevron-down"
                 } else {
@@ -521,6 +552,9 @@ impl Widget for Header {
                 400,
                 c.text_tertiary,
             );
+            if turned {
+                cx.rec.pop();
+            }
         }
         let style = theme.text(&typography::SIDEBAR_HEADER, c.text_tertiary);
         let w = (r.width - 12.0 - if self.collapsible { 28.0 } else { 12.0 }).max(0.0);
@@ -551,6 +585,10 @@ impl Widget for Header {
             }
             _ => Handled::No,
         }
+    }
+
+    fn tick(&mut self, _cx: &mut EventCx<'_>, dt: f32) -> bool {
+        self.turn.tick(dt)
     }
 
     fn interaction(&self) -> Interaction {
@@ -605,11 +643,43 @@ impl Widget for Header {
 // Group and panel.
 // ---------------------------------------------------------------------------------------
 
-/// A header with the rows of its section below it; the rows are hidden while it is closed.
-#[derive(Debug, Default)]
+/// A header with the rows of its section below it. Closing folds the rows away (`spring.panel`;
+/// Reduce Motion: at once): the group is as tall as the header plus the rows' height times the
+/// fold, and clips what is folded.
+#[derive(Debug)]
 pub struct Group {
     /// Open.
     pub open: bool,
+    fold: Animated<f32>,
+}
+
+impl Group {
+    /// A group, open or closed.
+    pub fn new(open: bool) -> Group {
+        Group {
+            open,
+            fold: Animated::new(if open { 1.0 } else { 0.0 }),
+        }
+    }
+
+    /// Opens or closes it, folding the rows with `spring.panel`.
+    pub fn set_open(&mut self, open: bool) {
+        self.open = open;
+        self.fold.animate_to(
+            if open { 1.0 } else { 0.0 },
+            Timing::Spring(tokens::motion::SPRING_PANEL),
+        );
+    }
+
+    fn shown(&self) -> bool {
+        self.open || self.fold.is_animating() || self.fold.get() > 0.0
+    }
+}
+
+impl Default for Group {
+    fn default() -> Self {
+        Group::new(false)
+    }
 }
 
 impl Widget for Group {
@@ -622,20 +692,25 @@ impl Widget for Group {
             Some(w) if w.is_finite() => w,
             _ => metrics::ROW_WIDTH,
         };
+        let fold = self.fold.get().clamp(0.0, 1.5);
+        let shown = self.shown();
         let mut h = 0.0;
+        let mut rows = 0.0;
         for (i, c) in cx.children().into_iter().enumerate() {
-            if i > 0 && !self.open {
-                break;
+            if i == 0 {
+                h += cx.measure(c, Proposal::new(Some(w), None)).height;
+            } else if shown {
+                rows += cx.measure(c, Proposal::new(Some(w), None)).height;
             }
-            h += cx.measure(c, Proposal::new(Some(w), None)).height;
         }
-        Size::new(w, h)
+        Size::new(w, h + rows * fold)
     }
 
     fn place(&mut self, cx: &mut LayoutCx<'_>, size: Size) {
         let mut y = 0.0;
+        let shown = self.shown();
         for (i, c) in cx.children().into_iter().enumerate() {
-            if i > 0 && !self.open {
+            if i > 0 && !shown {
                 break;
             }
             let s = cx.measure(c, Proposal::new(Some(size.width), None));
@@ -644,10 +719,33 @@ impl Widget for Group {
         }
     }
 
+    fn clips_children(&self) -> bool {
+        self.fold.is_animating()
+    }
+
+    fn tick(&mut self, cx: &mut EventCx<'_>, dt: f32) -> bool {
+        let reduce = cx.theme().appearance.reduce_motion;
+        if reduce {
+            let target = if self.open { 1.0 } else { 0.0 };
+            self.fold.jump(target);
+        }
+        let running = self.fold.tick(dt);
+        let (id, open) = (cx.id(), self.open);
+        cx.request_layout();
+        if !running && !open {
+            // Folded away: the rows leave the layout, the key loop and the hit tests.
+            let rows: Vec<ViewId> = cx.ui().tree.children(id).iter().skip(1).copied().collect();
+            for r in rows {
+                let _ = cx.ui().set(r, Prop::Hidden, Value::Bool(true));
+            }
+        }
+        running
+    }
+
     fn set_prop(&mut self, prop: Prop, value: &Value) -> PropChange {
         match (prop, value.as_bool()) {
             (Prop::Expanded, Some(b)) => {
-                self.open = b;
+                self.set_open(b);
                 PropChange::Layout
             }
             _ => PropChange::Unknown,
@@ -665,20 +763,27 @@ impl Widget for Group {
 
 /// Makes a group: a collapsible header and its rows.
 pub fn group(ui: &mut Ui, title: &str, open: bool, rows: &[ViewId]) -> ViewId {
-    let g = ui.create(Group { open });
+    let g = ui.create(Group::new(open));
     let h = ui.create(Header::new(title).collapsible(open));
     let _ = ui.set(h, Prop::Identifier, Value::from("Header"));
     ui.add_child(g, h);
     for r in rows {
         ui.add_child(g, *r);
+        if !open {
+            let _ = ui.set(*r, Prop::Hidden, Value::Bool(true));
+        }
     }
     let rows: Vec<ViewId> = rows.to_vec();
     ui.connect(h, Signal::ExpandedChanged, move |ui, _, v| {
         let open = v.as_bool().unwrap_or(false);
-        let _ = ui.set(g, Prop::Expanded, Value::Bool(open));
-        for r in &rows {
-            let _ = ui.set(*r, Prop::Hidden, Value::Bool(!open));
+        // Opening shows the rows at once and unfolds them; closing folds them first and the
+        // group hides them when it is done.
+        if open {
+            for r in &rows {
+                let _ = ui.set(*r, Prop::Hidden, Value::Bool(false));
+            }
         }
+        let _ = ui.set(g, Prop::Expanded, Value::Bool(open));
     });
     g
 }
@@ -853,7 +958,88 @@ mod tests {
         ui.pointer_up(win, p, Button::Left, Mods::empty());
         ui.prepare_frame(win);
         assert_eq!(ui.get(g, Prop::Expanded), Some(Value::Bool(false)));
+        settle(&mut ui, win);
         assert_eq!(ui.tree.window_rect(g).height, 28.0);
+    }
+
+    fn settle(ui: &mut Ui, win: crate::core::window::WindowId) {
+        for _ in 0..240 {
+            ui.advance(1.0 / 60.0);
+            ui.prepare_frame(win);
+            if !ui.is_animating() {
+                break;
+            }
+        }
+    }
+
+    fn folded(reduce: bool) -> (Ui, crate::core::window::WindowId, ViewId, [ViewId; 2]) {
+        let mut ui = Ui::new_headless();
+        let mut a = ui.appearance;
+        a.reduce_motion = reduce;
+        ui.set_appearance(a);
+        let win = ui.create_window(WindowKind::Normal, Size::new(300.0, 300.0));
+        let r1 = row(&mut ui, "folder", "Documents", None, false);
+        let r2 = row(&mut ui, "folder", "Downloads", None, false);
+        let g = group(&mut ui, "Favourites", true, &[r1, r2]);
+        ui.set_content(win, g);
+        ui.show_window(win);
+        ui.prepare_frame(win);
+        (ui, win, g, [r1, r2])
+    }
+
+    #[test]
+    fn closing_a_group_folds_its_rows_with_the_panel_spring() {
+        let (mut ui, win, g, [r1, r2]) = folded(false);
+        let _ = ui.set(g, Prop::Expanded, Value::Bool(false));
+        ui.advance(1.0 / 60.0);
+        ui.prepare_frame(win);
+        let mid = ui.tree.window_rect(g).height;
+        assert!(mid < 92.0 && mid > 28.0, "folding: {mid}");
+        settle(&mut ui, win);
+        assert_eq!(ui.tree.window_rect(g).height, 28.0);
+        assert!(
+            ui.tree.flags(r1).contains(NodeFlags::HIDDEN),
+            "folded rows leave the key loop"
+        );
+        // Opening again unfolds them.
+        for r in [r1, r2] {
+            let _ = ui.set(r, Prop::Hidden, Value::Bool(false));
+        }
+        let _ = ui.set(g, Prop::Expanded, Value::Bool(true));
+        settle(&mut ui, win);
+        assert_eq!(ui.tree.window_rect(g).height, 28.0 + 64.0);
+    }
+
+    #[test]
+    fn with_reduce_motion_a_group_folds_at_once_and_the_chevron_does_not_turn() {
+        let (mut ui, win, g, _) = folded(true);
+        let _ = ui.set(g, Prop::Expanded, Value::Bool(false));
+        ui.advance(1.0 / 60.0);
+        ui.prepare_frame(win);
+        assert_eq!(ui.tree.window_rect(g).height, 28.0);
+    }
+
+    #[test]
+    fn the_chevron_turns_with_the_snappy_spring() {
+        let mut ui = Ui::new_headless();
+        let win = ui.create_window(WindowKind::Normal, Size::new(300.0, 100.0));
+        let h = ui.create(Header::new("Favourites").collapsible(true));
+        ui.set_content(win, h);
+        ui.show_window(win);
+        ui.prepare_frame(win);
+        let c = ui.tree.window_rect(h).center();
+        ui.pointer_move(win, c, Mods::empty());
+        ui.pointer_down(win, c, Button::Left, Mods::empty());
+        ui.pointer_up(win, c, Button::Left, Mods::empty());
+        let turn = |ui: &mut Ui| {
+            ui.with_widget::<Header, _>(h, |h| h.turn.get())
+                .unwrap_or(-1.0)
+        };
+        ui.advance(0.05);
+        let mid = turn(&mut ui);
+        assert!(mid > 0.0 && mid < 1.0, "turning: {mid}");
+        settle(&mut ui, win);
+        assert_eq!(turn(&mut ui), 0.0);
     }
 
     #[test]

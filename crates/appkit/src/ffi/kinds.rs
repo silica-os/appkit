@@ -79,7 +79,7 @@ pub fn make(kind: u32) -> Option<Box<dyn Widget>> {
         AK_KIND_TABLE_HEADER => Box::new(TableHeader::new(Vec::new())),
         AK_KIND_SIDEBAR_ROW => Box::new(sidebars::Row::new("folder", "")),
         AK_KIND_SIDEBAR_HEADER => Box::new(sidebars::Header::new("")),
-        AK_KIND_SIDEBAR_GROUP => Box::new(sidebars::Group { open: true }),
+        AK_KIND_SIDEBAR_GROUP => Box::new(sidebars::Group::new(true)),
         AK_KIND_SIDEBAR_PANEL => Box::new(sidebars::Panel::default()),
         AK_KIND_FORM => Box::new(FormLayout::new(None)),
         AK_KIND_FORM_ROW => Box::new(FormRow::new("")),
