@@ -169,6 +169,53 @@ fn box_pass(p: &mut Plane, r: usize, horizontal: bool) {
     }
 }
 
+/// Below this σ (device pixels) the blur is an exact Gaussian kernel instead of box passes.
+const SMALL_SIGMA: f32 = 6.0;
+
+/// One Gaussian pass of σ along rows (`horizontal`) or columns, clamped at the edges.
+fn gauss_pass(p: &mut Plane, sigma: f32, horizontal: bool) {
+    if sigma.is_nan() || sigma <= 0.05 || p.w == 0 || p.h == 0 {
+        return;
+    }
+    let r = (sigma * 3.0).ceil() as isize;
+    let mut weights: Vec<f32> = (-r..=r)
+        .map(|i| (-((i * i) as f32) / (2.0 * sigma * sigma)).exp())
+        .collect();
+    let total: f32 = weights.iter().sum();
+    for w in &mut weights {
+        *w /= total;
+    }
+    let (n, lines) = if horizontal { (p.w, p.h) } else { (p.h, p.w) };
+    let w = p.w;
+    let idx = |line: usize, i: usize| {
+        if horizontal {
+            line * w + i
+        } else {
+            i * w + line
+        }
+    };
+    let mut buf = vec![[0.0f32; 4]; n];
+    for line in 0..lines {
+        for (i, slot) in buf.iter_mut().enumerate() {
+            *slot = p.px.get(idx(line, i)).copied().unwrap_or([0.0; 4]);
+        }
+        for i in 0..n {
+            let mut acc = [0.0f32; 4];
+            for (k, wt) in weights.iter().enumerate() {
+                let j = (i as isize + k as isize - r).clamp(0, n as isize - 1) as usize;
+                if let Some(v) = buf.get(j) {
+                    for (a, c) in acc.iter_mut().zip(v) {
+                        *a += c * wt;
+                    }
+                }
+            }
+            if let Some(o) = p.px.get_mut(idx(line, i)) {
+                *o = acc;
+            }
+        }
+    }
+}
+
 /// Box radii of three passes approximating a Gaussian of σ (W3C filter effects).
 fn box_radii(sigma: f32) -> [usize; 3] {
     if sigma.is_nan() || sigma <= 0.0 {
@@ -256,12 +303,21 @@ pub fn apply(
             }
         }
     }
-    let radii = box_radii(bd.sigma / k as f32);
-    for r in radii {
-        box_pass(&mut plane, r, true);
-    }
-    for r in radii {
-        box_pass(&mut plane, r, false);
+    let sigma = bd.sigma / k as f32;
+    if sigma < SMALL_SIGMA {
+        // Three box passes of a small σ are too wide (σ = 2 comes out as 2.45): a CSS
+        // `blur(1px)` on a 2x display must keep text legible, so a small blur is the true
+        // Gaussian.
+        gauss_pass(&mut plane, sigma, true);
+        gauss_pass(&mut plane, sigma, false);
+    } else {
+        let radii = box_radii(sigma);
+        for r in radii {
+            box_pass(&mut plane, r, true);
+        }
+        for r in radii {
+            box_pass(&mut plane, r, false);
+        }
     }
     let m = saturation_brightness_matrix(bd.saturation, bd.brightness);
     let identity = (bd.saturation - 1.0).abs() < 1e-4 && (bd.brightness - 1.0).abs() < 1e-4;

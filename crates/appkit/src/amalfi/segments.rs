@@ -2321,6 +2321,109 @@ mod tests {
         assert!(i == n || (back.blurs.is_empty() && i + 2 < n));
     }
 
+    /// The luminance of the pixels of `r` (device pixels).
+    fn grey(img: &crate::render::image::Image, r: Rect) -> Vec<f32> {
+        let mut out = Vec::new();
+        for y in (r.y as u32)..(r.bottom() as u32) {
+            for x in (r.x as u32)..(r.right() as u32) {
+                let p = img.pixel(x, y);
+                out.push(
+                    0.299 * f32::from(p[0]) + 0.587 * f32::from(p[1]) + 0.114 * f32::from(p[2]),
+                );
+            }
+        }
+        out
+    }
+
+    /// A separable Gaussian of `sigma` pixels over a `w` x `h` plane (edges clamped).
+    fn gaussian(v: &[f32], w: usize, h: usize, sigma: f32) -> Vec<f32> {
+        let r = (sigma * 3.0).ceil() as isize;
+        let k: Vec<f32> = (-r..=r)
+            .map(|i| (-((i * i) as f32) / (2.0 * sigma * sigma)).exp())
+            .collect();
+        let total: f32 = k.iter().sum();
+        let pass = |src: &[f32], horizontal: bool| -> Vec<f32> {
+            let mut out = vec![0.0; src.len()];
+            for y in 0..h {
+                for x in 0..w {
+                    let mut acc = 0.0;
+                    for (i, wt) in k.iter().enumerate() {
+                        let d = i as isize - r;
+                        let (xx, yy) = if horizontal {
+                            ((x as isize + d).clamp(0, w as isize - 1) as usize, y)
+                        } else {
+                            (x, (y as isize + d).clamp(0, h as isize - 1) as usize)
+                        };
+                        acc += src.get(yy * w + xx).copied().unwrap_or(0.0) * wt;
+                    }
+                    if let Some(o) = out.get_mut(y * w + x) {
+                        *o = acc / total;
+                    }
+                }
+            }
+            out
+        };
+        pass(&pass(v, true), false)
+    }
+
+    fn std_dev(v: &[f32]) -> f32 {
+        let n = v.len().max(1) as f32;
+        let m = v.iter().sum::<f32>() / n;
+        (v.iter().map(|x| (x - m) * (x - m)).sum::<f32>() / n).sqrt()
+    }
+
+    #[test]
+    fn the_label_under_the_lens_is_blurred_once_by_one_point() {
+        // Reduced motion: no scale, so the held and the resting renders line up.
+        let (mut ui, win, id, _log) =
+            scene(SegmentedControl::texts(&["Day", "Week", "Month"]).selected(&[1]));
+        let mut a = ui.appearance;
+        a.reduce_motion = true;
+        ui.set_appearance(a);
+        let rest = ui.snapshot(win, 2.0).expect("rest");
+        let items = ui
+            .widget::<SegmentedControl>(id)
+            .map(|c| c.items.clone())
+            .unwrap_or_default();
+        let origin = ui.tree.window_rect(id).origin();
+        let item = items[1];
+        // The label's box, inset from the lens' rims, in device pixels.
+        let r = Rect::new(
+            (origin.x + item.x + 6.0) * 2.0,
+            (origin.y + item.y + 3.0) * 2.0,
+            (item.width - 12.0) * 2.0,
+            (item.height - 6.0) * 2.0,
+        );
+        let (w, h) = (r.width as usize, r.height as usize);
+        let reference = gaussian(&grey(&rest, r), w, h, 2.0);
+
+        let _ = ui.set(id, Prop::Pressed, Value::Bool(true));
+        // Barely started, then settled: the lens only ever gets to its one blur.
+        for _ in 0..3 {
+            ui.advance(1.0 / 60.0);
+            let _ = ui.prepare_frame(win);
+        }
+        let early = ui.snapshot(win, 2.0).expect("early");
+        assert!(early.width() > 0);
+        ui.settle_animations(win);
+        let held = ui.snapshot(win, 2.0).expect("held");
+        // Painting again, and again after more frames, gives the same pixels: nothing builds
+        // up from one frame to the next.
+        for _ in 0..30 {
+            ui.advance(1.0 / 60.0);
+            let _ = ui.prepare_frame(win);
+        }
+        let later = ui.snapshot(win, 2.0).expect("later");
+        assert_eq!(held.bytes(), later.bytes());
+        // The text under the lens has the contrast of one σ = 1 pt (2 px) blur: the box passes that stand in for a Gaussian
+        // are 7 % too wide at this size.
+        let (got, want) = (std_dev(&grey(&held, r)), std_dev(&reference));
+        assert!(
+            (got - want).abs() <= want * 0.03,
+            "contrast {got:.2}, a single 1 pt blur gives {want:.2}"
+        );
+    }
+
     #[test]
     fn reduced_motion_morphs_the_lens_with_the_short_fade_and_no_scale() {
         let (mut ui, win, id, _log) =
