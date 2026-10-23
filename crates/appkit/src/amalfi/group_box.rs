@@ -258,4 +258,14 @@ mod tests {
         // 18 + 6 + 12 + 3 x 20 + 2 x 8 + 12
         assert_eq!(s.height, 124.0);
     }
+
+    #[test]
+    fn a_disabled_group_disables_its_controls_and_dims_once() {
+        let mut ui = Ui::new_headless();
+        let c = ui.create(Toggle::checkbox().label("Show banners"));
+        let g = group_box(&mut ui, Some("Notifications"), &[c]);
+        assert!(!ui.is_disabled(c));
+        let _ = ui.set(g, Prop::Disabled, Value::Bool(true));
+        assert!(ui.is_disabled(c), "the pointer and keys skip it");
+    }
 }
