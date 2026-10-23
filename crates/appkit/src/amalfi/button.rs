@@ -162,8 +162,30 @@ pub fn paint_surface(
     let hover = t.hover();
     let press = t.press();
     if let Some(glass) = look.glass {
-        let active = look.glass_active.filter(|_| hover >= 0.5 || press >= 0.5);
-        let style = theme.material_style(active.unwrap_or(glass));
+        // The blur steps over at the halfway point; the tint and the drop shadow fade with
+        // `fade.quick` (ui-kit: `transition: box-shadow`).
+        let t = hover.max(press).clamp(0.0, 1.0);
+        let active = look.glass_active.filter(|_| t >= 0.5);
+        let mut style = theme.material_style(active.unwrap_or(glass));
+        if let Some(other) = look.glass_active
+            && t > 0.0
+            && t < 1.0
+        {
+            let (a, b) = (theme.material_style(glass), theme.material_style(other));
+            if let (Some(fa), Some(fb)) = (
+                a.fills.first().and_then(|p| p.solid()),
+                b.fills.first().and_then(|p| p.solid()),
+            ) {
+                style.fills = vec![fa.lerp(fb, t).into()];
+            }
+            if let (Some(sa), Some(sb)) = (a.shadows.first(), b.shadows.first()) {
+                let mut sh = *sa;
+                sh.color = sa.color.lerp(sb.color, t);
+                sh.y += (sb.y - sa.y) * t;
+                sh.blur += (sb.blur - sa.blur) * t;
+                style.shadows = vec![sh];
+            }
+        }
         cx.rec.layer("Background", rect, shape.clone(), style);
     } else {
         let hovered = mix(look.fill, look.fill_hovered.or(look.fill), hover);

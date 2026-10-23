@@ -17,6 +17,7 @@ use crate::core::ui::Ui;
 use crate::core::value::{Prop, Signal, Value};
 use crate::core::widget::{EventCx, FocusKind, Interaction, LayoutCx, PaintCx, PropChange, Widget};
 use crate::geom::{Corners, Point, Rect, Size};
+use crate::motion::{Animated, Timing};
 use crate::shape::Shape;
 use crate::style::Style;
 use crate::text::Align;
@@ -458,9 +459,52 @@ pub struct GradientButtons {
     hovered: Option<usize>,
     pressed: Option<usize>,
     inside: bool,
+    /// The half the keyboard acts on (Left and Right move it, Space and Return press it).
+    key_half: usize,
+    hover_t: [Animated<f32>; 2],
+    press_t: [Animated<f32>; 2],
 }
 
 impl GradientButtons {
+    /// Aims the washes of the halves at the pointer's state (`fade.quick`, none with Reduce
+    /// Motion); returns whether anything animates.
+    fn retarget(&mut self, reduce: bool) -> bool {
+        let fade = if reduce {
+            Timing::None
+        } else {
+            Timing::curve(
+                crate::amalfi::tokens::motion::FADE_QUICK_CURVE,
+                crate::amalfi::tokens::motion::FADE_QUICK,
+            )
+        };
+        let (hovered, pressed, inside) = (self.hovered, self.pressed, self.inside);
+        for (h, (ht, pt)) in self
+            .hover_t
+            .iter_mut()
+            .zip(self.press_t.iter_mut())
+            .enumerate()
+        {
+            let hover = if hovered == Some(h) && pressed.is_none() {
+                1.0
+            } else {
+                0.0
+            };
+            let press = if pressed == Some(h) && inside {
+                1.0
+            } else {
+                0.0
+            };
+            if ht.target() != hover {
+                ht.animate_to(hover, fade);
+            }
+            if pt.target() != press {
+                pt.animate_to(press, fade);
+            }
+        }
+        self.hover_t.iter().any(|a| a.is_animating())
+            || self.press_t.iter().any(|a| a.is_animating())
+    }
+
     /// A pair with both halves enabled.
     pub fn new() -> GradientButtons {
         GradientButtons {
@@ -469,6 +513,16 @@ impl GradientButtons {
             hovered: None,
             pressed: None,
             inside: false,
+            key_half: 0,
+            hover_t: [Animated::new(0.0), Animated::new(0.0)],
+            press_t: [Animated::new(0.0), Animated::new(0.0)],
+        }
+    }
+
+    fn settle(&mut self, cx: &mut EventCx<'_>) {
+        let reduce = cx.theme().appearance.reduce_motion;
+        if self.retarget(reduce) {
+            cx.animate();
         }
     }
 
@@ -532,7 +586,17 @@ impl Widget for GradientButtons {
                 corners,
                 smoothing: crate::shape::AMALFI_SMOOTHING,
             };
-            if self.pressed == Some(half) && self.inside {
+            let press = self
+                .press_t
+                .get(half)
+                .map_or(0.0, |a| a.get())
+                .clamp(0.0, 1.0);
+            let hover = self
+                .hover_t
+                .get(half)
+                .map_or(0.0, |a| a.get())
+                .clamp(0.0, 1.0);
+            if press > 0.0 {
                 cx.rec.push_clip(rect, shape.clone());
                 cx.rec.layer(
                     "State",
@@ -543,12 +607,17 @@ impl Widget for GradientButtons {
                         22.0,
                     ),
                     Shape::RECT,
-                    Style::fill(c.surface_control_pressed),
+                    Style::fill(c.surface_control_pressed).with_opacity(press),
                 );
                 cx.rec.pop();
-            } else if self.hovered == Some(half) && self.pressed.is_none() {
-                cx.rec
-                    .layer("State", hr, half_shape, Style::fill(c.accent_amalfi_soft));
+            }
+            if hover > 0.0 {
+                cx.rec.layer(
+                    "State",
+                    hr,
+                    half_shape,
+                    Style::fill(c.accent_amalfi_soft).with_opacity(hover),
+                );
             }
         }
         cx.rec.layer(
@@ -591,12 +660,14 @@ impl Widget for GradientButtons {
                 if h != self.hovered {
                     self.hovered = h;
                     cx.request_paint();
+                    self.settle(cx);
                 }
                 Handled::No
             }
             Event::PointerLeave => {
                 if self.hovered.take().is_some() {
                     cx.request_paint();
+                    self.settle(cx);
                 }
                 Handled::No
             }
@@ -613,6 +684,7 @@ impl Widget for GradientButtons {
                 self.pressed = Some(h);
                 self.inside = true;
                 cx.request_paint();
+                self.settle(cx);
                 Handled::Yes
             }
             Event::PointerMove {
@@ -624,6 +696,7 @@ impl Widget for GradientButtons {
                 if inside != self.inside {
                     self.inside = inside;
                     cx.request_paint();
+                    self.settle(cx);
                 }
                 Handled::Yes
             }
@@ -641,9 +714,19 @@ impl Widget for GradientButtons {
                     cx.emit(Signal::Activated, Value::Int(h as i64));
                 }
                 cx.request_paint();
+                self.settle(cx);
                 Handled::Yes
             }
             Event::Key(k) if k.pressed && !disabled => match k.key {
+                Key::Left | Key::Right => {
+                    self.key_half = usize::from(k.key == Key::Right);
+                    cx.request_paint();
+                    Handled::Yes
+                }
+                Key::Space | Key::Enter if self.can(self.key_half, disabled) => {
+                    cx.emit(Signal::Activated, Value::Int(self.key_half as i64));
+                    Handled::Yes
+                }
                 Key::Char('+') | Key::Char('=') if self.add_enabled => {
                     cx.emit(Signal::Activated, Value::Int(0));
                     Handled::Yes
@@ -656,6 +739,14 @@ impl Widget for GradientButtons {
             },
             _ => Handled::No,
         }
+    }
+
+    fn tick(&mut self, _cx: &mut EventCx<'_>, dt: f32) -> bool {
+        let mut busy = false;
+        for t in self.hover_t.iter_mut().chain(self.press_t.iter_mut()) {
+            busy |= t.tick(dt);
+        }
+        busy
     }
 
     fn interaction(&self) -> Interaction {
@@ -1251,6 +1342,7 @@ impl Widget for MenuButton {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::KeyEvent;
     use crate::core::event::Mods;
     use crate::core::ui::Ui;
     use crate::core::window::{WindowId, WindowKind};
@@ -1305,6 +1397,36 @@ mod tests {
         assert_eq!(*log.borrow(), vec!["activated:"]);
         let a = ui.accessibility_of(id).unwrap_or_default();
         assert_eq!(a.label.as_deref(), Some("Add"));
+    }
+
+    #[test]
+    fn gradient_washes_fade_in_with_the_pointer_and_the_keyboard_picks_a_half() {
+        let (mut ui, win, id, log) = scene(GradientButtons::new());
+        let r = ui.tree.window_rect(id);
+        ui.pointer_move(win, Point::new(r.x + 10.0, r.y + 12.0), Mods::empty());
+        ui.advance(0.03);
+        let mid = ui
+            .widget::<GradientButtons>(id)
+            .map(|g| g.hover_t[0].get())
+            .unwrap_or(-1.0);
+        assert!(mid > 0.0 && mid < 1.0, "fading in: {mid}");
+        ui.advance(1.0);
+        assert_eq!(
+            ui.widget::<GradientButtons>(id).map(|g| g.hover_t[0].get()),
+            Some(1.0)
+        );
+        ui.pointer_leave(win);
+        ui.advance(1.0);
+        assert_eq!(
+            ui.widget::<GradientButtons>(id).map(|g| g.hover_t[0].get()),
+            Some(0.0)
+        );
+        ui.set_focus(id, true);
+        ui.key(win, KeyEvent::press(Key::Right, Mods::empty()));
+        ui.key(win, KeyEvent::press(Key::Space, Mods::empty()));
+        ui.key(win, KeyEvent::press(Key::Left, Mods::empty()));
+        ui.key(win, KeyEvent::press(Key::Enter, Mods::empty()));
+        assert_eq!(*log.borrow(), vec!["activated:1", "activated:0"]);
     }
 
     #[test]
