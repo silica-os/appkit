@@ -245,13 +245,14 @@ fn glass_numbers(tier: &str, dark: bool) -> Option<String> {
         .get(tier)?
         .get(if dark { "dark" } else { "light" })?;
     let blur = g.get("blurs")?.get(0)?;
-    let shadow = g.get("shadows")?.get(0)?;
+    let shadow = match g.get("shadows").and_then(|s| s.get(0)) {
+        Some(s) => format!("shadow 0, {}, blur {}", s.get("y")?, s.get("blur")?),
+        None => "no shadow".to_string(),
+    };
     Some(format!(
-        "blur {} · saturation {} · shadow 0, {}, blur {}",
+        "blur {} · saturation {} · {shadow}",
         blur.get("radius")?,
-        blur.get("saturation")?,
-        shadow.get("y")?,
-        shadow.get("blur")?
+        blur.get("saturation")?
     ))
 }
 
@@ -277,7 +278,7 @@ impl Component for Glass {
             column((
                 overlay((
                     backdrop,
-                    if tier <= 2 {
+                    if tier <= 1 {
                         glass_panel(tier, 16.0, label(name).padding_xy(16.0, 12.0))
                     } else {
                         label(name).padding_xy(16.0, 12.0)
@@ -291,34 +292,16 @@ impl Component for Glass {
             .alignment(0)
             .key(name.to_string())
         };
-        let mut cards = Vec::new();
-        for (i, (name, light, dk)) in [
-            ("Glass/Thin", None, None),
-            (
-                "Glass/Regular",
-                Some(&tokens::materials::GLASS_REGULAR_LIGHT),
-                Some(&tokens::materials::GLASS_REGULAR_DARK),
-            ),
-            ("Glass/Thick", None, None),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let _ = (light, dk);
-            let detail = glass_numbers(name.trim_start_matches("Glass/"), dark)
-                .unwrap_or_else(|| "from tokens.json".to_string());
-            cards.push(stripes(i as i64, name, detail));
-        }
-        let m = if dark {
-            tokens::materials::GLASS_CLEAR_DARK
-        } else {
-            tokens::materials::GLASS_CLEAR_LIGHT
-        };
-        cards.push(stripes(
-            3,
-            "Glass/Clear",
-            format!("the lens: blur {} · distortion {}", m.blur, m.distortion),
-        ));
+        // Regular is the glass of every control, bar, menu and panel; Clear only sits over media.
+        let cards: Vec<Element> = ["Glass/Regular", "Glass/Clear"]
+            .into_iter()
+            .enumerate()
+            .map(|(i, name)| {
+                let detail = glass_numbers(name.trim_start_matches("Glass/"), dark)
+                    .unwrap_or_else(|| "from tokens.json".to_string());
+                stripes(i as i64, name, detail)
+            })
+            .collect();
         page(vec![
             segmented(&["Light", "Dark"], &mode.binding()),
             note("The glass materials over a colourful backdrop: tint, rim, shadow and background blur."),
@@ -414,8 +397,13 @@ impl Component for Layout {
             .enumerate()
             .map(|(i, s)| {
                 column((
-                    glass_panel(1, 12.0, view(Kind::VIEW).frame(96.0, 64.0)).padding(8.0),
-                    label(format!("Shadow/{}", i + 1)).text_style("Headline"),
+                    glass_panel(0, 12.0, view(Kind::VIEW).frame(96.0, 64.0)).padding(8.0),
+                    label(if i == 3 {
+                        "Shadow/Glass".to_string()
+                    } else {
+                        format!("Shadow/{}", i + 1)
+                    })
+                    .text_style("Headline"),
                     mono(&format!("y {} · blur {}", s.y, s.blur)),
                 ))
                 .spacing(4.0)

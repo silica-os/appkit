@@ -1,4 +1,4 @@
-//! Tooltips (kit `Tooltips/Tooltip`, `Tooltips/Placement`): the bubble (`Glass/Thick`, radius
+//! Tooltips (kit `Tooltips/Tooltip`, `Tooltips/Placement`): the bubble (`Glass/Regular`, radius
 //! 8, Callout text, padding 4 x 8, an optional shortcut 8 after the label), where it goes next
 //! to its target, and the presenter that shows it when the pointer rests on a view with a
 //! tooltip.
@@ -153,7 +153,7 @@ impl Widget for Tooltip {
             "Surface",
             r,
             Shape::rounded(metrics::RADIUS),
-            theme.material_style("Glass/Thick"),
+            theme.material_style("Glass/Regular"),
         );
         let (label_w, shortcut_w, height) = self.boxes(&theme, r.width);
         let msg_style = theme.text(&typography::CALLOUT, theme.colors.text_primary);

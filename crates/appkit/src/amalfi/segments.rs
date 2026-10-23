@@ -3,6 +3,7 @@
 //! panes, and the single items the kit also has as masters.
 
 use crate::amalfi::foundation::{ControlSize, Label, control_shadow, focus_halo_named, whole};
+use crate::amalfi::materials::Tier;
 use crate::amalfi::sliders::{ThumbRest, morph_style};
 use crate::amalfi::theme::Theme;
 use crate::amalfi::tokens::{self, TypeStyle, control_heights, typography};
@@ -255,7 +256,7 @@ fn paint_thumb(cx: &mut PaintCx<'_>, theme: &Theme, rect: Rect, item_h: f32, t: 
         border: Some(c.line_border),
         shadow: control_shadow(theme),
     };
-    let style = morph_style(theme, t, rest, None);
+    let style = morph_style(theme, t, rest, Tier::Clear);
     let radius = item_h / 2.0 + (item_h * LENS_RADIUS - item_h / 2.0) * t;
     cx.rec.layer("Thumb", rect, Shape::rounded(radius), style);
 }

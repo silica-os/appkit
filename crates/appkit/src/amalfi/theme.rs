@@ -116,66 +116,24 @@ impl Theme {
                 .find(|(l, _)| l.name == n)
                 .map(|(l, d)| if dark { *d } else { *l })
         };
-        // ui-kit's `glass` styles (Sketch layer styles, 22 Oct) supersede the older
-        // `materials` numbers: blur, saturation, brightness and refraction per tier, and the
-        // tints from the colour tokens.
-        let c = &self.colors;
-        let (blur, sat, bri, dist, depth, ca, tint) = match name {
+        // ui-kit's `glass` styles (the Sketch layer styles of 23 Oct) supersede the
+        // `materials` numbers, which are on the spec scale: blur, saturation and brightness
+        // as rendered. Refraction and tint come from the `materials` token. Glass/Regular is
+        // the one glass of controls, bars, menus, popovers and panels (and the lens a control
+        // grows into); Glass/Clear only sits over media.
+        let (blur, sat, bri) = match name {
             "Glass/Regular" => (
-                if dark { 12.0 } else { 10.0 },
-                if dark { 1.25 } else { 1.6 },
-                if dark { 1.0 } else { 1.12 },
-                0.3,
-                0.5,
-                0.025,
-                Some(c.glass_tint),
+                if dark { 16.0 } else { 14.0 },
+                if dark { 1.22 } else { 1.65 },
+                if dark { 1.0 } else { 1.13 },
             ),
-            "Glass/Thick" => (
-                if dark { 20.0 } else { 18.0 },
-                if dark { 1.2 } else { 1.7 },
-                if dark { 1.0 } else { 1.15 },
-                0.22,
-                0.4,
-                0.015,
-                Some(c.glass_tint_thick),
-            ),
-            "Glass/Thin" => (
-                if dark { 5.0 } else { 4.0 },
-                if dark { 1.4 } else { 1.5 },
-                if dark { 0.95 } else { 1.06 },
-                0.4,
-                0.6,
-                0.04,
-                Some(c.glass_tint_thin),
-            ),
-            "Glass/Clear" => (
-                1.0,
-                1.2,
-                if dark { 0.98 } else { 1.06 },
-                0.45,
-                0.7,
-                0.06,
-                None,
-            ),
+            "Glass/Clear" => (1.0, 1.2, if dark { 0.98 } else { 1.06 }),
             _ => return pick(name),
         };
-        let mut m = pick(if name == "Glass/Thin" {
-            "Glass/Regular"
-        } else {
-            name
-        })?;
-        m.name = if name == "Glass/Thin" {
-            "Glass/Thin"
-        } else {
-            m.name
-        };
+        let mut m = pick(name)?;
         m.blur = blur;
         m.saturation = sat;
         m.brightness = bri;
-        m.distortion = dist;
-        m.depth = depth;
-        m.chromatic_aberration = ca;
-        m.tint = tint;
         Some(m)
     }
 
@@ -287,9 +245,10 @@ mod tests {
     #[test]
     fn material_styles() {
         let t = Theme::light();
-        let s = t.material_style("Glass/Thick");
+        let s = t.material_style("Glass/Regular");
         assert_eq!(s.shadows.len(), 1);
-        assert_eq!(s.shadows[0].blur, 32.0);
+        assert_eq!(s.shadows[0].blur, 20.0);
+        assert_eq!(s.shadows[0].y, 8.0);
         assert_eq!(s.blurs.len(), 1);
         assert_eq!(s.borders.len(), 1);
         assert_eq!(s.inner_shadows.len(), 2);
@@ -297,7 +256,7 @@ mod tests {
             reduce_transparency: true,
             ..Appearance::default()
         });
-        let s = rt.material_style("Glass/Thick");
+        let s = rt.material_style("Glass/Regular");
         assert!(s.blurs.is_empty());
         assert_eq!(s.fills.len(), 1);
         assert_eq!(s.fills[0].solid().map(|c| c.a), Some(255));

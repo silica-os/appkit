@@ -44,7 +44,7 @@ pub enum DisplayItem {
         shape: Shape,
         /// The material as a style (blur, tint, rims, shadow).
         style: Style,
-        /// The material's name (`Glass/Regular`, `Glass/Thick`, `Glass/Clear`).
+        /// The material's name (`Glass/Regular`, `Glass/Clear`).
         material: &'static str,
         /// The compositor profile (silica-glass-v1 `profile`).
         profile: GlassProfile,

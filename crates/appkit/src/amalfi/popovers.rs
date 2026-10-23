@@ -1,4 +1,4 @@
-//! Popovers (kit `Popovers`): the Glass/Thick surface with an arrow on one edge (or none,
+//! Popovers (kit `Popovers`): the Glass/Regular surface with an arrow on one edge (or none,
 //! detached), its content layouts, and [`present`], which shows a popover against an anchor.
 //!
 //! The arrow is 8 deep and 20 wide at its base (flanks at atan(8 / 10)), its base corners
@@ -161,7 +161,7 @@ impl PopoverShape {
     }
 }
 
-/// A popover: a Glass/Thick surface in the outline of its [`PopoverShape`], its single child
+/// A popover: a Glass/Regular surface in the outline of its [`PopoverShape`], its single child
 /// (the content) inside the body.
 #[derive(Debug)]
 pub struct Popover {
@@ -235,7 +235,7 @@ impl Widget for Popover {
         let r = cx.bounds();
         let local = Rect::from_size(r.size());
         let path = self.shape.path(local);
-        let style: Style = theme.material_style("Glass/Thick");
+        let style: Style = theme.material_style("Glass/Regular");
         // Detached: the plain smooth rectangle (the arrowless path is the same outline).
         let shape = if self.shape.edge.is_some() {
             Shape::Path(path)

@@ -1,9 +1,6 @@
-//! Materials (kit `Materials`, ui-kit `SGlassPanel` and `SThinGlass`): the glass surfaces of the
-//! shell. Thin is the shelf-like glass (Dock, Control Centre modules), Regular the control
-//! glass (banners, menu bar) and Thick the menu, popover and panel glass.
-//!
-//! Thin is the Regular material with the `Glass/Tint Thin` tint and a lighter, more saturated
-//! blur (the kit: blur 4 / saturation 1.5 against 10 / 1.6 for Regular).
+//! Materials (kit `Materials`, ui-kit `SGlassPanel`): the glass surfaces of the shell. Like
+//! Apple's, there are two: Regular, the one glass of controls, bars, menus, popovers, panels,
+//! banners and the Dock, and Clear, the nearly transparent glass for overlays on media.
 
 use crate::amalfi::theme::Theme;
 use crate::core::a11y::{A11y, Role};
@@ -16,25 +13,22 @@ use crate::geom::{Rect, Size};
 use crate::shape::Shape;
 use crate::style::Style;
 
-/// How thick a glass is.
+/// Which glass.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Tier {
-    /// The shelf glass (`Glass/Tint Thin`).
-    Thin,
-    /// The control glass (`Glass/Regular`).
+    /// The glass of controls, bars, menus and panels (`Glass/Regular`).
     #[default]
     Regular,
-    /// The menu and panel glass (`Glass/Thick`).
-    Thick,
+    /// The clear glass over media (`Glass/Clear`).
+    Clear,
 }
 
 impl Tier {
-    /// The tier of a `Prop::Style` integer (0 thin, 1 regular, 2 thick).
+    /// The tier of a `Prop::Style` integer (0 regular, 1 clear).
     pub fn from_int(n: i64) -> Option<Tier> {
         match n {
-            0 => Some(Tier::Thin),
-            1 => Some(Tier::Regular),
-            2 => Some(Tier::Thick),
+            0 => Some(Tier::Regular),
+            1 => Some(Tier::Clear),
             _ => None,
         }
     }
@@ -42,9 +36,8 @@ impl Tier {
     /// The tier as a `Prop::Style` integer.
     pub fn to_int(self) -> i64 {
         match self {
-            Tier::Thin => 0,
-            Tier::Regular => 1,
-            Tier::Thick => 2,
+            Tier::Regular => 0,
+            Tier::Clear => 1,
         }
     }
 }
@@ -53,9 +46,8 @@ impl Tier {
 /// Reduce Transparency the blur is an opaque fill (the tint over `Surface/Window`).
 pub fn glass_style(theme: &Theme, tier: Tier) -> Style {
     match tier {
-        Tier::Thick => theme.material_style("Glass/Thick"),
         Tier::Regular => theme.material_style("Glass/Regular"),
-        Tier::Thin => theme.material_style("Glass/Thin"),
+        Tier::Clear => theme.material_style("Glass/Clear"),
     }
 }
 
@@ -204,27 +196,26 @@ mod tests {
     use crate::style::Blur;
 
     #[test]
-    fn thin_glass_is_lighter_than_regular() {
+    fn clear_glass_is_lighter_than_regular() {
         let t = Theme::light();
-        let thin = glass_style(&t, Tier::Thin);
+        let clear = glass_style(&t, Tier::Clear);
         let regular = glass_style(&t, Tier::Regular);
-        assert_eq!(thin.fills.len(), 1);
         let blur = |s: &Style| match s.blurs.first() {
             Some(Blur::Glass(g)) => g.radius,
             _ => 0.0,
         };
-        assert!(blur(&thin) < blur(&regular));
-        assert_ne!(thin.fills, regular.fills);
-        assert_eq!(thin.shadows, regular.shadows);
-        // SThinGlass: the `Glass/Tint Thin` tint over a drop shadow of elevation 2.
-        assert_eq!(thin.fills.first(), Some(&t.colors.glass_tint_thin.into()));
+        assert!(blur(&clear) < blur(&regular));
+        // Clear has no tint and no drop shadow; Regular has both (`shadows.glass`).
+        assert!(clear.fills.is_empty() && clear.shadows.is_empty());
+        assert_eq!(regular.fills.len(), 1);
+        assert_eq!(regular.shadows.len(), 1);
     }
 
     #[test]
     fn reduce_transparency_makes_every_tier_opaque() {
         let mut t = Theme::light();
         t.appearance.reduce_transparency = true;
-        for tier in [Tier::Thin, Tier::Regular, Tier::Thick] {
+        for tier in [Tier::Regular, Tier::Clear] {
             assert!(glass_style(&t, tier).blurs.is_empty(), "{tier:?}");
         }
     }
@@ -233,7 +224,7 @@ mod tests {
     fn a_panel_survives_odd_constraints() {
         let mut ui = Ui::new_headless();
         let inner = ui.create(crate::amalfi::text::Text::new("Hello"));
-        let p = glass_panel(&mut ui, Tier::Thick, 24.0, 16.0, &[inner]);
+        let p = glass_panel(&mut ui, Tier::Regular, 24.0, 16.0, &[inner]);
         for (w, h) in [(0.0, 0.0), (1e6, 1e6), (4.0, 4.0)] {
             let s = ui.measure(p, Proposal::new(Some(w), Some(h)));
             assert!(s.width.is_finite() && s.height.is_finite());

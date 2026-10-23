@@ -364,7 +364,7 @@ fn corners(v: &[(f32, f32, f32)], smoothing: f32) -> Vec<Option<Corner>> {
 pub struct Callout {
     /// The outline.
     pub shape: CalloutShape,
-    /// The glass: Thick for menus and labels, Regular for the thinner control glass.
+    /// The glass (Regular).
     pub tier: Tier,
     /// The space between the body's edge and the content.
     pub padding: f32,
@@ -379,7 +379,7 @@ impl Callout {
     pub fn new(shape: CalloutShape) -> Callout {
         Callout {
             shape,
-            tier: Tier::Thick,
+            tier: Tier::Regular,
             padding: 0.0,
             layer: "Surface".to_string(),
             interactive: true,
@@ -395,12 +395,6 @@ impl Callout {
     /// With a padding.
     pub fn padded(mut self, padding: f32) -> Callout {
         self.padding = padding;
-        self
-    }
-
-    /// With the thinner control glass.
-    pub fn thin(mut self) -> Callout {
-        self.tier = Tier::Regular;
         self
     }
 }

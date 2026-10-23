@@ -1,7 +1,7 @@
 //! The stepper (kit `Steppers/Stepper`): a small `Surface/Control` bezel split by a divider
 //! into an up and a down half, each with a 12 pt chevron. Holding a half repeats it.
 
-use crate::amalfi::foundation::{ControlSize, control_shadow, focus_halo_named};
+use crate::amalfi::foundation::{ControlSize, focus_halo_named};
 use crate::amalfi::tokens;
 use crate::core::a11y::{A11y, Action, Role};
 use crate::core::event::{Button, Event, Handled, Key};
@@ -13,7 +13,7 @@ use crate::core::widget::{EventCx, FocusKind, Interaction, LayoutCx, PaintCx, Pr
 use crate::geom::{Corners, Point, Rect, Size};
 use crate::motion::{Animated, Timing};
 use crate::shape::Shape;
-use crate::style::{Border, Style};
+use crate::style::Style;
 
 /// Fixed measures (silica_ui's `AmalfiStepperMetrics`).
 pub mod metrics {
@@ -279,13 +279,12 @@ impl Widget for Stepper {
         let enabled = !cx.is_disabled();
         let rect = Rect::new(b.x, b.y, size.width, size.height);
         let shape = Shape::rounded(radius);
+        // The bezel is Glass/Regular, like every small control (ui-kit `SStepper`).
         cx.rec.layer(
             "Background",
             rect,
             shape.clone(),
-            Style::fill(c.surface_control)
-                .with_border(Border::inside(c.line_border, 1.0))
-                .with_shadow(control_shadow(&theme)),
+            theme.material_style("Glass/Regular"),
         );
         for (i, half) in [Half::Up, Half::Down].into_iter().enumerate() {
             if !self.can(half, enabled) {
@@ -293,8 +292,13 @@ impl Widget for Stepper {
             }
             let press = self.press_t.get(i).map_or(0.0, |a| a.get());
             let hover = self.hover_t.get(i).map_or(0.0, |a| a.get());
+            let press_wash = if theme.dark() {
+                tokens::states::PRESS_DARK
+            } else {
+                tokens::states::PRESS_LIGHT
+            };
             let (color, alpha) = if press > 0.0 {
-                (c.surface_control_pressed, press)
+                (press_wash, press)
             } else if hover > 0.0 {
                 (c.accent_amalfi_soft, hover)
             } else {

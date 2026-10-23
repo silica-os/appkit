@@ -1816,8 +1816,8 @@ mod tests {
         let col = View::new(Kind::COLUMN).unwrap();
         // Glass and callouts take a tier and an edge; a bad tier is refused.
         let g = View::new(Kind::GLASS_PANEL).unwrap();
-        g.set_int(Prop::STYLE, 2).unwrap();
-        assert_eq!(g.get_int(Prop::STYLE).unwrap(), 2);
+        g.set_int(Prop::STYLE, 1).unwrap();
+        assert_eq!(g.get_int(Prop::STYLE).unwrap(), 1);
         assert!(g.set_int(Prop::STYLE, 9).is_err());
         let c = View::new(Kind::CALLOUT).unwrap();
         c.set_int(Prop::EDGE, 1).unwrap();

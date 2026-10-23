@@ -1836,7 +1836,6 @@ fn send_glass(s: &mut Surface, regions: Vec<GlassRegion>) {
     let mut profile = None;
     for r in regions.iter().take(silica_protocols::glass::MAX_REGIONS) {
         let material = match r.material {
-            "Glass/Thick" => silica_glass_v1::Material::Thick,
             "Glass/Clear" => silica_glass_v1::Material::Clear,
             _ => silica_glass_v1::Material::Regular,
         };

@@ -1,10 +1,11 @@
 //! Sliders (kit `Sliders`): the linear slider (horizontal or vertical, plain, with tick marks
-//! or with glyphs), the circular dial, and the round thumb that turns into a `Glass/Clear`
+//! or with glyphs), the circular dial, and the round thumb that turns into a `Glass/Regular`
 //! lens while it is dragged (`materials.md`, lens rule).
 
 use crate::render::path::PathBuilder;
 
 use crate::amalfi::foundation::{control_shadow, focus_halo_named};
+use crate::amalfi::materials::Tier;
 use crate::amalfi::theme::Theme;
 use crate::amalfi::tokens;
 use crate::color::Color;
@@ -119,36 +120,51 @@ pub fn paint_morph(cx: &mut PaintCx<'_>, prefix: &str, rect: Rect, t: f32, press
         &format!("{prefix}Thumb"),
         rect,
         Shape::rounded(rect.width.min(rect.height) / 2.0),
-        morph_style(&theme, t, rest, None),
+        morph_style(&theme, t, rest, Tier::Regular),
     );
 }
 
-/// The clear glass of a lens at morph `t` (0: none, 1: full): the `Glass/Clear` refraction at
-/// the rim and the slight magnification of what is under it, `saturate(1.2)` from the CSS and
-/// no frosting (σ 0), so text under the lens stays sharp, only bent and magnified. The CSS has
-/// no liquid glass and uses `blur(1px)`; AppKit does the real thing.
-pub fn lens_glass(theme: &Theme, t: f32) -> Blur {
+/// The glass of a lens at morph `t` (0: none, 1: full), growing with the morph.
+///
+/// - [`Tier::Regular`] (slider and switch, ui-kit `--s-fx-regular` on `.is-lens`): the
+///   `Glass/Regular` blur, saturation, brightness and refraction, the same glass as every
+///   control.
+/// - [`Tier::Clear`] (segmented control, `--s-fx-lens`): the `Glass/Clear` refraction at the
+///   rim and its slight magnification, `saturate(1.2)` and no frosting (σ 0), so the labels
+///   under the lens stay sharp, only bent and magnified.
+pub fn lens_glass(theme: &Theme, t: f32, tier: Tier) -> Blur {
     let t = t.clamp(0.0, 1.0);
-    let m = theme.material("Glass/Clear");
-    let (distortion, depth, chromatic, magnification) = m.map_or((0.3, 0.5, 0.08, 1.1), |m| {
-        (
-            m.distortion,
-            m.depth,
-            m.chromatic_aberration,
-            m.magnification,
-        )
-    });
-    Blur::Glass(Glass {
-        radius: 0.0,
-        saturation: 1.0 + 0.2 * t,
-        brightness: 1.0,
-        distortion: distortion * t,
-        depth,
-        chromatic_aberration: chromatic * t,
-        // The rims are the CSS ones below.
-        specular: false,
-        magnification: 1.0 + (magnification - 1.0) * t,
-    })
+    let k = |v: f32| 1.0 + (v - 1.0) * t;
+    let glass = match tier {
+        Tier::Regular => {
+            let m = theme.material("Glass/Regular");
+            Glass {
+                radius: m.map_or(0.0, |m| m.blur) * t,
+                saturation: k(m.map_or(1.0, |m| m.saturation)),
+                brightness: k(m.map_or(1.0, |m| m.brightness)),
+                distortion: m.map_or(0.0, |m| m.distortion) * t,
+                depth: m.map_or(0.0, |m| m.depth),
+                chromatic_aberration: m.map_or(0.0, |m| m.chromatic_aberration) * t,
+                // The rims are the CSS ones in `morph_style`.
+                specular: false,
+                magnification: k(m.map_or(1.0, |m| m.magnification)),
+            }
+        }
+        Tier::Clear => {
+            let m = theme.material("Glass/Clear");
+            Glass {
+                radius: 0.0,
+                saturation: k(1.2),
+                brightness: 1.0,
+                distortion: m.map_or(0.3, |m| m.distortion) * t,
+                depth: m.map_or(0.5, |m| m.depth),
+                chromatic_aberration: m.map_or(0.08, |m| m.chromatic_aberration) * t,
+                specular: false,
+                magnification: k(m.map_or(1.1, |m| m.magnification)),
+            }
+        }
+    };
+    Blur::Glass(glass)
 }
 
 /// What a solid thumb looks like at rest, for [`morph_style`].
@@ -173,12 +189,22 @@ fn faded(c: Color, k: f32) -> Color {
 
 /// The style of a thumb that is turning into a lens, `t` = 0 the solid thumb and 1 the lens: one
 /// element whose fill, ring, shadows and glass all move together (ui-kit `.s-slider__thumb`,
-/// `.s-switch__thumb`, `.s-segmented__thumb`). The lens: no fill, a 1 pt `Glass/Rim Dark` ring,
-/// `Glass/Rim Light` (0 1 1) and a white 25 % glow (0 0 3) inside, `lens_drop` under it.
-pub fn morph_style(theme: &Theme, t: f32, rest: ThumbRest, lens_drop: Option<Shadow>) -> Style {
+/// `.s-switch__thumb`, `.s-segmented__thumb`). The lens: a 1 pt `Glass/Rim Dark` ring,
+/// `Glass/Rim Light` (0 1 1) and a white 25 % glow (0 0 3) inside and the [`lens_glass`] of
+/// `lens`; a Regular lens also takes the Regular tint and the glass drop shadow
+/// (`shadows.glass`), a Clear one stays transparent with no shadow.
+pub fn morph_style(theme: &Theme, t: f32, rest: ThumbRest, lens: Tier) -> Style {
     let t = t.clamp(0.0, 1.0);
     let c = theme.colors;
     let mut style = Style::fill(faded(rest.fill, 1.0 - t));
+    let regular = lens == Tier::Regular;
+    if let Some(tint) = theme.material("Glass/Regular").and_then(|m| m.tint)
+        && regular
+        && t > 0.0
+    {
+        style.fills.push(faded(tint, t).into());
+    }
+    let lens_drop = theme.shadow(4).filter(|_| regular);
     let ring = match rest.border {
         Some(b) => b.lerp(c.glass_rim_dark, t),
         None => faded(c.glass_rim_dark, t),
@@ -200,7 +226,7 @@ pub fn morph_style(theme: &Theme, t: f32, rest: ThumbRest, lens_drop: Option<Sha
                 0.0,
                 3.0,
             ))
-            .with_blur(lens_glass(theme, t));
+            .with_blur(lens_glass(theme, t, lens));
     }
     style
 }
@@ -1211,7 +1237,7 @@ impl Widget for LensThumb {
             "Lens",
             b,
             Shape::rounded(b.width.min(b.height) / 2.0),
-            morph_style(&theme, 1.0, rest, None),
+            morph_style(&theme, 1.0, rest, Tier::Regular),
         );
     }
 
@@ -1233,24 +1259,22 @@ mod tests {
     }
 
     #[test]
-    fn the_lens_is_clear_liquid_glass_with_the_css_rims() {
+    fn the_lens_is_regular_glass_with_the_css_rims() {
         let t = Theme::light();
-        let lens = morph_style(&t, 1.0, rest(&t), None);
-        // No fill, the rims inside, no shadow, and real glass behind: refraction and a slight
-        // magnification, saturate(1.2), and no frosting.
-        assert!(lens.fills.iter().all(|f| f.is_invisible()));
-        assert!(lens.shadows.iter().all(|s| s.color.a == 0));
+        let lens = morph_style(&t, 1.0, rest(&t), Tier::Regular);
+        // The thumb's fill is gone, the Regular tint is on, the rims inside, the glass drop
+        // shadow under it, and Regular glass behind.
+        let tint = t.material("Glass/Regular").and_then(|m| m.tint);
+        assert_eq!(lens.fills.last(), tint.map(Into::into).as_ref());
+        assert_eq!(lens.shadows.last().copied(), t.shadow(4));
         assert_eq!(lens.borders.len(), 1);
         assert_eq!(lens.inner_shadows.len(), 2);
         let Some(Blur::Glass(g)) = lens.blurs.first().copied() else {
             panic!("no glass");
         };
-        assert!(g.radius.abs() < 1e-6, "a clear lens does not frost");
-        assert!((g.saturation - 1.2).abs() < 1e-3);
-        assert!(g.distortion > 0.0 && g.magnification > 1.0);
-        // The switch's lens adds `Shadow/2`.
-        let switch = morph_style(&t, 1.0, rest(&t), t.shadow(2));
-        assert_eq!(switch.shadows.last().copied(), t.shadow(2));
+        let m = t.material("Glass/Regular").map(|m| (m.blur, m.saturation));
+        assert_eq!(Some((g.radius, g.saturation)), m);
+        assert!(g.distortion > 0.0);
     }
 
     #[test]
@@ -1327,12 +1351,20 @@ mod tests {
     #[test]
     fn the_thumb_and_the_lens_are_one_element() {
         let t = Theme::light();
-        let at_rest = morph_style(&t, 0.0, rest(&t), None);
+        let at_rest = morph_style(&t, 0.0, rest(&t), Tier::Regular);
         assert!(at_rest.blurs.is_empty() && at_rest.inner_shadows.is_empty());
-        let half = morph_style(&t, 0.5, rest(&t), None);
+        let half = morph_style(&t, 0.5, rest(&t), Tier::Regular);
         let Some(Blur::Glass(g)) = half.blurs.first().copied() else {
             panic!("no glass");
         };
+        let full = t.material("Glass/Regular").map_or(0.0, |m| m.blur);
+        assert!(g.radius > 0.0 && g.radius < full);
+        // A Clear lens (the segmented control's) does not frost and magnifies a little.
+        let clear = morph_style(&t, 0.5, rest(&t), Tier::Clear);
+        let Some(Blur::Glass(g)) = clear.blurs.first().copied() else {
+            panic!("no glass");
+        };
+        assert!(g.radius.abs() < 1e-6);
         assert!(g.magnification > 1.0 && g.magnification < 1.1 + 1e-3);
         assert!(
             half.fills

@@ -706,6 +706,62 @@ Segments/Control/One 7 Icon + Label/Dark
 Segments/Control/One 7 Icon + Label/Light
 Sliders/Thumb/Lens/Dragging/Dark
 Sliders/Thumb/Lens/Dragging/Light
+Steppers/Stepper/Large/Disabled/Dark
+Steppers/Stepper/Large/Disabled/Light
+Steppers/Stepper/Large/Focused/Dark
+Steppers/Stepper/Large/Focused/Light
+Steppers/Stepper/Large/Hover Down/Dark
+Steppers/Stepper/Large/Hover Down/Light
+Steppers/Stepper/Large/Hover Up/Dark
+Steppers/Stepper/Large/Hover Up/Light
+Steppers/Stepper/Large/Pressed Down/Dark
+Steppers/Stepper/Large/Pressed Down/Light
+Steppers/Stepper/Large/Pressed Up/Dark
+Steppers/Stepper/Large/Pressed Up/Light
+Steppers/Stepper/Large/Rest/Dark
+Steppers/Stepper/Large/Rest/Light
+Steppers/Stepper/Mini/Disabled/Dark
+Steppers/Stepper/Mini/Disabled/Light
+Steppers/Stepper/Mini/Focused/Dark
+Steppers/Stepper/Mini/Focused/Light
+Steppers/Stepper/Mini/Hover Down/Dark
+Steppers/Stepper/Mini/Hover Down/Light
+Steppers/Stepper/Mini/Hover Up/Dark
+Steppers/Stepper/Mini/Hover Up/Light
+Steppers/Stepper/Mini/Pressed Down/Dark
+Steppers/Stepper/Mini/Pressed Down/Light
+Steppers/Stepper/Mini/Pressed Up/Dark
+Steppers/Stepper/Mini/Pressed Up/Light
+Steppers/Stepper/Mini/Rest/Dark
+Steppers/Stepper/Mini/Rest/Light
+Steppers/Stepper/Regular/Disabled/Dark
+Steppers/Stepper/Regular/Disabled/Light
+Steppers/Stepper/Regular/Focused/Dark
+Steppers/Stepper/Regular/Focused/Light
+Steppers/Stepper/Regular/Hover Down/Dark
+Steppers/Stepper/Regular/Hover Down/Light
+Steppers/Stepper/Regular/Hover Up/Dark
+Steppers/Stepper/Regular/Hover Up/Light
+Steppers/Stepper/Regular/Pressed Down/Dark
+Steppers/Stepper/Regular/Pressed Down/Light
+Steppers/Stepper/Regular/Pressed Up/Dark
+Steppers/Stepper/Regular/Pressed Up/Light
+Steppers/Stepper/Regular/Rest/Dark
+Steppers/Stepper/Regular/Rest/Light
+Steppers/Stepper/Small/Disabled/Dark
+Steppers/Stepper/Small/Disabled/Light
+Steppers/Stepper/Small/Focused/Dark
+Steppers/Stepper/Small/Focused/Light
+Steppers/Stepper/Small/Hover Down/Dark
+Steppers/Stepper/Small/Hover Down/Light
+Steppers/Stepper/Small/Hover Up/Dark
+Steppers/Stepper/Small/Hover Up/Light
+Steppers/Stepper/Small/Pressed Down/Dark
+Steppers/Stepper/Small/Pressed Down/Light
+Steppers/Stepper/Small/Pressed Up/Dark
+Steppers/Stepper/Small/Pressed Up/Light
+Steppers/Stepper/Small/Rest/Dark
+Steppers/Stepper/Small/Rest/Light
 Titlebars/Bar/Compact/Active/Dark
 Titlebars/Bar/Compact/Active/Light
 Titlebars/Bar/Compact/Inactive/Dark

@@ -414,8 +414,9 @@ impl Scene {
         let (kw, kh) = (kit.width() as i32, kit.height() as i32);
         let (ow, oh) = (ours.width() as i32, ours.height() as i32);
         // A kit PNG may differ from what the master paints by an empty margin the export
-        // adds (or a rounding): `png_margin` compares the top left corner they share.
-        if (kw, kh) != (ow, oh) && !self.png_margin {
+        // adds (or a rounding): `png_margin` compares the top left corner they share. A stale
+        // PNG has the margin of the older shadows, so it is compared the same way.
+        if (kw, kh) != (ow, oh) && !self.png_margin && !stale {
             return Err(format!("size {ow}x{oh}, kit {kw}x{kh}"));
         }
         let (w, h) = (kw.min(ow), kh.min(oh));

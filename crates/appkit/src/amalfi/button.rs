@@ -29,7 +29,7 @@ pub enum PushVariant {
     Destructive,
     /// No fill until hovered, accent text.
     Borderless,
-    /// Glass (Regular at rest, Thick when hovered or pressed).
+    /// Glass/Regular at rest, hovered and pressed, with the accent wash when pressed.
     Glass,
 }
 
@@ -75,10 +75,8 @@ pub struct ButtonLook {
     pub hover_overlay: Option<Color>,
     /// Wash over the fill when pressed.
     pub press_overlay: Option<Color>,
-    /// Glass material at rest.
+    /// Glass material.
     pub glass: Option<&'static str>,
-    /// Glass material when hovered or pressed.
-    pub glass_active: Option<&'static str>,
     /// Text and symbol colour.
     pub content: Color,
 }
@@ -96,7 +94,6 @@ impl ButtonLook {
             hover_overlay: Some(c.accent_amalfi_soft),
             press_overlay: None,
             glass: None,
-            glass_active: None,
             content: c.text_primary,
         }
     }
@@ -113,7 +110,6 @@ impl ButtonLook {
             hover_overlay: None,
             press_overlay: None,
             glass: None,
-            glass_active: None,
             content: c.text_primary,
         };
         match variant {
@@ -140,7 +136,6 @@ impl ButtonLook {
             },
             PushVariant::Glass => ButtonLook {
                 glass: Some("Glass/Regular"),
-                glass_active: Some("Glass/Thick"),
                 press_overlay: Some(c.accent_amalfi_soft),
                 content: c.text_primary,
                 ..none
@@ -162,30 +157,7 @@ pub fn paint_surface(
     let hover = t.hover();
     let press = t.press();
     if let Some(glass) = look.glass {
-        // The blur steps over at the halfway point; the tint and the drop shadow fade with
-        // `fade.quick` (ui-kit: `transition: box-shadow`).
-        let t = hover.max(press).clamp(0.0, 1.0);
-        let active = look.glass_active.filter(|_| t >= 0.5);
-        let mut style = theme.material_style(active.unwrap_or(glass));
-        if let Some(other) = look.glass_active
-            && t > 0.0
-            && t < 1.0
-        {
-            let (a, b) = (theme.material_style(glass), theme.material_style(other));
-            if let (Some(fa), Some(fb)) = (
-                a.fills.first().and_then(|p| p.solid()),
-                b.fills.first().and_then(|p| p.solid()),
-            ) {
-                style.fills = vec![fa.lerp(fb, t).into()];
-            }
-            if let (Some(sa), Some(sb)) = (a.shadows.first(), b.shadows.first()) {
-                let mut sh = *sa;
-                sh.color = sa.color.lerp(sb.color, t);
-                sh.y += (sb.y - sa.y) * t;
-                sh.blur += (sb.blur - sa.blur) * t;
-                style.shadows = vec![sh];
-            }
-        }
+        let style = theme.material_style(glass);
         cx.rec.layer("Background", rect, shape.clone(), style);
     } else {
         let hovered = mix(look.fill, look.fill_hovered.or(look.fill), hover);

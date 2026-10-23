@@ -4,6 +4,7 @@
 use appkit::amalfi::fields::TextField;
 use appkit::amalfi::foundation::ControlSize;
 use appkit::amalfi::steppers::{Stepper, stepper_with_field};
+use appkit_test::kit::png_is_stale;
 use appkit_test::{KitMaster, Scene, Tolerance, center_of};
 
 /// Small bezels: the edge pixels are a large share of the canvas.
@@ -46,6 +47,11 @@ fn steppers_match_the_kit() {
         let report = scene.auto_geometry(&[]);
         if !report.is_empty() {
             failures.push(format!("{name}:\n    {}", report.join("\n    ")));
+            continue;
+        }
+        // The kit's PNGs still show the opaque bezel from before Glass/Regular: the layer
+        // tree above is the reference until they are rendered again.
+        if png_is_stale(&scene.master) {
             continue;
         }
         if let Err(e) = scene.pixels(SMALL) {
@@ -97,6 +103,10 @@ fn value_fields_and_steppers_with_fields_match_the_kit() {
         let report = scene.auto_geometry_except(&["Caret"], &[]);
         if !report.is_empty() {
             failures.push(format!("{name}:\n    {}", report.join("\n    ")));
+            continue;
+        }
+        // Stale PNGs: see `steppers_match_the_kit`.
+        if png_is_stale(&scene.master) {
             continue;
         }
         if let Err(e) = scene.pixels(Tolerance {

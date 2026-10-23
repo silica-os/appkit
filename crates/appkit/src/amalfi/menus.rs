@@ -412,7 +412,7 @@ impl Widget for MenuItem {
     }
 }
 
-/// The panel of a menu: `Glass/Thick`, radius 12, its rows (children) 4 in.
+/// The panel of a menu: `Glass/Regular`, radius 12, its rows (children) 4 in.
 #[derive(Debug, Default)]
 pub struct Menu {
     /// The highlighted row (index among the children).
@@ -643,7 +643,7 @@ impl Widget for Menu {
             "Surface",
             b,
             Shape::rounded(metrics::RADIUS),
-            theme.material_style("Glass/Thick"),
+            theme.material_style("Glass/Regular"),
         );
     }
 

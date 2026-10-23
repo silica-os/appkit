@@ -69,7 +69,7 @@ pub enum Material {
     /// `Surface/Raised` with a border and a level 3 shadow.
     #[default]
     Solid,
-    /// `Glass/Thick`.
+    /// `Glass/Regular`.
     Glass,
 }
 
@@ -179,7 +179,7 @@ impl Widget for Alert {
             }
             Material::Glass => {
                 cx.rec
-                    .layer("Surface", r, shape, theme.material_style("Glass/Thick"));
+                    .layer("Surface", r, shape, theme.material_style("Glass/Regular"));
             }
         }
     }

@@ -1,4 +1,4 @@
-//! Materials: the three glass tiers over a coloured backdrop.
+//! Materials: the two glass materials, Regular and Clear, over a coloured backdrop.
 
 use appkit_ui::prelude::*;
 
@@ -7,7 +7,7 @@ pub struct Page;
 
 impl Component for Page {
     fn body(&self, _cx: &mut Cx) -> Element {
-        let tiers = ["Thin", "Regular", "Thick"];
+        let tiers = ["Regular", "Clear"];
         let panels: Vec<Element> = tiers
             .iter()
             .enumerate()
@@ -18,7 +18,7 @@ impl Component for Page {
             .padding(32.0)
             .background(rgba(0x2B7FD9FF))
             .corner_radius(20.0);
-        page(vec![section("Glass: Thin, Regular, Thick", backdrop)])
+        page(vec![section("Glass: Regular, Clear", backdrop)])
     }
 }
 

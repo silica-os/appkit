@@ -180,7 +180,7 @@ pub fn swatch_row(
     (row, chips)
 }
 
-/// The colour panel: `Glass/Thick`, radius 16, a Headline title and rows of swatches (its
+/// The colour panel: `Glass/Regular`, radius 16, a Headline title and rows of swatches (its
 /// children, 32 tall each).
 #[derive(Debug)]
 pub struct ColorPanel {
@@ -233,7 +233,7 @@ impl Widget for ColorPanel {
             "Surface",
             b,
             Shape::rounded(metrics::PANEL_RADIUS),
-            theme.material_style("Glass/Thick"),
+            theme.material_style("Glass/Regular"),
         );
         let (l, t, _, _) = metrics::PANEL_PADDING;
         let style = theme.text(&typography::HEADLINE, theme.colors.text_primary);

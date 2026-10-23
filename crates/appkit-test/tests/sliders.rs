@@ -65,12 +65,15 @@ fn thumbs_match_the_kit() {
         let devs: Vec<&str> = Vec::new();
         if kind == "Lens" {
             scene.mount(|ui| ui.create(LensThumb));
-            // The kit's lens (`Glass/Clear` and a disc on it) is stale: the live ui-kit CSS
-            // is the reference (no disc, rims inside, blur 1 / saturate 1.2); the lens is
-            // checked by the lib tests, not compared with the master.
+            // The kit's lens (a disc on clear glass) is stale: the live ui-kit CSS is the
+            // reference (no disc, rims inside, Glass/Regular and its drop shadow); the lens is
+            // checked by the lib tests, not compared with the master. The mask covers the
+            // glass shadow (0 8 20) too.
             scene.skip_trees = vec!["Lens".to_string(), "Core".to_string()];
             if let Some(r) = scene.master.rect_in_master("Lens") {
-                scene.extra_mask.push(r.inflate(1.0, 1.0));
+                scene
+                    .extra_mask
+                    .push(r.inflate(24.0, 24.0).translate(Point::new(0.0, 8.0)));
             }
         } else {
             let look = ThumbLook {

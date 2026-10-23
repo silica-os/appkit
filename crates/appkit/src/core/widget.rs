@@ -337,7 +337,7 @@ impl PaintCx<'_> {
         self.ui.now
     }
 
-    /// Records a glass surface of `material` (`Glass/Regular`, `Glass/Thick`,
+    /// Records a glass surface of `material` (`Glass/Regular`,
     /// `Glass/Clear`): drawn by the compositor in windows whose backdrop is outside them,
     /// by the client otherwise.
     pub fn glass(

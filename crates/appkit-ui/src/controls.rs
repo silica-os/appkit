@@ -436,7 +436,7 @@ pub fn scroll_view(content: Element) -> Element {
     Element::of(Kind::SCROLL_VIEW).children(content)
 }
 
-/// A glass tier: 0 Thin, 1 Regular, 2 Thick.
+/// A glass material: 0 Regular, 1 Clear.
 pub type Glass = i64;
 
 /// A glass panel of `tier` with corners of `radius` around `content`.

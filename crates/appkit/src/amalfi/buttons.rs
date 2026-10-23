@@ -374,7 +374,6 @@ impl LinkButton {
             hover_overlay: None,
             press_overlay: None,
             glass: None,
-            glass_active: None,
             content: c.accent_amalfi,
         }
     }
