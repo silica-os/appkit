@@ -10,6 +10,7 @@ use crate::core::layout::Proposal;
 use crate::core::value::{Prop, Value};
 use crate::core::widget::{EventCx, LayoutCx, PaintCx, PropChange, Widget};
 use crate::geom::{Point, Rect, Size, Transform};
+use crate::motion::{Animated, Timing};
 use crate::shape::Shape;
 use crate::style::{Border, BorderPosition, Style};
 
@@ -143,6 +144,22 @@ pub fn segment_at(phase: f32, length: f32) -> Option<(f32, f32)> {
     (end - start > 0.0).then_some((start, end))
 }
 
+/// A determinate value moves with `spring.snappy` (the ui-kit's `width` transition); with Reduce
+/// Motion in 150 ms with `fade.quick`.
+fn glide(shown: &mut Animated<f32>, to: f32, reduce: bool) {
+    let to = if to.is_finite() {
+        to.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let timing = if reduce {
+        Timing::curve(tokens::motion::FADE_QUICK_CURVE, tokens::motion::FADE_QUICK)
+    } else {
+        Timing::Spring(tokens::motion::SPRING_SNAPPY)
+    };
+    shown.animate_to(to, timing);
+}
+
 fn reduce_motion(cx: &PaintCx<'_>) -> bool {
     cx.theme().appearance.reduce_motion
 }
@@ -159,6 +176,9 @@ pub struct ProgressBar {
     pub phase: Option<f32>,
     length: f32,
     t: f32,
+    shown: Animated<f32>,
+    /// The glide is timed for Reduce Motion.
+    reduced: bool,
 }
 
 impl ProgressBar {
@@ -170,12 +190,19 @@ impl ProgressBar {
             phase: None,
             length: metrics::LENGTH,
             t: 0.0,
+            shown: Animated::new(0.0),
+            reduced: false,
         }
     }
 
     /// Determinate at `v`.
     pub fn value(mut self, v: f32) -> ProgressBar {
         self.value = Some(v);
+        self.shown = Animated::new(if v.is_finite() {
+            v.clamp(0.0, 1.0)
+        } else {
+            0.0
+        });
         self
     }
 
@@ -246,9 +273,10 @@ impl Widget for ProgressBar {
                 };
                 ("Segment", part, c.accent_amalfi)
             }
-            Some(v) => {
-                let v = if v.is_finite() {
-                    v.clamp(0.0, 1.0)
+            Some(_) => {
+                let shown = self.shown.get();
+                let v = if shown.is_finite() {
+                    shown.clamp(0.0, 1.0)
                 } else {
                     0.0
                 };
@@ -285,8 +313,22 @@ impl Widget for ProgressBar {
             cx.ui().is_disabled(id)
         };
         let reduce = cx.theme().appearance.reduce_motion;
+        let mut running = false;
+        if self.shown.is_animating() {
+            if reduce && !self.reduced {
+                self.reduced = true;
+                let (now, to) = (self.shown.get(), self.shown.target());
+                self.shown.jump(now);
+                glide(&mut self.shown, to, true);
+            }
+            running = self.shown.tick(dt);
+            if !running {
+                self.reduced = false;
+            }
+            cx.request_paint();
+        }
         if !self.animates(disabled, reduce) {
-            return false;
+            return running;
         }
         self.t = (self.t + dt) % metrics::SWEEP;
         cx.request_paint();
@@ -301,6 +343,12 @@ impl Widget for ProgressBar {
                     PropChange::Paint
                 }
                 v => v.as_f32().map_or(PropChange::Unknown, |f| {
+                    // From indeterminate there is nothing to glide from.
+                    if self.value.is_some() {
+                        glide(&mut self.shown, f, false);
+                    } else {
+                        self.shown.jump(f.clamp(0.0, 1.0));
+                    }
                     self.value = Some(f);
                     PropChange::Paint
                 }),
@@ -311,7 +359,10 @@ impl Widget for ProgressBar {
                     PropChange::Paint
                 }
                 Some(false) => {
-                    self.value.get_or_insert(0.0);
+                    if self.value.is_none() {
+                        self.value = Some(0.0);
+                        self.shown.jump(0.0);
+                    }
                     PropChange::Paint
                 }
                 None => PropChange::Unknown,
@@ -359,6 +410,8 @@ pub struct CircularProgress {
     pub value: f32,
     /// Size.
     pub size: ProgressSize,
+    shown: Animated<f32>,
+    reduced: bool,
 }
 
 impl CircularProgress {
@@ -367,6 +420,12 @@ impl CircularProgress {
         CircularProgress {
             value,
             size: ProgressSize::Regular,
+            shown: Animated::new(if value.is_finite() {
+                value.clamp(0.0, 1.0)
+            } else {
+                0.0
+            }),
+            reduced: false,
         }
     }
 
@@ -394,8 +453,9 @@ impl Widget for CircularProgress {
         let o = Point::new(b.x, b.y);
         let ring = metrics::ring(self.size);
         let stroke = metrics::stroke(self.size);
-        let v = if self.value.is_finite() {
-            self.value.clamp(0.0, 1.0)
+        let shown = self.shown.get();
+        let v = if shown.is_finite() {
+            shown.clamp(0.0, 1.0)
         } else {
             0.0
         };
@@ -443,10 +503,29 @@ impl Widget for CircularProgress {
         );
     }
 
+    fn tick(&mut self, cx: &mut EventCx<'_>, dt: f32) -> bool {
+        if !self.shown.is_animating() {
+            return false;
+        }
+        if cx.theme().appearance.reduce_motion && !self.reduced {
+            self.reduced = true;
+            let (now, to) = (self.shown.get(), self.shown.target());
+            self.shown.jump(now);
+            glide(&mut self.shown, to, true);
+        }
+        let running = self.shown.tick(dt);
+        if !running {
+            self.reduced = false;
+        }
+        cx.request_paint();
+        running
+    }
+
     fn set_prop(&mut self, prop: Prop, value: &Value) -> PropChange {
         match prop {
             Prop::Value => value.as_f32().map_or(PropChange::Unknown, |f| {
                 self.value = f;
+                glide(&mut self.shown, f, false);
                 PropChange::Paint
             }),
             Prop::ControlSize => {
@@ -626,6 +705,79 @@ mod tests {
         let layers = ui.inspect_layers(bar);
         let fill = layers.iter().find(|l| l.path == "Fill").map(|l| l.frame);
         assert_eq!(fill.map(|f| f.width), Some(52.0));
+    }
+
+    fn fill_width(ui: &mut Ui, bar: crate::core::tree::ViewId) -> f32 {
+        ui.inspect_layers(bar)
+            .iter()
+            .find(|l| l.path == "Fill")
+            .map_or(0.0, |l| l.frame.width)
+    }
+
+    fn bar_scene(reduce: bool) -> (Ui, crate::core::window::WindowId, crate::core::tree::ViewId) {
+        let mut ui = Ui::new_headless();
+        let mut a = ui.appearance;
+        a.reduce_motion = reduce;
+        ui.set_appearance(a);
+        let win = ui.create_window(WindowKind::Normal, Size::new(300.0, 100.0));
+        let bar = ui.create(ProgressBar::new().value(0.25));
+        let _ = ui.set(bar, Prop::MaxWidth, Value::from(200.0));
+        ui.set_content(win, bar);
+        ui.show_window(win);
+        ui.prepare_frame(win);
+        (ui, win, bar)
+    }
+
+    #[test]
+    fn a_new_value_glides_with_the_snappy_spring() {
+        let (mut ui, win, bar) = bar_scene(false);
+        let _ = ui.set(bar, Prop::Value, Value::from(0.75));
+        ui.advance(0.06);
+        ui.prepare_frame(win);
+        let mid = fill_width(&mut ui, bar);
+        assert!(mid > 52.0 && mid < 152.0, "gliding: {mid}");
+        for _ in 0..120 {
+            ui.advance(1.0 / 60.0);
+        }
+        ui.prepare_frame(win);
+        assert_eq!(fill_width(&mut ui, bar), 152.0);
+    }
+
+    #[test]
+    fn with_reduce_motion_the_glide_is_a_150_ms_fade() {
+        let (mut ui, win, bar) = bar_scene(true);
+        let _ = ui.set(bar, Prop::Value, Value::from(0.75));
+        ui.advance(1.0 / 60.0);
+        ui.advance(0.06);
+        ui.prepare_frame(win);
+        let mid = fill_width(&mut ui, bar);
+        assert!(mid > 52.0 && mid < 152.0, "fading: {mid}");
+        ui.advance(0.2);
+        ui.prepare_frame(win);
+        assert_eq!(fill_width(&mut ui, bar), 152.0);
+    }
+
+    #[test]
+    fn the_ring_glides_too() {
+        let mut ui = Ui::new_headless();
+        let win = ui.create_window(WindowKind::Normal, Size::new(100.0, 100.0));
+        let ring = ui.create(CircularProgress::new(0.25));
+        ui.set_content(win, ring);
+        ui.show_window(win);
+        ui.prepare_frame(win);
+        let _ = ui.set(ring, Prop::Value, Value::from(1.0));
+        ui.advance(0.05);
+        assert!(ui.widget::<CircularProgress>(ring).is_some_and(|r| {
+            let s = r.shown.get();
+            s > 0.25 && s < 1.0
+        }));
+        for _ in 0..120 {
+            ui.advance(1.0 / 60.0);
+        }
+        assert_eq!(
+            ui.widget::<CircularProgress>(ring).map(|r| r.shown.get()),
+            Some(1.0)
+        );
     }
 
     #[test]
