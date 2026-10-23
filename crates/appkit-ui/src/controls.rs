@@ -115,6 +115,44 @@ pub fn segmented(items: &[&str], selected: &Binding<usize>) -> Element {
         })
 }
 
+/// A segmented control that allows several segments on: `selected` holds their indices.
+pub fn segmented_multiple(items: &[&str], selected: &Binding<Vec<usize>>) -> Element {
+    let b = selected.clone();
+    let rows: Vec<String> = selected.get().iter().map(usize::to_string).collect();
+    Element::of(Kind::SEGMENTED)
+        .prop(Prop::ITEMS, list(items))
+        .prop(Prop::STYLE, PValue::Int(1))
+        .prop(Prop::SELECTED_ROWS, PValue::Strings(rows.into()))
+        .on(Signal::VALUE_CHANGED, move |v| {
+            if let Value::List(l) = v {
+                b.set(l.iter().filter_map(|s| s.parse().ok()).collect());
+            }
+        })
+}
+
+/// A segmented control of icon segments: `items` are (symbol, accessible label).
+pub fn segmented_icons(items: &[(&str, &str)], selected: &Binding<usize>) -> Element {
+    let labels: Vec<&str> = items.iter().map(|i| i.1).collect();
+    let symbols: Vec<&str> = items.iter().map(|i| i.0).collect();
+    segmented(&labels, selected).prop(Prop::ITEM_SYMBOLS, list(&symbols))
+}
+
+/// The Icon + Label control that switches the panes of a window: `items` are (symbol, label).
+pub fn pane_control(items: &[(&str, &str)], selected: &Binding<usize>) -> Element {
+    let b = selected.clone();
+    let labels: Vec<&str> = items.iter().map(|i| i.1).collect();
+    let symbols: Vec<&str> = items.iter().map(|i| i.0).collect();
+    Element::of(Kind::PANE_CONTROL)
+        .prop(Prop::ITEMS, list(&labels))
+        .prop(Prop::ITEM_SYMBOLS, list(&symbols))
+        .prop(Prop::SELECTED_INDEX, PValue::Int(selected.get() as i64))
+        .on(Signal::VALUE_CHANGED, move |v| {
+            if let Some(i) = v.as_int().and_then(|i| usize::try_from(i).ok()) {
+                b.set(i);
+            }
+        })
+}
+
 fn field(kind: Kind, placeholder: &str, text: &Binding<String>) -> Element {
     let b = text.clone();
     Element::of(kind)

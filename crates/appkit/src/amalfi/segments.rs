@@ -1867,6 +1867,29 @@ impl Widget for PaneControl {
                 }
                 None => PropChange::Unknown,
             },
+            // The labels, then the symbols (through the ABI the panes are built from both).
+            Prop::Items => match value.as_str_list() {
+                Some(labels) => {
+                    let symbols: Vec<String> =
+                        self.panes.iter().map(|p| p.symbol.clone()).collect();
+                    self.panes = labels
+                        .iter()
+                        .enumerate()
+                        .map(|(i, l)| Pane::new(l, symbols.get(i).map_or("", String::as_str)))
+                        .collect();
+                    PropChange::Layout
+                }
+                None => PropChange::Unknown,
+            },
+            Prop::ItemSymbols => match value.as_str_list() {
+                Some(symbols) => {
+                    for (p, s) in self.panes.iter_mut().zip(symbols) {
+                        p.symbol.clone_from(s);
+                    }
+                    PropChange::Layout
+                }
+                None => PropChange::Unknown,
+            },
             _ => PropChange::Unknown,
         }
     }

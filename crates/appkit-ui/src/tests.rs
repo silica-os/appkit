@@ -569,3 +569,29 @@ fn a_popover_keeps_its_preferred_side() {
     let _root = mount(host(), move || SideProbe { seen: s2.clone() });
     assert_eq!(seen.get(), (appkit_rs::side::AFTER, appkit_rs::side::BELOW));
 }
+
+struct Segs;
+
+impl Component for Segs {
+    fn body(&self, cx: &mut Cx) -> Element {
+        let many = cx.state(|| vec![0usize, 2]);
+        let one = cx.state(|| 1usize);
+        column((
+            segmented_multiple(&["A", "B", "C"], &many.binding()).id("multi"),
+            segmented_icons(&[("gear", "General"), ("folder", "Files")], &one.binding())
+                .id("icons"),
+            pane_control(&[("gear", "General"), ("folder", "Files")], &one.binding()).id("panes"),
+        ))
+    }
+}
+
+#[test]
+fn multiple_icon_and_pane_segments_hold_their_selection() {
+    let _rt = Headless::new().unwrap();
+    let root = mount(host(), || Segs);
+    let multi = root.host().find("multi").unwrap();
+    assert_eq!(multi.get_int(Prop::STYLE).unwrap(), 1);
+    let panes = root.host().find("panes").unwrap();
+    assert_eq!(panes.get_int(Prop::SELECTED_INDEX).unwrap(), 1);
+    assert!(root.host().find("icons").is_some());
+}
