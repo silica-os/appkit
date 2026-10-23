@@ -98,7 +98,7 @@ impl Component for Gallery {
             None => label("No pages."),
         };
         row((
-            scroll_view(sidebar(rows).width(240.0))
+            column((scroll_view(sidebar(rows).width(240.0)).fill(),))
                 .width(240.0)
                 .max_height(f32::INFINITY),
             column((

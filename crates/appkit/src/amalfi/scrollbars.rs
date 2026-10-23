@@ -764,6 +764,31 @@ mod tests {
     }
 
     #[test]
+    fn the_wheel_scrolls_a_sidebar_over_its_rows() {
+        // The gallery's sidebar: rows in a panel in a scroll view that takes the window height.
+        let mut ui = Ui::new_headless();
+        let win = ui.create_window(WindowKind::Normal, Size::new(300.0, 300.0));
+        let rows: Vec<_> = (0..30)
+            .map(|_| crate::amalfi::sidebars::row(&mut ui, "square", "Row", None, false))
+            .collect();
+        let panel = ui.create(crate::amalfi::sidebars::Panel::default());
+        for r in &rows {
+            ui.add_child(panel, *r);
+        }
+        let sv = scroll_view(&mut ui, ScrollbarStyle::Overlay, panel);
+        let _ = ui.set(sv, Prop::MaxHeight, Value::from(f32::INFINITY));
+        ui.set_content(win, sv);
+        ui.show_window(win);
+        ui.prepare_frame(win);
+        let over_a_row = ui.tree.window_rect(rows[2]).center();
+        ui.scroll(win, over_a_row, 0.0, 200.0, false, Phase::None);
+        let Some(Value::Point(p)) = ui.get(sv, Prop::ScrollOffset) else {
+            panic!("no offset");
+        };
+        assert!(p.y > 100.0, "the sidebar did not scroll: {p:?}");
+    }
+
+    #[test]
     fn the_wheel_scrolls_and_stays_in_range() {
         let (mut ui, win, sv) = scene(ScrollbarStyle::Legacy);
         let c = ui.tree.window_rect(sv).center();

@@ -22,33 +22,36 @@ impl Component for Page {
         page(vec![
             section(
                 "Colour panel",
-                color_panel(&SWATCHES, 6, false, &colour.binding()),
-            ),
-            label(format!("#{:02X}{:02X}{:02X}", picked.r, picked.g, picked.b))
-                .color("Text/Secondary"),
-            section(
-                "Swatches only",
-                color_panel(&SWATCHES, 6, true, &colour.binding()),
+                row((
+                    color_panel(&SWATCHES, 6, false, &colour.binding()),
+                    color_panel(&SWATCHES, 6, true, &colour.binding()),
+                    label(format!("#{:02X}{:02X}{:02X}", picked.r, picked.g, picked.b))
+                        .color("Text/Secondary"),
+                ))
+                .spacing(24.0)
+                .alignment(0),
             ),
             section(
                 "Save panel",
-                file_panel(
+                scroll_view(file_panel(
                     false,
                     &expanded.binding(),
                     "Untitled",
                     &["Lemon cake.recipe", "Focaccia.recipe"],
                     move |a| s1.set(format!("Save panel: {a}")),
-                ),
+                ))
+                .frame(812.0, 460.0),
             ),
             section(
                 "Open panel",
-                file_panel(
+                scroll_view(file_panel(
                     true,
                     &expanded.binding(),
                     "",
                     &["Lemon cake.recipe", "Focaccia.recipe"],
                     move |a| s2.set(format!("Open panel: {a}")),
-                ),
+                ))
+                .frame(812.0, 460.0),
             ),
             label(said.get()).color("Text/Secondary"),
         ])

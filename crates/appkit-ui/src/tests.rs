@@ -457,3 +457,47 @@ fn forms_and_toolbars_build_the_kit_pieces() {
     assert_eq!(field.width, 204.0);
     assert!(host.find("form").unwrap().frame().unwrap().y >= bar.y + 52.0);
 }
+
+struct Split;
+
+impl Component for Split {
+    fn body(&self, _cx: &mut Cx) -> Element {
+        let rows: Vec<Element> = (0..30)
+            .map(|i| sidebar_row("square", "Row", false, || {}).key(i as i64))
+            .collect();
+        row((
+            column((scroll_view(sidebar(rows).width(100.0).id("panel"))
+                .id("scroll")
+                .fill(),))
+            .width(100.0)
+            .max_height(f32::INFINITY),
+            label("Content").fill(),
+        ))
+        .spacing(0.0)
+        .alignment(0)
+        .fill()
+    }
+}
+
+#[test]
+fn the_sidebar_scrolls_when_it_is_taller_than_the_window() {
+    let rt = Headless::new().unwrap();
+    let w = appkit_rs::Window::new(300.0, 200.0).unwrap();
+    let h = appkit_rs::View::new(appkit_rs::Kind::VIEW).unwrap();
+    h.set_float(Prop::MAX_WIDTH, f64::INFINITY).unwrap();
+    h.set_float(Prop::MAX_HEIGHT, f64::INFINITY).unwrap();
+    w.set_content(&h).unwrap();
+    w.show().unwrap();
+    let root = mount(h, || Split);
+    rt.advance(0.05);
+    let _ = w.snapshot_png(1.0).unwrap();
+    let scroll = root.host().find("scroll").unwrap();
+    assert!(
+        scroll.frame().unwrap().height <= 200.0,
+        "{:?}",
+        scroll.frame()
+    );
+    // The rows are not squeezed into the window: there is something to scroll.
+    let panel = root.host().find("panel").unwrap();
+    assert!(panel.frame().unwrap().height > 200.0, "{:?}", panel.frame());
+}

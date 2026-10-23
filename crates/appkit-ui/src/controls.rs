@@ -134,6 +134,11 @@ pub fn text_field(placeholder: &str, text: &Binding<String>) -> Element {
     field(Kind::TEXT_FIELD, placeholder, text)
 }
 
+/// A combo box: a text field bound to a string, with `items` to pick from.
+pub fn combo_box(placeholder: &str, items: &[&str], text: &Binding<String>) -> Element {
+    field(Kind::COMBO_BOX, placeholder, text).prop(Prop::ITEMS, list(items))
+}
+
 /// A secure (password) field bound to a string.
 pub fn secure_field(placeholder: &str, text: &Binding<String>) -> Element {
     field(Kind::SECURE_FIELD, placeholder, text)

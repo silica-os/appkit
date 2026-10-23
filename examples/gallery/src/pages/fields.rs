@@ -1,7 +1,5 @@
 //! Fields: text, secure, search, text area and combo box.
 
-use appkit_ui::PValue;
-use appkit_ui::kit::{Kind, Prop};
 use appkit_ui::prelude::*;
 
 use super::{captioned, page, section};
@@ -32,12 +30,13 @@ impl Component for Page {
         .spacing(12.0)
         .alignment(0);
         let area = text_area("Notes", &a.binding()).frame(320.0, 96.0);
-        let combo = view(Kind::COMBO_BOX)
-            .prop(
-                Prop::ITEMS,
-                PValue::Strings(vec!["Apple".into(), "Pear".into(), "Plum".into()].into()),
-            )
-            .width(200.0);
+        let fruit = cx.state(|| "Pear".to_string());
+        let combo = column((
+            combo_box("Fruit", &["Apple", "Pear", "Plum"], &fruit.binding()).width(200.0),
+            label(format!("Chosen: {}", fruit.get())).color("Text/Secondary"),
+        ))
+        .spacing(8.0)
+        .alignment(0);
         page(vec![
             section("Fields", singles),
             section("Text area", area),
