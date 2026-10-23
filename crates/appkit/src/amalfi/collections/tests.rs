@@ -495,3 +495,191 @@ fn the_stripes_carry_on_under_the_last_row() {
         .fold(0.0_f32, f32::max);
     assert!(lowest > f.height - 2.0 * metrics::ROW_HEIGHT, "{lowest}");
 }
+
+fn names_list(ui: &mut Ui, names: &'static [&'static str]) -> ViewId {
+    ui.create(ListView::new(
+        names.len(),
+        28.0,
+        Box::new(move |ui, i| Some(ui.create(Text::new(names[i])))),
+    ))
+}
+
+fn selected(ui: &Ui, v: ViewId) -> Vec<i64> {
+    match ui.get(v, Prop::SelectedRows) {
+        Some(Value::IntList(l)) => l,
+        _ => vec![-1],
+    }
+}
+
+#[test]
+fn click_shift_and_ctrl_select_like_a_table() {
+    let mut ui = Ui::new_headless();
+    let list = names_list(&mut ui, &["Apple", "Banana", "Cherry", "Date", "Elder"]);
+    let w = window(&mut ui, Size::new(300.0, 280.0), list);
+    let r = ui.tree.window_rect(list);
+    let at = |i: usize| Point::new(r.x + 50.0, r.y + 14.0 + 28.0 * i as f32);
+    click(&mut ui, w, at(1), Mods::empty());
+    assert_eq!(selected(&ui, list), vec![1]);
+    click(&mut ui, w, at(3), Mods::SHIFT);
+    assert_eq!(selected(&ui, list), vec![1, 2, 3]);
+    // Ctrl toggles one row without touching the others.
+    click(&mut ui, w, at(2), Mods::CTRL);
+    assert_eq!(selected(&ui, list), vec![1, 3]);
+    click(&mut ui, w, at(4), Mods::CTRL);
+    assert_eq!(selected(&ui, list), vec![1, 3, 4]);
+    // A plain click replaces the selection.
+    click(&mut ui, w, at(0), Mods::empty());
+    assert_eq!(selected(&ui, list), vec![0]);
+}
+
+#[test]
+fn arrows_home_end_pages_escape_and_space() {
+    let mut ui = Ui::new_headless();
+    let list = ui.create(ListView::new(
+        100,
+        28.0,
+        Box::new(|ui, i| Some(ui.create(Text::new(&format!("Row {i}"))))),
+    ));
+    let w = window(&mut ui, Size::new(300.0, 280.0), list);
+    ui.set_focus(list, true);
+    key(&mut ui, w, Key::Down, Mods::empty());
+    key(&mut ui, w, Key::Down, Mods::empty());
+    assert_eq!(selected(&ui, list), vec![1]);
+    key(&mut ui, w, Key::Down, Mods::SHIFT);
+    key(&mut ui, w, Key::Down, Mods::SHIFT);
+    assert_eq!(selected(&ui, list), vec![1, 2, 3]);
+    key(&mut ui, w, Key::Up, Mods::SHIFT);
+    assert_eq!(selected(&ui, list), vec![1, 2]);
+    key(&mut ui, w, Key::End, Mods::empty());
+    assert_eq!(selected(&ui, list), vec![99]);
+    assert!(scroll_y(&ui, list) > 0.0);
+    key(&mut ui, w, Key::Home, Mods::empty());
+    assert_eq!(selected(&ui, list), vec![0]);
+    assert_eq!(scroll_y(&ui, list), 0.0);
+    key(&mut ui, w, Key::PageDown, Mods::empty());
+    let page = selected(&ui, list)[0];
+    assert!(
+        (8..=11).contains(&page),
+        "a page is about 10 rows, got {page}"
+    );
+    key(&mut ui, w, Key::PageUp, Mods::empty());
+    assert_eq!(selected(&ui, list), vec![0]);
+    // Space toggles the current row in a multiple selection.
+    key(&mut ui, w, Key::Down, Mods::empty());
+    key(&mut ui, w, Key::Down, Mods::SHIFT);
+    assert_eq!(selected(&ui, list), vec![1, 2]);
+    key(&mut ui, w, Key::Space, Mods::empty());
+    assert_eq!(selected(&ui, list), vec![1]);
+    key(&mut ui, w, Key::Space, Mods::empty());
+    assert_eq!(selected(&ui, list), vec![1, 2]);
+    // Escape clears the selection.
+    key(&mut ui, w, Key::Escape, Mods::empty());
+    assert!(selected(&ui, list).is_empty());
+}
+
+#[test]
+fn type_select_jumps_to_the_row_with_the_typed_prefix() {
+    let mut ui = Ui::new_headless();
+    let list = names_list(&mut ui, &["Apple", "Banana", "Blueberry", "Cherry", "Date"]);
+    let w = window(&mut ui, Size::new(300.0, 280.0), list);
+    ui.set_focus(list, true);
+    key(&mut ui, w, Key::Char('c'), Mods::empty());
+    assert_eq!(selected(&ui, list), vec![3]);
+    key(&mut ui, w, Key::Char('d'), Mods::empty());
+    // "cd" matches nothing: the selection stays.
+    assert_eq!(selected(&ui, list), vec![3]);
+}
+
+#[test]
+fn the_typed_prefix_grows_within_a_second_and_restarts_after() {
+    let mut rows = Rows::new(5, 28.0);
+    rows.viewport = 280.0;
+    let names = ["Apple", "Banana", "Blueberry", "Cherry", "Date"];
+    let label = |i: usize| names.get(i).map(|s| (*s).to_string());
+    let t0 = Instant::now();
+    let press = |c: char| KeyEvent::press(Key::Char(c), Mods::empty());
+    assert_eq!(rows.type_key(&press('b'), t0, &label), Some(true));
+    assert_eq!(rows.selected, vec![1]);
+    // "bl" within a second narrows to Blueberry.
+    rows.type_key(&press('l'), t0 + Duration::from_millis(400), &label);
+    assert_eq!(rows.selected, vec![2]);
+    // After a second the prefix starts over: "a" finds Apple (wrapping).
+    rows.type_key(&press('a'), t0 + Duration::from_millis(2000), &label);
+    assert_eq!(rows.selected, vec![0]);
+    // A shortcut chord is not a character.
+    let chord = KeyEvent::press(Key::Char('d'), Mods::CTRL);
+    assert_eq!(rows.type_key(&chord, t0, &label), None);
+    // Labels set on the widget take over from the views.
+    rows.labels = Labels::new(|i| Some(format!("zz{i}")));
+    rows.typed_at = None;
+    rows.type_key(&press('z'), t0, &|_| None);
+    assert_eq!(rows.selected, vec![1], "the next row after the current one");
+}
+
+#[test]
+fn the_table_and_the_grid_select_by_typing_and_escape() {
+    let mut ui = Ui::new_headless();
+    let grid = ui.create(GridView::new(
+        6,
+        Box::new(|ui, i| {
+            let names = ["Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta"];
+            Some(ui.create(Text::new(names[i])))
+        }),
+    ));
+    let w = window(&mut ui, Size::new(400.0, 300.0), grid);
+    ui.set_focus(grid, true);
+    key(&mut ui, w, Key::Char('g'), Mods::empty());
+    assert_eq!(selected(&ui, grid), vec![2]);
+    key(&mut ui, w, Key::Space, Mods::empty());
+    assert!(selected(&ui, grid).is_empty() || selected(&ui, grid) == vec![2]);
+    key(&mut ui, w, Key::Escape, Mods::empty());
+    assert!(selected(&ui, grid).is_empty());
+    key(&mut ui, w, Key::Char('a'), Mods::CTRL);
+    assert_eq!(selected(&ui, grid).len(), 6);
+
+    let tbl = table(&mut ui, 30, false);
+    let w2 = window(&mut ui, Size::new(500.0, 300.0), tbl);
+    ui.set_focus(tbl, true);
+    key(&mut ui, w2, Key::Down, Mods::empty());
+    key(&mut ui, w2, Key::Escape, Mods::empty());
+    assert!(selected(&ui, tbl).is_empty());
+}
+
+#[test]
+fn a_focused_collection_draws_a_focus_ring_and_dims_in_an_inactive_window() {
+    let mut ui = Ui::new_headless();
+    let list = names_list(&mut ui, &["Apple", "Banana"]);
+    let w = window(&mut ui, Size::new(300.0, 200.0), list);
+    let mut a = ui.appearance;
+    a.full_keyboard_access = true;
+    ui.set_appearance(a);
+    ui.set_focus(list, true);
+    key(&mut ui, w, Key::Down, Mods::empty());
+    let has = |ui: &mut Ui, name: &str| {
+        ui.inspect_layers(list)
+            .iter()
+            .any(|l| l.path.ends_with(name))
+    };
+    ui.prepare_frame(w);
+    assert!(has(&mut ui, "Focus Halo"));
+    let fill = |ui: &mut Ui| {
+        ui.inspect_layers(list)
+            .into_iter()
+            .find(|l| l.path.ends_with("Selection"))
+            .and_then(|l| match l.content {
+                crate::core::InspectedContent::Shape { style, .. } => style.fills.first().cloned(),
+                _ => None,
+            })
+    };
+    ui.set_window_active(w, true);
+    ui.prepare_frame(w);
+    let active = fill(&mut ui);
+    ui.set_window_active(w, false);
+    ui.prepare_frame(w);
+    let inactive = fill(&mut ui);
+    assert!(active.is_some() && inactive.is_some());
+    assert_ne!(
+        active, inactive,
+        "the selection dims when the window is inactive"
+    );
+}

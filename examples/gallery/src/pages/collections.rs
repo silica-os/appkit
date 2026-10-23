@@ -41,6 +41,8 @@ impl Component for Page {
         let data = cx.state(files);
         let sort = cx.state(|| None::<(usize, bool)>);
         let picked = cx.state(|| vec![2u64]);
+        let listed = cx.state(Vec::<u64>::new);
+        let l2 = listed.clone();
         // The rows in the sorted order.
         let mut order: Vec<usize> = (0..data.get().len()).collect();
         if let Some((col, asc)) = sort.get() {
@@ -150,14 +152,25 @@ impl Component for Page {
         .height(220.0);
 
         column((
+            column((
+                label("Click selects, Shift extends a range, Ctrl toggles. Arrows, Home, End, Page Up/Down move (Shift extends).")
+                    .text_style("Callout")
+                    .color("Text/Secondary"),
+                label("Type to jump to a row; Space toggles, Return opens, Esc clears. Outline: Right/Left expand and collapse (Alt: all).")
+                    .text_style("Callout")
+                    .color("Text/Secondary"),
+            ))
+            .spacing(2.0)
+            .alignment(0),
             section(
-                "A list box of 10 000 rows",
+                &format!("A list box of 10 000 rows ({} selected)", listed.get().len()),
                 appkit_ui::list(10_000, 24.0, |i| {
                     label(format!("Row {}", i + 1))
                         .padding_xy(8.0, 0.0)
                         .align(3)
                 })
                 .style(2)
+                .on_select(move |keys| l2.set(keys))
                 .id("list")
                 .fill_width()
                 .height(120.0),
