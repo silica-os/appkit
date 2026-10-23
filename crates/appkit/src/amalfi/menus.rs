@@ -77,6 +77,8 @@ pub struct MenuItem {
     pub checked: bool,
     /// Opens a submenu.
     pub submenu: bool,
+    /// The rows of the submenu (a chevron without rows has none to open).
+    pub sub: Vec<Row>,
     /// Terracotta when highlighted.
     pub destructive: bool,
     /// Highlighted by itself (the menu highlights its rows as the pointer moves).
@@ -94,6 +96,7 @@ impl MenuItem {
             icon: None,
             checked: false,
             submenu: false,
+            sub: Vec::new(),
             destructive: false,
             highlighted: false,
             label_text: Label::default(),
@@ -416,6 +419,10 @@ pub struct Menu {
     pub highlight: Option<usize>,
     /// The panel is at least this wide.
     pub min_width: Option<f32>,
+    /// The open submenu and the row it belongs to.
+    sub: Option<(WindowId, usize)>,
+    /// This menu is a cascade: Left closes it.
+    nested: bool,
 }
 
 impl Menu {
@@ -473,11 +480,124 @@ impl Menu {
         }
     }
 
+    fn first_last(&mut self, cx: &mut EventCx<'_>, last: bool) {
+        let id = cx.id();
+        let kids = cx.ui().tree.children(id).to_vec();
+        let rows = Menu::rows(&kids, cx.ui());
+        let pick = if last {
+            rows.iter().rposition(|(_, ok)| *ok)
+        } else {
+            rows.iter().position(|(_, ok)| *ok)
+        };
+        if pick.is_some() {
+            self.highlight = pick;
+            cx.request_paint();
+        }
+    }
+
+    /// Closes the open submenu (from this menu's own event).
+    fn close_sub(&mut self, cx: &mut EventCx<'_>) {
+        if let Some((w, _)) = self.sub.take() {
+            cx.ui().close_window(w);
+        }
+    }
+
+    /// Closes the submenu `menu` has open (from outside its events).
+    fn close_sub_of(ui: &mut Ui, menu: ViewId) {
+        let w = ui.with_widget::<Menu, _>(menu, |m| m.sub.take()).flatten();
+        if let Some((w, _)) = w {
+            ui.close_window(w);
+        }
+    }
+
+    fn sub_rows(cx: &mut EventCx<'_>, i: usize) -> Option<Vec<Row>> {
+        let id = cx.id();
+        let kids = cx.ui().tree.children(id).to_vec();
+        let row = *kids.get(i)?;
+        if cx.ui().is_disabled(row) {
+            return None;
+        }
+        cx.ui()
+            .widget::<MenuItem>(row)
+            .map(|m| m.sub.clone())
+            .filter(|s| !s.is_empty())
+    }
+
+    /// Opens the cascade of row `i` to the right of it (`SMenuItem`: 4 in, 4 up), and gives it
+    /// the keyboard when `focus`.
+    fn open_sub(&mut self, cx: &mut EventCx<'_>, i: usize, focus: bool) {
+        if let Some((w, j)) = self.sub {
+            if j == i {
+                if focus && let Some(m) = cx.ui().window(w).map(|w| w.root) {
+                    cx.ui().set_focus(m, true);
+                }
+                return;
+            }
+            self.close_sub(cx);
+        }
+        let Some(rows) = Menu::sub_rows(cx, i) else {
+            return;
+        };
+        let id = cx.id();
+        let Some(parent) = cx.window() else {
+            return;
+        };
+        let frame = {
+            let kids = cx.ui().tree.children(id).to_vec();
+            kids.get(i)
+                .and_then(|r| cx.ui().tree.get(*r))
+                .map(|n| n.frame)
+                .unwrap_or_default()
+        };
+        let ui = cx.ui();
+        let (m, _) = menu(ui, &rows);
+        let _ = ui.set(m, Prop::MinWidth, Value::from(SUB_MIN_WIDTH));
+        let _ = ui.with_widget::<Menu, _>(m, |x| {
+            x.nested = true;
+            if focus {
+                x.highlight = rows
+                    .iter()
+                    .position(|r| matches!(r.kind, RowKind::Item) && !r.disabled);
+            }
+        });
+        let size = ui.measure(m, Proposal::UNSPECIFIED);
+        ui.connect(m, Signal::Activated, move |ui, _, v| {
+            if let Some(j) = v.as_int() {
+                ui.emit(id, Signal::Activated, Value::IntList(vec![i as i64, j]));
+                ui.emit(id, Signal::CloseRequested, Value::None);
+            }
+        });
+        ui.connect(m, Signal::CloseRequested, move |ui, _, _| {
+            Menu::close_sub_of(ui, id);
+            ui.set_focus(id, true);
+        });
+        let at = Point::new(frame.right() - 4.0, frame.y - 4.0);
+        let w = ui.create_window(
+            WindowKind::Popup {
+                parent,
+                anchor: Rect::from_origin_size(at, size),
+                grab: false,
+            },
+            size,
+        );
+        ui.set_content(w, m);
+        ui.show_window(w);
+        if focus {
+            ui.set_focus(m, true);
+        }
+        self.sub = Some((w, i));
+    }
+
     fn choose(&mut self, cx: &mut EventCx<'_>, i: usize) {
         let id = cx.id();
         let kids = cx.ui().tree.children(id).to_vec();
         let rows = Menu::rows(&kids, cx.ui());
         if rows.get(i).is_some_and(|(_, ok)| *ok) {
+            // A row with a submenu opens it instead of choosing.
+            if Menu::sub_rows(cx, i).is_some() {
+                self.open_sub(cx, i, true);
+                return;
+            }
             cx.emit(Signal::Activated, Value::Int(i as i64));
             cx.emit(Signal::SelectionChanged, Value::Int(i as i64));
         }
@@ -540,12 +660,18 @@ impl Widget for Menu {
                     .filter(|i| rows.get(*i).is_some_and(|(_, ok)| *ok));
                 if at != self.highlight {
                     self.highlight = at;
+                    // The cascade follows the pointer: the row's own opens, another's closes.
+                    match at {
+                        Some(i) if Menu::sub_rows(cx, i).is_some() => self.open_sub(cx, i, false),
+                        _ => self.close_sub(cx),
+                    }
                     cx.request_paint();
                 }
                 Handled::Yes
             }
             Event::PointerLeave => {
-                if self.highlight.take().is_some() {
+                // The pointer in the cascade keeps its row lit.
+                if self.sub.is_none() && self.highlight.take().is_some() {
                     cx.request_paint();
                 }
                 Handled::No
@@ -577,6 +703,23 @@ impl Widget for Menu {
                     if let Some(h) = self.highlight {
                         self.choose(cx, h);
                     }
+                    Handled::Yes
+                }
+                Key::Home | Key::End => {
+                    self.first_last(cx, k.key == Key::End);
+                    Handled::Yes
+                }
+                Key::Right => {
+                    if let Some(h) = self.highlight
+                        && Menu::sub_rows(cx, h).is_some()
+                    {
+                        self.open_sub(cx, h, true);
+                        return Handled::Yes;
+                    }
+                    Handled::No
+                }
+                Key::Left if self.nested => {
+                    cx.emit(Signal::CloseRequested, Value::None);
                     Handled::Yes
                 }
                 Key::Escape => {
@@ -638,6 +781,8 @@ pub struct Row {
     pub checked: bool,
     /// Has a submenu.
     pub submenu: bool,
+    /// The rows of the submenu (setting them makes the row a submenu row).
+    pub sub: Vec<Row>,
     /// Destructive.
     pub destructive: bool,
     /// Disabled.
@@ -663,7 +808,8 @@ pub fn menu(ui: &mut Ui, rows: &[Row]) -> (ViewId, Vec<ViewId>) {
         item.shortcut.clone_from(&r.shortcut);
         item.icon.clone_from(&r.icon);
         item.checked = r.checked;
-        item.submenu = r.submenu;
+        item.submenu = r.submenu || !r.sub.is_empty();
+        item.sub.clone_from(&r.sub);
         item.destructive = r.destructive;
         let v = ui.create(item);
         if r.disabled {
@@ -691,6 +837,12 @@ pub enum Placement {
     List,
 }
 
+/// The narrowest cascade (`.s-menu__cascade .s-menu`).
+const SUB_MIN_WIDTH: f32 = 180.0;
+
+/// The narrowest menu of a pop-up or pull-down button.
+const POP_UP_MIN_WIDTH: f32 = 120.0;
+
 /// Shows `menu` as a popup of `parent`: sized, placed against `anchor` (window coordinates),
 /// kept inside the parent window. Returns the popup.
 pub fn present(
@@ -703,8 +855,10 @@ pub fn present(
     let bounds = ui.window(parent).map(|w| w.size).unwrap_or_default();
     let (width, min) = match placement {
         Placement::List => (Some(anchor.width), anchor.width),
-        Placement::PopUp { .. } => (None, anchor.width),
-        Placement::PullDown => (None, anchor.width - 4.0),
+        // SPopUpButton: the menu is as wide as the button, 4 less for a pull-down, and never
+        // narrower than 120.
+        Placement::PopUp { .. } => (None, anchor.width.max(POP_UP_MIN_WIDTH)),
+        Placement::PullDown => (None, (anchor.width - 4.0).max(POP_UP_MIN_WIDTH)),
         Placement::At => (None, metrics::MIN_WIDTH),
     };
     let _ = ui.set(menu, Prop::MinWidth, Value::from(min));
@@ -832,5 +986,105 @@ mod tests {
         assert_eq!(a.y, 100.0 + 2.0 - (4.0 + 24.0));
         assert_eq!(a.x, 88.0);
         assert!(a.width >= 124.0);
+    }
+
+    fn cascade_scene() -> (Ui, WindowId, ViewId, Rc<RefCell<Vec<Value>>>) {
+        let mut ui = Ui::new_headless();
+        let win = ui.create_window(WindowKind::Normal, Size::new(500.0, 300.0));
+        let rows = vec![
+            Row::item("Open"),
+            Row {
+                sub: vec![Row::item("Recent 1"), Row::item("Recent 2")],
+                ..Row::item("Open Recent")
+            },
+            Row::item("Quit"),
+        ];
+        let (m, _) = menu(&mut ui, &rows);
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let l = log.clone();
+        ui.connect(m, Signal::Activated, move |_, _, v| {
+            l.borrow_mut().push(v.clone())
+        });
+        ui.set_content(win, m);
+        ui.show_window(win);
+        ui.prepare_frame(win);
+        (ui, win, m, log)
+    }
+
+    /// The menu in the popup `root`.
+    fn menu_in(ui: &Ui, root: ViewId) -> ViewId {
+        if ui.widget::<Menu>(root).is_some() {
+            return root;
+        }
+        ui.tree.children(root).first().copied().unwrap_or(root)
+    }
+
+    fn popups(ui: &Ui) -> usize {
+        ui.windows()
+            .filter(|w| matches!(w.kind, WindowKind::Popup { .. }))
+            .count()
+    }
+
+    #[test]
+    fn a_submenu_row_opens_a_cascade_on_hover_and_choosing_in_it_reports_the_path() {
+        let (mut ui, win, m, log) = cascade_scene();
+        let kids = ui.tree.children(m).to_vec();
+        let row = ui.tree.window_rect(kids[1]);
+        ui.pointer_move(win, row.center(), Mods::empty());
+        assert_eq!(popups(&ui), 1, "the cascade opens with the pointer");
+        // Another row closes it.
+        let first = ui.tree.window_rect(kids[0]);
+        ui.pointer_move(win, first.center(), Mods::empty());
+        ui.advance(1.0);
+        assert_eq!(popups(&ui), 0);
+        // A click on the row opens it too; a row of the cascade is chosen as [1, 1].
+        ui.pointer_move(win, row.center(), Mods::empty());
+        let sub = ui
+            .windows()
+            .find(|w| matches!(w.kind, WindowKind::Popup { .. }))
+            .map(|w| ((), w.root))
+            .expect("cascade");
+        let inner = menu_in(&ui, sub.1);
+        ui.emit(inner, Signal::Activated, Value::Int(1));
+        ui.flush();
+        assert_eq!(log.borrow().last(), Some(&Value::IntList(vec![1, 1])));
+    }
+
+    #[test]
+    fn right_opens_the_cascade_and_left_closes_it() {
+        let (mut ui, win, m, _log) = cascade_scene();
+        ui.set_focus(m, true);
+        ui.key(win, KeyEvent::press(Key::Down, Mods::empty()));
+        ui.key(win, KeyEvent::press(Key::Down, Mods::empty()));
+        ui.key(win, KeyEvent::press(Key::Right, Mods::empty()));
+        assert_eq!(popups(&ui), 1);
+        let sub = ui
+            .windows()
+            .find(|w| matches!(w.kind, WindowKind::Popup { .. }))
+            .map(|w| w.root)
+            .expect("cascade");
+        let sub = menu_in(&ui, sub);
+        ui.send(
+            sub,
+            &crate::core::event::Event::Key(KeyEvent::press(Key::Left, Mods::empty())),
+        );
+        ui.flush();
+        ui.advance(1.0);
+        assert_eq!(popups(&ui), 0);
+    }
+
+    #[test]
+    fn home_and_end_jump_to_the_first_and_last_row() {
+        let (mut ui, win, m, log) = scene();
+        ui.set_focus(m, true);
+        ui.key(win, KeyEvent::press(Key::End, Mods::empty()));
+        ui.key(win, KeyEvent::press(Key::Enter, Mods::empty()));
+        ui.key(win, KeyEvent::press(Key::Home, Mods::empty()));
+        ui.key(win, KeyEvent::press(Key::Enter, Mods::empty()));
+        assert_eq!(
+            *log.borrow(),
+            vec![3, 0],
+            "Fig is the last row that can be chosen"
+        );
     }
 }

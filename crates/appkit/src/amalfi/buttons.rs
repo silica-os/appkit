@@ -1459,6 +1459,23 @@ mod tests {
     }
 
     #[test]
+    fn a_small_pop_up_opens_a_menu_of_at_least_120() {
+        let b = MenuButton::pop_up(&["A", "B"], 0).size(ControlSize::Mini);
+        let (mut ui, win, id, _log) = scene(b);
+        let r = ui.tree.window_rect(id);
+        assert!(r.width < 120.0);
+        click(&mut ui, win, r.center());
+        let popup = ui
+            .windows()
+            .find_map(|w| match &w.kind {
+                crate::core::window::WindowKind::Popup { anchor, .. } => Some(*anchor),
+                _ => None,
+            })
+            .expect("a menu");
+        assert!(popup.width >= 120.0, "{popup:?}");
+    }
+
+    #[test]
     fn a_pop_up_opens_its_menu_and_a_row_chooses() {
         let (mut ui, win, id, log) = scene(MenuButton::pop_up(&["Lemon", "Orange", "Fig"], 0));
         let c = ui.tree.window_rect(id).center();

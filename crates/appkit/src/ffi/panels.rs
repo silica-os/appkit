@@ -259,7 +259,8 @@ pub extern "C" fn ak_view_present_popover(
     })
 }
 
-fn rows_of(items: &[MenuItem]) -> (Vec<Row>, Vec<u32>) {
+/// The rows of `items` and their ids: each row's own and its submenu's.
+fn rows_of(items: &[MenuItem]) -> (Vec<Row>, Vec<(u32, Vec<u32>)>) {
     let mut rows = Vec::new();
     let mut ids = Vec::new();
     for it in items {
@@ -281,10 +282,21 @@ fn rows_of(items: &[MenuItem]) -> (Vec<Row>, Vec<u32>) {
             icon: it.icon.clone(),
             checked: it.checked == Some(true),
             submenu: it.submenu.is_some(),
+            sub: it
+                .submenu
+                .as_ref()
+                .map(|s| rows_of(s).0)
+                .unwrap_or_default(),
             destructive: it.destructive,
             disabled: !it.enabled,
         });
-        ids.push(it.id);
+        ids.push((
+            it.id,
+            it.submenu
+                .as_ref()
+                .map(|s| s.iter().map(|i| i.id).collect())
+                .unwrap_or_default(),
+        ));
     }
     (rows, ids)
 }
@@ -308,11 +320,22 @@ pub extern "C" fn ak_menu_view_new(
         let r = with_ui(move |ui| {
             let (v, _) = menu(ui, &rows);
             ui.connect(v, Signal::Activated, move |ui, _, val| {
-                let id = val
-                    .as_int()
-                    .and_then(|i| usize::try_from(i).ok())
-                    .and_then(|i| ids.get(i).copied())
-                    .unwrap_or(0);
+                let id = match val {
+                    crate::core::Value::IntList(p) => match p.as_slice() {
+                        [i, j] => usize::try_from(*i)
+                            .ok()
+                            .and_then(|i| ids.get(i))
+                            .and_then(|(_, sub)| sub.get(usize::try_from(*j).unwrap_or(usize::MAX)))
+                            .copied()
+                            .unwrap_or(0),
+                        _ => 0,
+                    },
+                    _ => val
+                        .as_int()
+                        .and_then(|i| usize::try_from(i).ok())
+                        .and_then(|i| ids.get(i).map(|(id, _)| *id))
+                        .unwrap_or(0),
+                };
                 if id != 0
                     && let Some(f) = callback
                 {
