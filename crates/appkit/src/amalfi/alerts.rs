@@ -24,29 +24,29 @@ pub mod metrics {
     /// The alert's width.
     pub const WIDTH: f32 = 280.0;
     /// The corner radius.
-    pub const RADIUS: f32 = 20.0;
+    pub const RADIUS: f32 = crate::amalfi::tokens::radii::SHEET_ALERT;
     /// Space above the icon.
-    pub const TOP: f32 = 24.0;
+    pub const TOP: f32 = crate::amalfi::tokens::spacing::XXL;
     /// Space below the buttons.
-    pub const BOTTOM: f32 = 20.0;
+    pub const BOTTOM: f32 = crate::amalfi::tokens::spacing::XL;
     /// Space at the sides.
-    pub const SIDE: f32 = 20.0;
+    pub const SIDE: f32 = crate::amalfi::tokens::spacing::XL;
     /// Gap between the parts (icon → title, message → accessory).
-    pub const GAP: f32 = 16.0;
+    pub const GAP: f32 = crate::amalfi::tokens::spacing::L;
     /// Title → message, and between accessories.
-    pub const TEXT_GAP: f32 = 8.0;
+    pub const TEXT_GAP: f32 = crate::amalfi::tokens::spacing::S;
     /// Text or accessory → buttons.
-    pub const BUTTONS_GAP: f32 = 20.0;
+    pub const BUTTONS_GAP: f32 = crate::amalfi::tokens::spacing::XL;
     /// A button's height.
-    pub const BUTTON_HEIGHT: f32 = 28.0;
+    pub const BUTTON_HEIGHT: f32 = crate::amalfi::tokens::control_heights::REGULAR;
     /// The width of text and fields.
     pub const CONTENT_WIDTH: f32 = 240.0;
     /// The app icon's size.
     pub const ICON: f32 = 56.0;
     /// The warning badge's disc.
-    pub const BADGE: f32 = 24.0;
+    pub const BADGE: f32 = crate::amalfi::tokens::control_heights::SMALL;
     /// Gap between the buttons.
-    pub const BUTTON_GAP: f32 = 8.0;
+    pub const BUTTON_GAP: f32 = crate::amalfi::tokens::spacing::S;
     /// The narrowest button.
     pub const BUTTON_MIN_WIDTH: f32 = 72.0;
 }

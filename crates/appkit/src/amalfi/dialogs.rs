@@ -16,11 +16,11 @@ use crate::style::{Border, Style};
 /// Fixed measures of the kit.
 pub mod metrics {
     /// The dialog's corner radius.
-    pub const RADIUS: f32 = 20.0;
+    pub const RADIUS: f32 = crate::amalfi::tokens::radii::SHEET_ALERT;
     /// Gap between the parts of a form dialog.
-    pub const FORM_GAP: f32 = 20.0;
+    pub const FORM_GAP: f32 = crate::amalfi::tokens::spacing::XL;
     /// Gap between the parts of a file panel.
-    pub const PANEL_GAP: f32 = 12.0;
+    pub const PANEL_GAP: f32 = crate::amalfi::tokens::spacing::M;
     /// A form dialog's width.
     pub const FORM_WIDTH: f32 = 400.0;
     /// A file panel's width.
@@ -28,21 +28,21 @@ pub mod metrics {
     /// The browser's height.
     pub const BROWSER_HEIGHT: f32 = 152.0;
     /// The browser's gap between its panes.
-    pub const BROWSER_GAP: f32 = 16.0;
+    pub const BROWSER_GAP: f32 = crate::amalfi::tokens::spacing::L;
     /// The places pane's width.
     pub const PLACES_WIDTH: f32 = 216.0;
     /// The padding inside a browser pane.
-    pub const PANE_PADDING: f32 = 8.0;
+    pub const PANE_PADDING: f32 = crate::amalfi::tokens::spacing::S;
     /// The places pane's corner radius.
-    pub const PLACES_RADIUS: f32 = 14.0;
+    pub const PLACES_RADIUS: f32 = crate::amalfi::tokens::radii::SIDEBAR_INSET_PANEL;
     /// The file list's corner radius.
-    pub const LIST_RADIUS: f32 = 12.0;
+    pub const LIST_RADIUS: f32 = crate::amalfi::tokens::radii::MENU;
     /// Gap between the rows of a form dialog's body.
-    pub const BODY_GAP: f32 = 12.0;
+    pub const BODY_GAP: f32 = crate::amalfi::tokens::spacing::M;
     /// Extra space under a form dialog's body.
-    pub const BODY_BOTTOM: f32 = 4.0;
+    pub const BODY_BOTTOM: f32 = crate::amalfi::tokens::spacing::XS;
     /// Gap between the rows of a group in a form dialog's body.
-    pub const GROUP_GAP: f32 = 4.0;
+    pub const GROUP_GAP: f32 = crate::amalfi::tokens::spacing::XS;
     /// Space above a section rule (beyond the gap) ...
     pub const RULE_ABOVE: f32 = 8.0;
     /// ... and below it.
@@ -364,6 +364,7 @@ mod tests {
     use super::*;
     use crate::amalfi::text::Text;
     use crate::core::event::{KeyEvent, Mods};
+    use crate::core::value::{Prop, Value};
     use crate::core::window::WindowKind;
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -402,5 +403,31 @@ mod tests {
         ui.set_focus(d, true);
         ui.key(win, KeyEvent::press(Key::Escape, Mods::empty()));
         assert_eq!(*log.borrow(), 1);
+    }
+
+    #[test]
+    fn enter_in_a_field_presses_the_default_button_unless_it_is_disabled() {
+        use crate::amalfi::button::PushButton;
+        use crate::amalfi::fields::TextField;
+        let mut ui = Ui::new_headless();
+        let win = ui.create_window(WindowKind::Normal, Size::new(400.0, 300.0));
+        let field = ui.create(TextField::text());
+        let ok = ui.create(PushButton::new("OK"));
+        let _ = ui.set(ok, Prop::IsDefault, Value::Bool(true));
+        let d = dialog(&mut ui, Dialog::form(), &[field, ok]);
+        let log = Rc::new(RefCell::new(0));
+        let l = log.clone();
+        ui.connect(ok, Signal::Activated, move |_, _, _| {
+            *l.borrow_mut() += 1;
+        });
+        ui.set_content(win, d);
+        ui.show_window(win);
+        ui.prepare_frame(win);
+        ui.set_focus(field, true);
+        ui.key(win, KeyEvent::press(Key::Enter, Mods::empty()));
+        assert_eq!(*log.borrow(), 1);
+        let _ = ui.set(ok, Prop::Disabled, Value::Bool(true));
+        ui.key(win, KeyEvent::press(Key::Enter, Mods::empty()));
+        assert_eq!(*log.borrow(), 1, "a disabled primary button is not pressed");
     }
 }
