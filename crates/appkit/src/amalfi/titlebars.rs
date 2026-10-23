@@ -39,17 +39,17 @@ pub mod metrics {
     /// A toolbar piece's height.
     pub const PIECE_HEIGHT: f32 = 52.0;
     /// The glass pieces' height.
-    pub const GLASS_HEIGHT: f32 = 36.0;
+    pub const GLASS_HEIGHT: f32 = crate::amalfi::tokens::control_heights::TOOLBAR;
     /// The glass pieces' corner radius.
     pub const GLASS_RADIUS: f32 = 18.0;
     /// A document title bar's height.
     pub const TITLE_BAR_HEIGHT: f32 = 48.0;
     /// A tab's height.
-    pub const TAB_HEIGHT: f32 = 28.0;
+    pub const TAB_HEIGHT: f32 = crate::amalfi::tokens::control_heights::REGULAR;
     /// A tab's width alone.
     pub const TAB_WIDTH: f32 = 160.0;
     /// The tab bar's height.
-    pub const TAB_BAR_HEIGHT: f32 = 36.0;
+    pub const TAB_BAR_HEIGHT: f32 = crate::amalfi::tokens::control_heights::TOOLBAR;
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1180,8 +1180,8 @@ impl Widget for Strip {
 pub struct TitleBar;
 
 impl TitleBar {
-    const PAD: f32 = 16.0;
-    const GAP: f32 = 12.0;
+    const PAD: f32 = crate::amalfi::tokens::spacing::L;
+    const GAP: f32 = crate::amalfi::tokens::spacing::M;
     const TRAILING: f32 = 64.0;
 }
 
@@ -1319,7 +1319,7 @@ impl Widget for Tab {
         let c = theme.colors;
         let r = cx.bounds();
         let hover = self.transitions.hover.get();
-        let shape = Shape::rounded(9.0);
+        let shape = Shape::rounded(crate::amalfi::tokens::radii::REGULAR_CONTROL);
         if self.selected {
             cx.rec.layer(
                 "Surface",
@@ -1471,8 +1471,8 @@ impl Widget for Tab {
 pub struct TabBar;
 
 impl TabBar {
-    const PAD: f32 = 4.0;
-    const GAP: f32 = 4.0;
+    const PAD: f32 = crate::amalfi::tokens::spacing::XS;
+    const GAP: f32 = crate::amalfi::tokens::spacing::XS;
 }
 
 impl Widget for TabBar {
