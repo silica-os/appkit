@@ -11,6 +11,7 @@ pub mod forms;
 pub mod foundation;
 pub mod group_box;
 pub mod label;
+pub mod materials;
 pub mod menus;
 pub mod popovers;
 pub mod progress;
