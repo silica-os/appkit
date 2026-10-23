@@ -388,7 +388,13 @@ impl Widget for LinkButton {
         let theme = *cx.theme();
         let r = cx.bounds();
         let look = LinkButton::look(&theme);
-        paint_surface(cx, r, Shape::rounded(7.0), &look, &self.core.transitions);
+        paint_surface(
+            cx,
+            r,
+            Shape::rounded(crate::amalfi::tokens::radii::SMALL_CONTROL),
+            &look,
+            &self.core.transitions,
+        );
         let w = self.box_width(&theme).min((r.width - 8.0).max(0.0));
         let style = theme.text(&typography::BODY, look.content);
         let lh = style.line_height.unwrap_or(18.0);
@@ -567,7 +573,7 @@ impl Widget for GradientButtons {
         let b = cx.bounds();
         let rect = Rect::new(b.x, b.y, 56.0, 24.0);
         let look = ButtonLook::control(&theme);
-        let shape = Shape::rounded(7.0);
+        let shape = Shape::rounded(crate::amalfi::tokens::radii::SMALL_CONTROL);
         let idle = Transitions::default();
         // The whole control at rest; the halves lay their own state over it.
         paint_surface(cx, rect, shape.clone(), &look, &idle);
