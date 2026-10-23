@@ -4,7 +4,7 @@
 use crate::amalfi::tokens;
 use crate::color::Color;
 use crate::core::a11y::{A11y, Action, Role};
-use crate::core::event::{Button, Event, Handled};
+use crate::core::event::{Button, Event, Handled, Phase};
 use crate::core::layout::{Axis, Proposal};
 use crate::core::ui::Ui;
 use crate::core::value::{Prop, Signal, Value};
@@ -237,7 +237,32 @@ pub struct ScrollView {
     drag: Option<(Axis, f32, f32)>,
     last_scroll: f64,
     waiting: bool,
+    touch: Touch,
 }
+
+/// The touchpad state of a scroll view: samples of the gesture, the kinetic velocity and the
+/// rubber band.
+#[derive(Debug)]
+struct Touch {
+    /// The phase of the last precise event.
+    phase: Phase,
+    /// Recent movements, newest last: (time, movement).
+    samples: Vec<(f64, Point)>,
+    /// Kinetic velocity in points per second after the fingers lifted.
+    velocity: Option<Point>,
+    /// How far the content is pulled past an edge (positive: past the far edge).
+    over: Animated<Point>,
+}
+
+/// Kinetic scrolling slows by this factor per millisecond (the reference desktop's value; the
+/// ui-kit tokens carry none).
+pub const MOMENTUM_DECAY_PER_MS: f32 = 0.998;
+/// Velocity is measured over the last 100 ms of the gesture.
+pub const VELOCITY_WINDOW: f64 = 0.1;
+/// Below this speed (points per second) momentum stops.
+const MOMENTUM_MIN_SPEED: f32 = 20.0;
+/// The rubber band: how far (points) a pull has gone when it resists by half.
+const RUBBER_LIMIT: f32 = 40.0;
 
 impl ScrollView {
     /// A scroll view with overlay bars.
@@ -256,7 +281,29 @@ impl ScrollView {
             drag: None,
             last_scroll: f64::NEG_INFINITY,
             waiting: false,
+            touch: Touch {
+                phase: Phase::None,
+                samples: Vec::new(),
+                velocity: None,
+                over: Animated::new(Point::ZERO),
+            },
         }
+    }
+
+    /// The kinetic velocity, in points per second (none while the fingers are down or the
+    /// content rests).
+    pub fn velocity(&self) -> Option<Point> {
+        self.touch.velocity
+    }
+
+    /// How far the content is pulled past an edge (the rubber band).
+    pub fn overscroll(&self) -> Point {
+        self.touch.over.get()
+    }
+
+    /// The phase of the last touchpad scroll event.
+    pub fn touch_phase(&self) -> Phase {
+        self.touch.phase
     }
 
     /// With a kind of bars.
@@ -386,6 +433,156 @@ impl ScrollView {
         cx.animate();
     }
 
+    /// Stops kinetic scrolling and lets a pulled band spring back.
+    fn stop_touch(&mut self, cx: &mut EventCx<'_>) {
+        self.touch.velocity = None;
+        self.touch.samples.clear();
+        self.release_band(cx);
+    }
+
+    /// Springs the rubber band back (`spring.panel`; at once with Reduce Motion).
+    fn release_band(&mut self, cx: &mut EventCx<'_>) {
+        if self.touch.over.get() == Point::ZERO && !self.touch.over.is_animating() {
+            return;
+        }
+        if cx.theme().appearance.reduce_motion {
+            self.touch.over.jump(Point::ZERO);
+        } else {
+            self.touch
+                .over
+                .animate_to(Point::ZERO, Timing::Spring(tokens::motion::SPRING_PANEL));
+        }
+        cx.request_layout();
+        cx.animate();
+    }
+
+    /// Moves along one axis by `d` with the rubber band: past an edge the content follows the
+    /// fingers with growing resistance. Returns whether anything moved.
+    fn pull(offset: f32, over: f32, d: f32, max: f32, elastic: bool) -> (f32, f32) {
+        let mut offset = offset;
+        let mut over = over;
+        let mut d = d;
+        if over != 0.0 {
+            if d * over < 0.0 {
+                // Back towards the content: undoes the pull first.
+                let back = d.abs().min(over.abs());
+                over -= back * over.signum();
+                d -= back * d.signum();
+            } else {
+                over += d / (1.0 + over.abs() / RUBBER_LIMIT);
+                return (offset, over);
+            }
+        }
+        let new = offset + d;
+        if new < 0.0 || new > max {
+            let clamped = new.clamp(0.0, max);
+            let excess = new - clamped;
+            offset = clamped;
+            if elastic {
+                over += excess / (1.0 + over.abs() / RUBBER_LIMIT);
+            }
+        } else {
+            offset = new;
+        }
+        (offset, over)
+    }
+
+    fn touch_scroll(&mut self, cx: &mut EventCx<'_>, dx: f32, dy: f32, phase: Phase) -> Handled {
+        let reduce = cx.theme().appearance.reduce_motion;
+        self.touch.phase = phase;
+        if phase == Phase::Began {
+            // A new touch stops kinetic scrolling and a spring back at once.
+            self.touch.velocity = None;
+            self.touch.samples.clear();
+            let o = self.touch.over.get();
+            self.touch.over.jump(o);
+        }
+        if phase == Phase::Ended {
+            self.end_touch(cx);
+            return Handled::Yes;
+        }
+        let before = (self.offset, self.touch.over.get());
+        let m = self.max_offset();
+        let (dx, dy) = (
+            if self.horizontal { dx } else { 0.0 },
+            if self.vertical { dy } else { 0.0 },
+        );
+        let over = self.touch.over.get();
+        let (ox, ex) = ScrollView::pull(self.offset.x, over.x, dx, m.x, !reduce && m.x > 0.0);
+        let (oy, ey) = ScrollView::pull(self.offset.y, over.y, dy, m.y, !reduce && m.y > 0.0);
+        self.touch.samples.push((cx.now(), Point::new(dx, dy)));
+        let horizon = cx.now() - 2.0 * VELOCITY_WINDOW;
+        self.touch.samples.retain(|(t, _)| *t >= horizon);
+        self.touch.over.jump(Point::new(ex, ey));
+        self.set_offset(cx, Point::new(ox, oy));
+        cx.request_layout();
+        cx.request_paint();
+        Handled::from((self.offset, self.touch.over.get()) != before)
+    }
+
+    /// The fingers lifted: kinetic scrolling from the last 100 ms, or the band springs back.
+    fn end_touch(&mut self, cx: &mut EventCx<'_>) {
+        let now = cx.now();
+        let sum = self
+            .touch
+            .samples
+            .iter()
+            .filter(|(t, _)| *t >= now - VELOCITY_WINDOW)
+            .fold(Point::ZERO, |a, (_, d)| Point::new(a.x + d.x, a.y + d.y));
+        self.touch.samples.clear();
+        let v = Point::new(
+            sum.x / VELOCITY_WINDOW as f32,
+            sum.y / VELOCITY_WINDOW as f32,
+        );
+        if self.touch.over.get() != Point::ZERO {
+            self.release_band(cx);
+        } else if v.length() >= MOMENTUM_MIN_SPEED {
+            self.touch.velocity = Some(v);
+            cx.animate();
+        }
+    }
+
+    /// Advances the kinetic scroll and the rubber band; returns whether either goes on.
+    fn tick_touch(&mut self, cx: &mut EventCx<'_>, dt: f32) -> bool {
+        let band = self.touch.over.tick(dt);
+        if band {
+            cx.request_layout();
+            cx.request_paint();
+        }
+        let Some(v) = self.touch.velocity else {
+            return band;
+        };
+        let reduce = cx.theme().appearance.reduce_motion;
+        let v = Point::new(
+            v.x * MOMENTUM_DECAY_PER_MS.powf(dt * 1000.0),
+            v.y * MOMENTUM_DECAY_PER_MS.powf(dt * 1000.0),
+        );
+        let m = self.max_offset();
+        let over = self.touch.over.get();
+        let (ox, ex) = ScrollView::pull(self.offset.x, over.x, v.x * dt, m.x, false);
+        let (oy, ey) = ScrollView::pull(self.offset.y, over.y, v.y * dt, m.y, false);
+        let hit_edge = (ox - (self.offset.x + v.x * dt)).abs() > f32::EPSILON
+            || (oy - (self.offset.y + v.y * dt)).abs() > f32::EPSILON;
+        self.set_offset(cx, Point::new(ox, oy));
+        if hit_edge && !reduce {
+            // The momentum runs into the edge: the band takes a little of it and springs back.
+            let pull = Point::new(
+                (v.x * 0.04).clamp(-RUBBER_LIMIT, RUBBER_LIMIT) * f32::from(m.x > 0.0),
+                (v.y * 0.04).clamp(-RUBBER_LIMIT, RUBBER_LIMIT) * f32::from(m.y > 0.0),
+            );
+            self.touch.over.jump(Point::new(ex + pull.x, ey + pull.y));
+            self.touch.velocity = None;
+            self.release_band(cx);
+            return true;
+        }
+        if hit_edge || v.length() < MOMENTUM_MIN_SPEED {
+            self.touch.velocity = None;
+            return band;
+        }
+        self.touch.velocity = Some(v);
+        true
+    }
+
     fn set_offset(&mut self, cx: &mut EventCx<'_>, p: Point) {
         let p = self.clamp(p);
         if p == self.offset {
@@ -445,9 +642,15 @@ impl Widget for ScrollView {
             } else {
                 s
             };
+            let over = self.touch.over.get();
             cx.place(
                 c,
-                Rect::new(-self.offset.x, -self.offset.y, s.width, s.height),
+                Rect::new(
+                    -self.offset.x - over.x,
+                    -self.offset.y - over.y,
+                    s.width,
+                    s.height,
+                ),
             );
         }
     }
@@ -626,17 +829,36 @@ impl Widget for ScrollView {
                 self.sync_animation(cx);
                 Handled::Yes
             }
+            Event::Scroll {
+                dx,
+                dy,
+                precise: true,
+                phase,
+                ..
+            } => self.touch_scroll(cx, *dx, *dy, *phase),
             Event::Scroll { dx, dy, .. } => {
+                // A wheel: no momentum, no rubber band.
+                self.stop_touch(cx);
                 let o = Point::new(self.offset.x + dx, self.offset.y + dy);
                 let before = self.offset;
                 self.set_offset(cx, o);
                 Handled::from(self.offset != before)
+            }
+            Event::Hold {
+                phase: Phase::Began,
+                ..
+            } => {
+                // Fingers on the pad: kinetic scrolling stops at once.
+                self.touch.velocity = None;
+                self.release_band(cx);
+                Handled::No
             }
             _ => Handled::No,
         }
     }
 
     fn tick(&mut self, cx: &mut EventCx<'_>, dt: f32) -> bool {
+        let moving = self.tick_touch(cx, dt);
         let a = self.shown.tick(dt);
         let b = self.expanded.tick(dt);
         if a || b {
@@ -665,7 +887,7 @@ impl Widget for ScrollView {
                 waiting = true;
             }
         }
-        a || b || waiting || self.shown.is_animating()
+        a || b || waiting || moving || self.shown.is_animating()
     }
 
     fn attached(&mut self, cx: &mut EventCx<'_>) {
@@ -768,6 +990,258 @@ mod tests {
         ui.show_window(win);
         ui.prepare_frame(win);
         (ui, win, sv)
+    }
+
+    /// Sends a precise scroll `dy` points (and `dx`) over the view, `step` seconds apart.
+    fn swipe(ui: &mut Ui, win: WindowId, sv: crate::core::ViewId, dx: f32, dy: f32, n: usize) {
+        let at = ui.tree.window_rect(sv).center();
+        for _ in 0..n {
+            ui.advance(0.016);
+            ui.scroll(win, at, dx, dy, true, Phase::Changed);
+        }
+    }
+
+    fn end(ui: &mut Ui, win: WindowId, sv: crate::core::ViewId) {
+        let at = ui.tree.window_rect(sv).center();
+        ui.advance(0.016);
+        ui.scroll(win, at, 0.0, 0.0, true, Phase::Ended);
+    }
+
+    fn view(ui: &Ui, sv: crate::core::ViewId) -> &ScrollView {
+        ui.widget::<ScrollView>(sv).expect("a scroll view")
+    }
+
+    #[test]
+    fn a_touchpad_sequence_begins_changes_and_ends_and_keeps_its_axis() {
+        let (mut ui, win, sv) = scene(ScrollbarStyle::Overlay);
+        let at = ui.tree.window_rect(sv).center();
+        ui.scroll(win, at, 3.0, 20.0, true, Phase::Changed);
+        assert_eq!(
+            view(&ui, sv).touch_phase(),
+            Phase::Began,
+            "the first event begins"
+        );
+        ui.scroll(win, at, 30.0, 2.0, true, Phase::Changed);
+        assert_eq!(view(&ui, sv).touch_phase(), Phase::Changed);
+        // A mostly vertical gesture stays vertical.
+        assert_eq!(view(&ui, sv).offset().x, 0.0);
+        assert_eq!(view(&ui, sv).offset().y, 22.0);
+        ui.scroll(win, at, 0.0, 0.0, true, Phase::Ended);
+        assert_eq!(view(&ui, sv).touch_phase(), Phase::Ended);
+        // The next sequence begins again and may take the other axis.
+        ui.scroll(win, at, 25.0, 1.0, true, Phase::Changed);
+        assert_eq!(view(&ui, sv).touch_phase(), Phase::Began);
+        assert_eq!(view(&ui, sv).offset().x, 25.0);
+        assert_eq!(view(&ui, sv).offset().y, 22.0);
+    }
+
+    #[test]
+    fn momentum_follows_the_last_100_ms_and_decays() {
+        let (mut ui, win, sv) = scene(ScrollbarStyle::Overlay);
+        swipe(&mut ui, win, sv, 0.0, 6.0, 12);
+        end(&mut ui, win, sv);
+        let v = view(&ui, sv).velocity().expect("kinetic");
+        // 6 pt every 16 ms is 375 pt/s (six samples in 100 ms: 36 pt / 0.1 s).
+        assert!((v.y - 360.0).abs() < 60.0, "{v:?}");
+        assert_eq!(v.x, 0.0);
+        let at_release = view(&ui, sv).offset().y;
+        ui.advance(0.016);
+        assert!(view(&ui, sv).offset().y > at_release, "it coasts on");
+        let first = view(&ui, sv).velocity().expect("still moving").y;
+        for _ in 0..30 {
+            ui.advance(0.016);
+        }
+        let later = view(&ui, sv).velocity().map_or(0.0, |v| v.y);
+        // 0.998 per millisecond: about 0.2 of the speed after 0.5 s.
+        assert!(later < first * 0.4, "{first} -> {later}");
+        for _ in 0..400 {
+            ui.advance(0.016);
+        }
+        assert_eq!(view(&ui, sv).velocity(), None, "it comes to rest");
+    }
+
+    #[test]
+    fn a_new_touch_or_a_hold_stops_the_momentum_at_once() {
+        let (mut ui, win, sv) = scene(ScrollbarStyle::Overlay);
+        let at = ui.tree.window_rect(sv).center();
+        swipe(&mut ui, win, sv, 0.0, 8.0, 10);
+        end(&mut ui, win, sv);
+        assert!(view(&ui, sv).velocity().is_some());
+        ui.hold(win, at, 2, Phase::Began);
+        assert_eq!(view(&ui, sv).velocity(), None);
+        let rest = view(&ui, sv).offset();
+        ui.advance(0.1);
+        assert_eq!(view(&ui, sv).offset(), rest);
+
+        swipe(&mut ui, win, sv, 0.0, 8.0, 10);
+        end(&mut ui, win, sv);
+        assert!(view(&ui, sv).velocity().is_some());
+        ui.scroll(win, at, 0.0, 1.0, true, Phase::Changed);
+        assert_eq!(view(&ui, sv).velocity(), None);
+    }
+
+    #[test]
+    fn a_wheel_has_no_momentum_and_no_rubber_band() {
+        let (mut ui, win, sv) = scene(ScrollbarStyle::Overlay);
+        let at = ui.tree.window_rect(sv).center();
+        ui.scroll(win, at, 0.0, 39.0, false, Phase::None);
+        ui.scroll(win, at, 0.0, -400.0, false, Phase::None);
+        assert_eq!(view(&ui, sv).velocity(), None);
+        assert_eq!(view(&ui, sv).overscroll(), Point::ZERO);
+        assert_eq!(view(&ui, sv).offset().y, 0.0);
+    }
+
+    #[test]
+    fn the_rubber_band_resists_past_an_edge_and_springs_back() {
+        let (mut ui, win, sv) = scene(ScrollbarStyle::Overlay);
+        swipe(&mut ui, win, sv, 0.0, -20.0, 4);
+        let o = view(&ui, sv).overscroll();
+        assert!(o.y < 0.0 && o.y > -80.0, "pulled, with resistance: {o:?}");
+        assert_eq!(view(&ui, sv).offset().y, 0.0);
+        let more = {
+            swipe(&mut ui, win, sv, 0.0, -20.0, 1);
+            view(&ui, sv).overscroll().y
+        };
+        assert!(o.y - more > -20.0, "each pull moves less than the fingers");
+        end(&mut ui, win, sv);
+        assert_eq!(view(&ui, sv).velocity(), None, "no momentum from the band");
+        for _ in 0..120 {
+            ui.advance(0.016);
+        }
+        assert_eq!(view(&ui, sv).overscroll(), Point::ZERO);
+    }
+
+    #[test]
+    fn momentum_into_an_edge_bounces_with_the_band() {
+        let (mut ui, win, sv) = scene(ScrollbarStyle::Overlay);
+        swipe(&mut ui, win, sv, 0.0, 60.0, 10);
+        end(&mut ui, win, sv);
+        let mut peak: f32 = 0.0;
+        for _ in 0..200 {
+            ui.advance(0.016);
+            peak = peak.max(view(&ui, sv).overscroll().y);
+        }
+        assert!(peak > 0.0, "it pushed into the end");
+        assert_eq!(view(&ui, sv).overscroll(), Point::ZERO, "and came back");
+        assert_eq!(view(&ui, sv).offset().y, 240.0);
+    }
+
+    #[test]
+    fn reduce_motion_clamps_instead_of_stretching() {
+        let (mut ui, win, sv) = scene(ScrollbarStyle::Overlay);
+        let mut a = ui.appearance;
+        a.reduce_motion = true;
+        ui.set_appearance(a);
+        swipe(&mut ui, win, sv, 0.0, -30.0, 4);
+        assert_eq!(view(&ui, sv).overscroll(), Point::ZERO);
+        assert_eq!(view(&ui, sv).offset().y, 0.0);
+    }
+
+    #[test]
+    fn a_horizontal_gesture_nothing_scrolls_becomes_a_navigation() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        struct Catch(Rc<RefCell<Vec<bool>>>);
+        impl Widget for Catch {
+            fn kind(&self) -> &'static str {
+                "Catch"
+            }
+            fn measure(&mut self, _cx: &mut LayoutCx<'_>, _p: Proposal) -> Size {
+                Size::new(300.0, 300.0)
+            }
+            fn place(&mut self, cx: &mut LayoutCx<'_>, _size: Size) {
+                for c in cx.children() {
+                    let _ = cx.measure(c, Proposal::fixed(Size::new(264.0, 180.0)));
+                    cx.place(c, Rect::new(0.0, 0.0, 264.0, 180.0));
+                }
+            }
+            fn event(&mut self, _cx: &mut EventCx<'_>, e: &Event) -> Handled {
+                if let Event::NavigateSwipe { forward } = e {
+                    self.0.borrow_mut().push(*forward);
+                    return Handled::Yes;
+                }
+                Handled::No
+            }
+        }
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let mut ui = Ui::new_headless();
+        let win = ui.create_window(WindowKind::Normal, Size::new(300.0, 300.0));
+        let root = ui.create(Catch(log.clone()));
+        let content = ui.create(Big(Size::new(100.0, 420.0)));
+        let sv = scroll_view(&mut ui, ScrollbarStyle::Overlay, content);
+        ui.add_child(root, sv);
+        ui.set_content(win, root);
+        ui.show_window(win);
+        ui.prepare_frame(win);
+        // Short of the distance: nothing.
+        swipe(&mut ui, win, sv, -10.0, 1.0, 5);
+        end(&mut ui, win, sv);
+        assert!(log.borrow().is_empty());
+        // Far enough, leftwards: forward; rightwards: back.
+        swipe(&mut ui, win, sv, -20.0, 1.0, 8);
+        end(&mut ui, win, sv);
+        swipe(&mut ui, win, sv, 20.0, 1.0, 8);
+        end(&mut ui, win, sv);
+        assert_eq!(*log.borrow(), vec![true, false]);
+    }
+
+    #[test]
+    fn swipes_and_holds_reach_the_view_under_the_pointer() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        struct Spy(Rc<RefCell<Vec<String>>>);
+        impl Widget for Spy {
+            fn kind(&self) -> &'static str {
+                "Spy"
+            }
+            fn measure(&mut self, _cx: &mut LayoutCx<'_>, _p: Proposal) -> Size {
+                Size::new(100.0, 100.0)
+            }
+            fn event(&mut self, _cx: &mut EventCx<'_>, e: &Event) -> Handled {
+                match e {
+                    Event::Swipe {
+                        fingers,
+                        dx,
+                        phase,
+                        cancelled,
+                        ..
+                    } => self
+                        .0
+                        .borrow_mut()
+                        .push(format!("swipe {fingers} {dx} {phase:?} {cancelled}")),
+                    Event::Hold { fingers, phase } => {
+                        self.0
+                            .borrow_mut()
+                            .push(format!("hold {fingers} {phase:?}"));
+                    }
+                    _ => return Handled::No,
+                }
+                Handled::Yes
+            }
+        }
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let mut ui = Ui::new_headless();
+        let win = ui.create_window(WindowKind::Normal, Size::new(100.0, 100.0));
+        let spy = ui.create(Spy(log.clone()));
+        ui.set_content(win, spy);
+        ui.show_window(win);
+        ui.prepare_frame(win);
+        let at = Point::new(50.0, 50.0);
+        ui.swipe(win, at, 3, 0.0, 0.0, Phase::Began, false);
+        ui.swipe(win, at, 3, 12.0, 0.0, Phase::Changed, false);
+        ui.swipe(win, at, 3, 0.0, 0.0, Phase::Ended, true);
+        ui.hold(win, at, 2, Phase::Began);
+        ui.hold(win, at, 2, Phase::Ended);
+        assert_eq!(
+            *log.borrow(),
+            vec![
+                "swipe 3 0 Began false",
+                "swipe 3 12 Changed false",
+                "swipe 3 0 Ended true",
+                "hold 2 Began",
+                "hold 2 Ended"
+            ]
+        );
     }
 
     #[test]
