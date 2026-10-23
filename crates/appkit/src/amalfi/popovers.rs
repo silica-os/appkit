@@ -5,6 +5,7 @@
 //! rounded 4 and its tip 3; its centre is 30 from the start or the end of its edge, or in the
 //! middle. The body's edge is 8 from the frame on the arrow's side.
 
+use crate::amalfi::callouts::CalloutShape;
 use crate::amalfi::foundation::Label;
 use crate::amalfi::tokens::typography;
 use crate::core::a11y::{A11y, Role};
@@ -140,52 +141,24 @@ impl PopoverShape {
         })
     }
 
-    /// The outline in `rect`.
+    /// The outline in `rect`: one outline for the body and the arrow, the same as a
+    /// callout's (ui-kit's SPopover draws through SCallout).
     pub fn path(&self, rect: Rect) -> Path {
-        let body = smooth_rect_path(
-            self.body(rect),
-            Corners::all(metrics::RADIUS),
-            AMALFI_SMOOTHING,
-        );
-        let (Some(edge), Some(tip)) = (self.edge, self.tip(rect)) else {
-            return body;
+        let Some(edge) = self.edge else {
+            return smooth_rect_path(
+                self.body(rect),
+                Corners::all(metrics::RADIUS),
+                AMALFI_SMOOTHING,
+            );
         };
-        // The arrow in a canonical frame (base on y = 0, pointing to +y, centred on x = 0),
-        // turned onto its side.
-        let angle = match edge {
-            Edge::Bottom => 0.0_f32,
-            Edge::Leading => std::f32::consts::FRAC_PI_2,
-            Edge::Top => std::f32::consts::PI,
-            Edge::Trailing => -std::f32::consts::FRAC_PI_2,
-        };
-        let d = metrics::ARROW_DEPTH;
-        let base = Point::new(tip.x + angle.sin() * d, tip.y - angle.cos() * d);
-        let m = crate::geom::Transform::rotate(angle)
-            .then(crate::geom::Transform::translate(base.x, base.y));
-        let arrow = arrow_path().transformed(m);
-        body.union(&arrow)
+        let mut shape = CalloutShape::new(Some(edge), self.align);
+        if let Some(offset) = self.offset {
+            shape = shape.at(offset);
+        }
+        shape
+            .path(rect)
+            .transformed(crate::geom::Transform::translate(rect.x, rect.y))
     }
-}
-
-/// The arrow in its canonical frame: base on y = 0 with a little overlap above it so the union
-/// with the body is clean.
-fn arrow_path() -> Path {
-    let h = metrics::ARROW_HALF_BASE;
-    let d = metrics::ARROW_DEPTH;
-    let wing = 6.0;
-    // The kit's smooth corners at the base and the tip, as on a callout.
-    crate::amalfi::callouts::rounded_polygon(
-        &[
-            (-h - wing, -1.0, 0.0),
-            (-h - wing, 0.0, 0.0),
-            (-h, 0.0, metrics::ARROW_BASE_RADIUS),
-            (0.0, d, metrics::ARROW_TIP_RADIUS),
-            (h, 0.0, metrics::ARROW_BASE_RADIUS),
-            (h + wing, 0.0, 0.0),
-            (h + wing, -1.0, 0.0),
-        ],
-        (0.0, 0.0),
-    )
 }
 
 /// A popover: a Glass/Thick surface in the outline of its [`PopoverShape`], its single child
