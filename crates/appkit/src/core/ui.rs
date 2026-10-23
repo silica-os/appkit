@@ -590,9 +590,10 @@ impl Ui {
                 PropChange::Paint
             }
             Prop::Background => {
-                m.background = match value {
-                    Value::None => None,
-                    v => Some(v.as_color().ok_or(Error::BadValue)?),
+                (m.background, m.background_token) = match value {
+                    Value::None => (None, None),
+                    Value::Str(t) => (Some(crate::color::Color::TRANSPARENT), Some(t)),
+                    v => (Some(v.as_color().ok_or(Error::BadValue)?), None),
                 };
                 PropChange::Paint
             }
@@ -743,7 +744,10 @@ impl Ui {
             Prop::AccessibilityLabel => n.a11y.label.clone().map(Value::Str).unwrap_or_default(),
             Prop::AccessibilityHelp => n.a11y.help.clone().map(Value::Str).unwrap_or_default(),
             Prop::ClipsChildren => Value::Bool(n.flags.contains(NodeFlags::CLIPS)),
-            Prop::Background => m.background.map(Value::Color).unwrap_or_default(),
+            Prop::Background => match &m.background_token {
+                Some(t) => Value::Str(t.clone()),
+                None => m.background.map(Value::Color).unwrap_or_default(),
+            },
             Prop::CornerRadius => Value::from(m.corner_radius),
             Prop::AspectRatio => opt(m.aspect_ratio),
             Prop::Offset => Value::Point(m.offset),
@@ -2645,6 +2649,10 @@ impl Ui {
         let Some(n) = self.tree.get(id) else { return };
         let m = &n.modifiers;
         if let Some(bg) = m.background {
+            let bg = match &m.background_token {
+                Some(t) => self.theme_of(id).color(t).unwrap_or(bg),
+                None => bg,
+            };
             let shape = if m.corner_radius > 0.0 {
                 Shape::rounded(m.corner_radius)
             } else {

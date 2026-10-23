@@ -89,6 +89,22 @@ macro_rules! button_plumbing {
             self.core.state_changed(cx, new);
         }
 
+        button_plumbing!(@rest);
+    };
+    (grow $scale:expr) => {
+        fn state_changed(&mut self, cx: &mut EventCx<'_>, _old: NodeFlags, new: NodeFlags) {
+            self.core.state_changed(cx, new);
+            // Held down, the button grows until release (ui-kit `--press-scale-icon`).
+            cx.grow(if new.contains(NodeFlags::PRESSED) {
+                $scale
+            } else {
+                1.0
+            });
+        }
+
+        button_plumbing!(@rest);
+    };
+    (@rest) => {
         fn tick(&mut self, _cx: &mut EventCx<'_>, dt: f32) -> bool {
             self.core.transitions.tick(dt)
         }
@@ -948,7 +964,7 @@ impl Widget for ToolbarButton {
         activate(cx, event)
     }
 
-    button_plumbing!();
+    button_plumbing!(grow PRESS_SCALE_ICON);
 
     fn set_prop(&mut self, prop: Prop, value: &Value) -> PropChange {
         match prop {

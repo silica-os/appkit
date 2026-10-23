@@ -4,7 +4,7 @@
 use appkit_ui::kit::Kind;
 use appkit_ui::prelude::*;
 
-use super::{card, code, h2, lead, matrix, page, stage};
+use super::{code, h2, lead, matrix, page, playground};
 
 /// The page.
 pub struct Page;
@@ -105,9 +105,7 @@ impl Component for Page {
             h2("Disclosure button"),
             button_states,
             h2("Playground"),
-            row((stage(live), card(controls)))
-                .spacing(16.0)
-                .alignment(0),
+            playground(live, controls),
             code("disclosure_group(\"Advanced options\", &open, content)"),
             h2("Disclosure group"),
             groups,

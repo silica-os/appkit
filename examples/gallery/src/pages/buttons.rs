@@ -2,7 +2,7 @@
 
 use appkit_ui::prelude::*;
 
-use super::{card, code, field, h2, lead, matrix, page, stage};
+use super::{code, field, h2, lead, matrix, page, playground};
 
 /// The page.
 pub struct Page;
@@ -93,9 +93,7 @@ impl Component for Page {
                 "Push button in five variants and four sizes. A real <button>: it takes focus, fires click, reacts to hover and press.",
             ),
             h2("Playground"),
-            row((stage(live), card(controls)))
-                .spacing(16.0)
-                .alignment(0),
+            playground(live, controls),
             code("button(\"Button\").style(0).control_size(2).on_activate(|| …)"),
             h2("States"),
             segmented(&SIZES, &table_size.binding()),

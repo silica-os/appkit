@@ -16,7 +16,7 @@ use std::rc::Rc;
 use appkit_ui::PValue;
 use appkit_ui::kit::{self, AppearanceOption, Kind, Prop};
 use appkit_ui::prelude::*;
-use pages::PAGES;
+use pages::{PAGES, field};
 
 const SIZE: (f32, f32) = (1240.0, 1000.0);
 
@@ -110,12 +110,16 @@ impl Component for Gallery {
         let page = cx.state(move || start);
         let tick = cx.state(|| 0u32);
         let query = cx.state(String::new);
-        let preview_dark = cx.state(|| 0usize);
         let t_dark = tick.clone();
-        let dark = Binding::new(kit::is_dark, move |v| {
-            let _ = kit::set_dark(v);
-            t_dark.update(|n| *n += 1);
-        });
+        let appearance = Binding::new(
+            || usize::from(kit::is_dark()),
+            move |i: usize| {
+                let _ = kit::set_dark(i == 1);
+                t_dark.update(|n| *n += 1);
+            },
+        );
+        let accent_open = cx.state(|| false);
+        let access_open = cx.state(|| false);
         let t_acc = tick.clone();
         let accent = Binding::new(
             || {
@@ -131,24 +135,59 @@ impl Component for Gallery {
             },
         );
         let names: Vec<&str> = ACCENTS.iter().map(|(n, _)| *n).collect();
-        let bar = toolbar((
-            toolbar_title("Silica UI Kit"),
-            spacer(),
-            label("Accent").color("Text/Secondary"),
-            pop_up(&names, &accent).id("accent"),
-            checkbox("Dark", &dark).id("dark"),
-            checkbox(
-                "Reduce Motion",
-                &option(&tick, AppearanceOption::ReduceMotion),
-            )
-            .id("reduce-motion"),
-            checkbox(
-                "Increase Contrast",
-                &option(&tick, AppearanceOption::IncreaseContrast),
-            )
-            .id("increase-contrast"),
-        ));
+        let accent_menu = {
+            let accent = accent.clone();
+            move || {
+                column((field("Accent", pop_up(&names, &accent).id("accent")),))
+                    .alignment(0)
+                    .padding(16.0)
+            }
+        };
+        let access_menu = {
+            let motion = option(&tick, AppearanceOption::ReduceMotion);
+            let contrast = option(&tick, AppearanceOption::IncreaseContrast);
+            move || {
+                column((
+                    row((
+                        label("Reduce Motion"),
+                        spacer(),
+                        switch(&motion).id("reduce-motion"),
+                    ))
+                    .alignment(1),
+                    row((
+                        label("Increase Contrast"),
+                        spacer(),
+                        switch(&contrast).id("increase-contrast"),
+                    ))
+                    .alignment(1),
+                ))
+                .spacing(12.0)
+                .alignment(0)
+                .padding(16.0)
+            }
+        };
         let current = page.get().min(count().saturating_sub(1));
+        let bar = toolbar((
+            toolbar_title(&name_of(current)),
+            spacer(),
+            toolbar_views(&[("sun", "Light"), ("moon", "Dark")], &appearance).id("appearance"),
+            {
+                let open = accent_open.clone();
+                toolbar_button("palette")
+                    .id("accent-button")
+                    .tooltip("Accent colour")
+                    .on_activate(move || open.set(true))
+                    .popover(&accent_open.binding(), (240.0, 92.0), accent_menu)
+            },
+            {
+                let open = access_open.clone();
+                toolbar_button("accessibility")
+                    .id("accessibility-button")
+                    .tooltip("Accessibility")
+                    .on_activate(move || open.set(true))
+                    .popover(&access_open.binding(), (260.0, 108.0), access_menu)
+            },
+        ));
         let go: Rc<dyn Fn(usize)> = {
             let page = page.clone();
             Rc::new(move |i| page.set(i))
@@ -188,25 +227,16 @@ impl Component for Gallery {
         for (n, _) in FOUNDATIONS.iter().enumerate() {
             rows.push(row_for(1 + PAGES.len() + n, "circle"));
         }
-        let library_page = current >= 1 && current <= PAGES.len();
-        let mut body = content_of(current, go);
-        if library_page {
-            let mode = preview_dark.get();
-            body = body.dark(Some(mode == 1));
-        }
-        let header = row((
-            label(name_of(current)).text_style("Title 2"),
-            spacer(),
-            if library_page {
-                segmented(&["Light", "Dark"], &preview_dark.binding()).id("preview-theme")
-            } else {
-                view(Kind::VIEW)
-            },
-            button("Quit").style(1).id("quit").on_activate(kit::quit),
+        // DocPage: the title, then the page, 36 in and at most 1100 wide.
+        let body = column((
+            label(name_of(current)).text_style("Title 1"),
+            content_of(current, go),
         ))
         .spacing(12.0)
-        .alignment(1)
-        .padding_xy(24.0, 12.0);
+        .alignment(0)
+        .padding(36.0)
+        .max_width(1100.0)
+        .fill_width();
         row((
             column((
                 brand.padding_xy(8.0, 8.0),
@@ -219,11 +249,8 @@ impl Component for Gallery {
             .alignment(0)
             .width(264.0)
             .max_height(f32::INFINITY)
-            .background(rgba(0x00000000)),
-            column((header, scroll_view(body).fill()))
-                .spacing(0.0)
-                .alignment(0)
-                .fill(),
+            .background_role("Surface/Sidebar"),
+            scroll_view(body).fill().background_role("Surface/Window"),
         ))
         .spacing(0.0)
         .alignment(0)

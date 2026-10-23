@@ -3,7 +3,7 @@
 use appkit_ui::kit::Kind;
 use appkit_ui::prelude::*;
 
-use super::{card, code, field, h2, h3, lead, matrix, page, pick, stage};
+use super::{code, field, h2, h3, lead, matrix, page, pick, playground};
 
 /// The page: `only` picks the sections (1: colour wells, 2: image wells).
 pub struct Page(pub &'static [usize]);
@@ -82,7 +82,7 @@ impl Component for Page {
                 column((
                     lead("The colour well shows a colour and opens a colour panel (swatches, saturation/brightness pad, hue slider, hex field). The image well takes a dropped or chosen image and clears it. Swatch chips and rows are the pieces of the panel."),
                     h2("Playground"),
-                    row((stage(live), card(controls))).spacing(16.0).alignment(0),
+                    playground(live, controls),
                     code("color_well(&color).style(1)"),
                     h2("Color well"),
                     wells,

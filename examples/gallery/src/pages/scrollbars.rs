@@ -2,7 +2,7 @@
 
 use appkit_ui::prelude::*;
 
-use super::{card, code, field, h2, lead, page, stage};
+use super::{code, field, h2, lead, page, playground};
 
 /// The page.
 pub struct Page;
@@ -46,9 +46,7 @@ impl Component for Page {
                 "Content scrolls natively; the scrollbars are drawn by the component and stay in sync. Overlay bars float over the content, appear while scrolling or hovering and grow when pointed at; legacy bars keep an always visible 16 pt track. Drag a thumb, click the track to move a page, use the wheel or the keyboard.",
             ),
             h2("Playground"),
-            row((stage(area), card(controls)))
-                .spacing(16.0)
-                .alignment(0),
+            playground(area, controls).spacing(16.0).alignment(0),
             code("scroll_view(content).frame(264.0, 180.0)"),
             h2("Overlay"),
             super::wrapped(

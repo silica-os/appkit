@@ -2,7 +2,7 @@
 
 use appkit_ui::prelude::*;
 
-use super::{card, code, field, h2, lead, matrix, page, stage};
+use super::{code, field, h2, lead, matrix, page, playground};
 
 /// The page.
 pub struct Page;
@@ -85,9 +85,7 @@ impl Component for Page {
                 "A pop-up button shows the current choice and opens a menu to change it; a pull-down button has a fixed label and its menu holds actions. Both reuse the push button and the menu. The gradient button is the add/remove pair under a list, the help button the round question mark.",
             ),
             h2("Playground"),
-            row((stage(live), card(controls)))
-                .spacing(16.0)
-                .alignment(0),
+            playground(live, controls),
             code("pop_up(&items, &selected)  pull_down(\"Actions\", &items, |i| …)"),
             states("Pop-up button", &|i, d| {
                 pop_up(&fruits, &b_fruit).control_size(i).disabled(d)

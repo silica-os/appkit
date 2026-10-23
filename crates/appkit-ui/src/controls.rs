@@ -206,6 +206,14 @@ pub fn toolbar_group(items: &[(&str, &str)], action: impl Fn(usize) + 'static) -
         })
 }
 
+/// A toolbar's view switcher (ui-kit `STitlebarPiece` `views`): icon segments, one selected,
+/// 36 tall; `items` are (symbol, accessible label).
+pub fn toolbar_views(items: &[(&str, &str)], selected: &Binding<usize>) -> Element {
+    let symbols: Vec<&str> = items.iter().map(|i| i.0).collect();
+    let labels: Vec<&str> = items.iter().map(|i| i.1).collect();
+    segmented(&labels, selected).prop(Prop::ITEM_SYMBOLS, list(&symbols))
+}
+
 /// A toolbar's title (kit `Piece/Title`: Headline, 8 in).
 pub fn toolbar_title(title: &str) -> Element {
     crate::label(title)

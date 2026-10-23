@@ -2,7 +2,7 @@
 
 use appkit_ui::prelude::*;
 
-use super::{card, code, field, h2, lead, page, stage};
+use super::{code, field, h2, lead, page, playground};
 
 /// The page.
 pub struct Page;
@@ -53,9 +53,7 @@ impl Component for Page {
                 "A glass capsule with a thumb that slides to the selected item. Single or multiple selection, or an action group that only fires clicks. Arrow keys move through the items.",
             ),
             h2("Playground"),
-            row((stage(live), card(controls)))
-                .spacing(16.0)
-                .alignment(0),
+            playground(live, controls),
             code("segmented(&[\"Day\", \"Week\", \"Month\"], &selected).control_size(2)"),
             h2("Controls"),
             segmented(&SIZES, &tsize.binding()),

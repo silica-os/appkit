@@ -521,6 +521,12 @@ impl Element {
         self.prop(Prop::BACKGROUND, PValue::Color(c))
     }
 
+    /// A background fill by colour token (`Surface/Window`, `Line/Separator` …): it follows
+    /// light and dark.
+    pub fn background_role(self, token: &str) -> Self {
+        self.prop(Prop::BACKGROUND, PValue::Str(Rc::from(token)))
+    }
+
     /// Corner radius of the background and the clip.
     pub fn corner_radius(self, r: f32) -> Self {
         self.prop(Prop::CORNER_RADIUS, PValue::Float(f64::from(r)))

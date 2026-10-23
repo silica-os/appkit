@@ -108,6 +108,9 @@ pub struct Modifiers {
     pub opacity: f32,
     /// Background fill behind the content.
     pub background: Option<Color>,
+    /// The background as a colour token (`Surface/Window` …): resolved in the view's
+    /// appearance when painted, so it follows light and dark.
+    pub background_token: Option<String>,
     /// Corner radius of the background and the clip.
     pub corner_radius: f32,
     /// Fixed aspect ratio.
@@ -137,6 +140,7 @@ impl Default for Modifiers {
             priority: 0.0,
             opacity: 1.0,
             background: None,
+            background_token: None,
             corner_radius: 0.0,
             aspect_ratio: None,
             offset: Point::ZERO,

@@ -3,7 +3,7 @@
 use appkit_ui::AlertSpec;
 use appkit_ui::prelude::*;
 
-use super::{card, code, field, h2, lead, page, para, stage};
+use super::{code, field, h2, lead, page, para, playground};
 
 /// The page.
 pub struct Page;
@@ -108,9 +108,7 @@ impl Component for Page {
                 "The 280 pt alert: icon, title, message, up to three stacked buttons, an optional suppression checkbox or any accessory (a text field). Buttons and checkbox are the real SButton and SCheckbox.",
             ),
             h2("Playground"),
-            row((stage(live).fill_width(), card(controls)))
-                .spacing(16.0)
-                .alignment(0),
+            playground(live, controls),
             code(
                 "alert(&open, AlertSpec::new(title, &[\"Save\", \"Don’t Save\", \"Cancel\"], |r| …).message(text))",
             ),

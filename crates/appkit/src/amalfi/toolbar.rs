@@ -4,6 +4,8 @@
 //! capsules are 8 apart), flexible spaces sharing what is left, and 12 more after the last
 //! piece (16 in all, `components.md` "Toolbar items").
 
+use crate::amalfi::foundation::ControlSize;
+use crate::amalfi::segments::SegmentedControl;
 use crate::amalfi::titlebars;
 use crate::core::a11y::{A11y, Role};
 use crate::core::layout::Proposal;
@@ -66,6 +68,17 @@ impl Toolbar {
         cx.children()
             .into_iter()
             .map(|c| {
+                // A segmented control in the bar is a toolbar piece: Large, 36 tall
+                // (ui-kit STitlebarPiece `views`/`tabs`).
+                if let Some(seg) = cx
+                    .ui
+                    .tree
+                    .widget_mut(c)
+                    .and_then(|w| w.as_any_mut().downcast_mut::<SegmentedControl>())
+                {
+                    seg.toolbar = true;
+                    seg.size = ControlSize::Large;
+                }
                 let flex = flexible(cx.ui, c);
                 let s = if flex {
                     Size::new(0.0, 0.0)

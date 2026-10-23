@@ -4,7 +4,7 @@
 use appkit_ui::kit::Kind;
 use appkit_ui::prelude::*;
 
-use super::{card, code, field, h2, h3, lead, matrix, page, pick, stage};
+use super::{code, field, h2, h3, lead, matrix, page, pick, playground};
 
 /// The page: `only` picks the sections (1 text field, 2 the others, 3 search, 5 combo).
 pub struct Page(pub &'static [usize]);
@@ -138,7 +138,7 @@ impl Component for Page {
                 column((
                     lead("Single-line fields built on a native input: text field, search field and combo box. They type, focus, clear and, for the combo box, open a list with the keyboard."),
                     h2("Playground"),
-                    row((stage(live), card(controls))).spacing(16.0).alignment(0),
+                    playground(live, controls),
                     code("text_field(\"Placeholder\", &text).control_size(2)"),
                     h2("Text field"),
                     text_matrix,
