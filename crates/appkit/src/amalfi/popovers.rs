@@ -15,7 +15,7 @@ use crate::core::value::{Prop, Value};
 use crate::core::widget::{LayoutCx, PaintCx, PropChange, Widget};
 use crate::core::window::{WindowId, WindowKind};
 use crate::geom::{Corners, Insets, Point, Rect, Size};
-use crate::render::path::{Path, PathBuilder};
+use crate::render::path::Path;
 use crate::shape::{AMALFI_SMOOTHING, Shape, smooth_rect_path};
 use crate::style::Style;
 
@@ -172,16 +172,20 @@ impl PopoverShape {
 fn arrow_path() -> Path {
     let h = metrics::ARROW_HALF_BASE;
     let d = metrics::ARROW_DEPTH;
-    let mut b = PathBuilder::new();
     let wing = 6.0;
-    b.move_to((-h - wing, -1.0));
-    b.line_to((-h - wing, 0.0));
-    b.arc_to_tangent((-h, 0.0), (0.0, d), metrics::ARROW_BASE_RADIUS);
-    b.arc_to_tangent((0.0, d), (h, 0.0), metrics::ARROW_TIP_RADIUS);
-    b.arc_to_tangent((h, 0.0), (h + wing, 0.0), metrics::ARROW_BASE_RADIUS);
-    b.line_to((h + wing, -1.0));
-    b.close();
-    b.detach()
+    // The kit's smooth corners at the base and the tip, as on a callout.
+    crate::amalfi::callouts::rounded_polygon(
+        &[
+            (-h - wing, -1.0, 0.0),
+            (-h - wing, 0.0, 0.0),
+            (-h, 0.0, metrics::ARROW_BASE_RADIUS),
+            (0.0, d, metrics::ARROW_TIP_RADIUS),
+            (h, 0.0, metrics::ARROW_BASE_RADIUS),
+            (h + wing, 0.0, 0.0),
+            (h + wing, -1.0, 0.0),
+        ],
+        (0.0, 0.0),
+    )
 }
 
 /// A popover: a Glass/Thick surface in the outline of its [`PopoverShape`], its single child

@@ -13,7 +13,7 @@ use crate::core::value::{Prop, Value};
 use crate::core::widget::{LayoutCx, PaintCx, PropChange, Widget};
 use crate::geom::{Point, Rect, Size};
 use crate::render::path::{Path, PathBuilder};
-use crate::shape::Shape;
+use crate::shape::{AMALFI_SMOOTHING, Shape};
 
 /// The outline of a callout: a rounded rectangle and, unless `edge` is `None`, an arrow.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -173,91 +173,189 @@ impl CalloutShape {
     }
 }
 
-/// A closed polygon with a radius at each vertex, `shift` added to every point. Where two
-/// rounded vertices need more than the side between them, both shrink in proportion, so a
-/// corner next to the arrow keeps as much of its radius as the side allows.
-fn rounded_polygon(v: &[(f32, f32, f32)], shift: (f32, f32)) -> Path {
-    let n = v.len();
+/// A closed polygon with a radius at each vertex and the kit's smooth corners (ui-kit
+/// `smoothPath.js`), `shift` added to every point.
+///
+/// Each rounded vertex is an arc that turns φ(1 − s) (φ: how much the outline turns there),
+/// joined to both sides by a cubic Bézier, and takes L = (1 + s)·r·tan(φ/2) of each side, at
+/// any angle (the arrow's base and tip too). Two vertices that need more than the side
+/// between them both scale down by side / (Lᵢ + Lⱼ); a vertex then gives up smoothing first
+/// and radius last.
+pub(crate) fn rounded_polygon(v: &[(f32, f32, f32)], shift: (f32, f32)) -> Path {
     let mut b = PathBuilder::new();
+    let n = v.len();
     if n < 3 {
         return b.detach();
     }
-    let at = |i: usize| v.get(i % n).copied().unwrap_or((0.0, 0.0, 0.0));
-    let (starts, radii) = arcs(v);
-    let sh = |p: (f32, f32)| (p.0 + shift.0, p.1 + shift.1);
-    for i in 0..n {
-        let (x, y, _) = at(i);
-        let rr = radii.get(i).copied().unwrap_or(0.0);
-        let s = starts.get(i).copied().unwrap_or((x, y));
+    let sh = |(x, y): (f32, f32)| (x + shift.0, y + shift.1);
+    for (i, c) in corners(v, AMALFI_SMOOTHING).iter().enumerate() {
+        let Some(c) = c else {
+            let (x, y, _) = v.get(i).copied().unwrap_or_default();
+            if i == 0 {
+                b.move_to(sh((x, y)));
+            } else {
+                b.line_to(sh((x, y)));
+            }
+            continue;
+        };
         if i == 0 {
-            b.move_to(sh(s));
+            b.move_to(sh(c.start));
         } else {
-            b.line_to(sh(s));
+            b.line_to(sh(c.start));
         }
-        let (nx, ny, _) = at(i + 1);
-        if rr > 0.01 {
-            b.arc_to_tangent(sh((x, y)), sh((nx, ny)), rr);
-        } else {
-            b.line_to(sh((x, y)));
+        match c.curves {
+            Some([p1, p2, p3, q0, q1, q2]) => {
+                b.cubic_to(sh(p1), sh(p2), sh(p3));
+                b.arc_to_radius((c.radius, c.radius), c.clockwise, sh(q0));
+                b.cubic_to(sh(q1), sh(q2), sh(c.end));
+            }
+            None => {
+                b.arc_to_radius((c.radius, c.radius), c.clockwise, sh(c.end));
+            }
         }
     }
     b.close();
     b.detach()
 }
 
-/// For each vertex of a polygon with radii: the point where its arc starts and the radius
-/// that fits.
-fn arcs(v: &[(f32, f32, f32)]) -> (Vec<(f32, f32)>, Vec<f32>) {
+/// One rounded vertex of [`rounded_polygon`].
+#[derive(Debug, Clone, Copy)]
+struct Corner {
+    /// Where the corner leaves the incoming side, and where it joins the outgoing one.
+    start: (f32, f32),
+    end: (f32, f32),
+    /// The radius and smoothing left after fitting.
+    radius: f32,
+    smoothing: f32,
+    clockwise: bool,
+    /// The Béziers' points: the first's two controls and end, then the second's start
+    /// (the arc's end) and two controls; `None` for a plain arc.
+    curves: Option<[(f32, f32); 6]>,
+}
+
+/// The rounded vertices of a polygon (`None` keeps a sharp point).
+fn corners(v: &[(f32, f32, f32)], smoothing: f32) -> Vec<Option<Corner>> {
     let n = v.len();
-    let at = |i: usize| v.get(i % n).copied().unwrap_or((0.0, 0.0, 0.0));
-    let side = |i: usize| {
-        let ((x, y, _), (nx, ny, _)) = (at(i), at(i + 1));
-        (nx - x).hypot(ny - y)
-    };
-    // Each vertex: the distance from it to where its arc starts, and tan(half its angle).
-    let mut want = Vec::with_capacity(n);
-    for i in 0..n {
-        let (x, y, r) = at(i);
-        let (px, py, _) = at(i + n - 1);
-        let (nx, ny, _) = at(i + 1);
-        let (ax, ay) = (px - x, py - y);
-        let (bx, by) = (nx - x, ny - y);
-        let (la, lb) = (ax.hypot(ay), bx.hypot(by));
-        if r <= 0.0 || la <= f32::EPSILON || lb <= f32::EPSILON {
-            want.push((0.0, 0.0));
-            continue;
-        }
-        let cos = ((ax * bx + ay * by) / (la * lb)).clamp(-1.0, 1.0);
-        let tn = (cos.acos() / 2.0).tan();
-        want.push((if tn.abs() > 1e-6 { r / tn } else { 0.0 }, tn));
+    let s = smoothing.clamp(0.0, 1.0);
+    let at = |i: usize| v.get(i % n).copied().unwrap_or_default();
+    // Per vertex: unit incoming direction, turn angle φ, turn sign, tan(φ/2), the outgoing
+    // side's length, and the tangent length it asks for.
+    struct G {
+        dir: (f32, f32),
+        phi: f32,
+        cross: f32,
+        t: f32,
+        out: f32,
+        want: f32,
     }
-    let d_at = |i: usize| want.get(i % n).map_or(0.0, |w| w.0);
-    // The share of a side its two vertices may take: 1, or less when they overlap.
-    let fit = |i: usize| {
-        let need = d_at(i) + d_at(i + 1);
-        if need > side(i) && need > 0.0 {
-            side(i) / need
-        } else {
-            1.0
-        }
-    };
-    let mut starts = Vec::with_capacity(n);
-    let mut radii = Vec::with_capacity(n);
+    let g: Vec<G> = (0..n)
+        .map(|i| {
+            let (x, y, r) = at(i);
+            let (px, py, _) = at(i + n - 1);
+            let (nx, ny, _) = at(i + 1);
+            let (ix, iy, ox, oy) = (x - px, y - py, nx - x, ny - y);
+            let (li, lo) = (ix.hypot(iy), ox.hypot(oy));
+            if li <= f32::EPSILON || lo <= f32::EPSILON {
+                return G {
+                    dir: (0.0, 0.0),
+                    phi: 0.0,
+                    cross: 0.0,
+                    t: 0.0,
+                    out: lo,
+                    want: 0.0,
+                };
+            }
+            let (ix, iy, ox, oy) = (ix / li, iy / li, ox / lo, oy / lo);
+            let phi = (ix * ox + iy * oy).clamp(-1.0, 1.0).acos();
+            let cross = ix * oy - iy * ox;
+            let t = (phi / 2.0).tan();
+            let ok = r > 0.0 && phi > 1e-4 && phi < std::f32::consts::PI - 1e-3 && cross != 0.0;
+            let want = if ok { (1.0 + s) * r * t } else { 0.0 };
+            G {
+                dir: (ix, iy),
+                phi,
+                cross,
+                t,
+                out: lo,
+                want,
+            }
+        })
+        .collect();
+    let mut fit = vec![1.0_f32; n];
     for i in 0..n {
-        let (x, y, _) = at(i);
-        let (px, py, _) = at(i + n - 1);
-        let la = (px - x).hypot(py - y);
-        let (d, tn) = want.get(i).copied().unwrap_or((0.0, 0.0));
-        let d = d * fit(i + n - 1).min(fit(i));
-        if la <= f32::EPSILON || d <= 0.0 {
-            starts.push((x, y));
-            radii.push(0.0);
+        let j = (i + 1) % n;
+        let (Some(a), Some(b)) = (g.get(i), g.get(j)) else {
             continue;
+        };
+        let need = a.want + b.want;
+        if need > a.out && need > 0.0 {
+            let k = a.out / need;
+            for m in [i, j] {
+                if let Some(f) = fit.get_mut(m) {
+                    *f = f.min(k);
+                }
+            }
         }
-        starts.push((x + (px - x) / la * d, y + (py - y) / la * d));
-        radii.push(d * tn);
     }
-    (starts, radii)
+    g.iter()
+        .enumerate()
+        .map(|(i, p)| {
+            if p.want <= 0.0 {
+                return None;
+            }
+            let (x, y, r0) = at(i);
+            let budget = p.want * fit.get(i).copied().unwrap_or(1.0);
+            let (mut xi, mut r) = (s, r0);
+            if (1.0 + xi) * r * p.t > budget {
+                xi = (budget / (r * p.t) - 1.0).max(0.0);
+                if xi == 0.0 && r * p.t > budget {
+                    r = budget / p.t;
+                }
+            }
+            let l = (1.0 + xi) * r * p.t;
+            // Local frame: origin at the corner's start, u along the incoming side, v towards
+            // the side the outline turns to.
+            let sg = p.cross.signum();
+            let (ex, ey) = p.dir;
+            let (nx, ny) = (-ey * sg, ex * sg);
+            let (sx, sy) = (x - ex * l, y - ey * l);
+            let w = |(u, v): (f32, f32)| (sx + u * ex + v * nx, sy + u * ey + v * ny);
+            let end = w((l + l * p.phi.cos(), l * p.phi.sin()));
+            let mut c = Corner {
+                start: (sx, sy),
+                end,
+                radius: r,
+                smoothing: xi,
+                clockwise: p.cross > 0.0,
+                curves: None,
+            };
+            if xi < 1e-3 {
+                return Some(c);
+            }
+            let beta = p.phi * xi / 2.0;
+            let k = r * (p.phi * (1.0 - xi) / 2.0).tan();
+            let h = r * (beta / 2.0).tan();
+            let (cc, dd) = (h * beta.cos(), h * beta.sin());
+            let (sh, ch) = ((p.phi / 2.0).sin(), (p.phi / 2.0).cos());
+            let m = (dd + k * beta.sin()) / ch;
+            let x1 = l - m * sh - k * beta.cos();
+            let b = (x1 - cc) / 3.0;
+            if b.is_nan() || b < 0.0 {
+                c.smoothing = 0.0;
+                return Some(c);
+            }
+            let a = 2.0 * b;
+            // The second Bézier is the first mirrored across the bisector through (l, 0).
+            let refl = |(u, v): (f32, f32)| {
+                let du = u - l;
+                let dot = du * -sh + v * ch;
+                (l + 2.0 * dot * -sh - du, 2.0 * dot * ch - v)
+            };
+            let (p1, p2, p3) = ((a, 0.0), (a + b, 0.0), (x1, dd));
+            c.curves = Some([w(p1), w(p2), w(p3), w(refl(p3)), w(refl(p2)), w(refl(p1))]);
+            Some(c)
+        })
+        .collect()
 }
 
 /// A callout: glass in the outline of its [`CalloutShape`], its children inside `padding`
@@ -419,23 +517,45 @@ mod tests {
     }
 
     #[test]
-    fn arrow_corners_shrink_by_the_overlap_only() {
-        // Corner (0,0) r 16, then the arrow's base 15 further on: the corner and the base
-        // (r 4 at about 141 degrees) share 15, so the corner keeps about 13.6, not 7.5.
+    fn corners_give_up_smoothing_before_radius() {
+        // A rectangle's 90 degree corner takes (1 + 0.6) x 16 of each side.
+        let rect = [
+            (0.0, 0.0, 16.0),
+            (200.0, 0.0, 16.0),
+            (200.0, 100.0, 16.0),
+            (0.0, 100.0, 16.0),
+        ];
+        let c = corners(&rect, AMALFI_SMOOTHING);
+        let first = c
+            .first()
+            .copied()
+            .flatten()
+            .map(|c| (c.start, c.radius, c.smoothing));
+        assert_eq!(first, Some(((0.0, 25.6), 16.0, 0.6)));
+        // ui-kit's case: a 16 corner 20 from the arrow's base (r 4) keeps its radius and
+        // lowers its smoothing to about 0.12.
         let v = [
             (0.0, 0.0, 16.0),
             (100.0, 0.0, 16.0),
-            (100.0, 50.0, 16.0),
-            (0.0, 50.0, 16.0),
-            (0.0, 35.0, 4.0),
-            (-8.0, 25.0, 3.0),
-            (0.0, 15.0, 4.0),
+            (100.0, 60.0, 16.0),
+            (0.0, 60.0, 16.0),
+            (0.0, 40.0, 4.0),
+            (-8.0, 30.0, 3.0),
+            (0.0, 20.0, 4.0),
         ];
-        let (_, r) = arcs(&v);
-        let corner = r.first().copied().unwrap_or(0.0);
-        assert!(corner > 13.0 && corner < 16.0, "corner {corner}");
-        let far = r.get(1).copied().unwrap_or(0.0);
-        assert!((far - 16.0).abs() < 1e-3);
+        let c = corners(&v, AMALFI_SMOOTHING);
+        let corner = c
+            .first()
+            .copied()
+            .flatten()
+            .map(|c| (c.radius, c.smoothing));
+        let Some((r, s)) = corner else {
+            panic!("a corner");
+        };
+        assert!((r - 16.0).abs() < 1e-3, "radius {r}");
+        assert!(s > 0.05 && s < 0.2, "smoothing {s}");
+        let far = c.get(1).copied().flatten().map(|c| c.smoothing);
+        assert_eq!(far, Some(0.6));
     }
 
     #[test]
