@@ -278,6 +278,12 @@ impl TableView {
         self.editing.is_some()
     }
 
+    /// The text of every row, for type-select (without it the first text of the rows in
+    /// sight).
+    pub fn set_labels(&mut self, labels: super::Labels) {
+        self.rows.labels = labels;
+    }
+
     /// Table mode: `rows` rows of `row_height` whose cells `provider` makes.
     pub fn set_cells(&mut self, rows: usize, row_height: f32, provider: CellProvider) {
         self.outline = None;
@@ -950,6 +956,7 @@ impl Widget for TableView {
         let r = cx.bounds();
         let area = self.viewport(r.size()).translate(r.origin());
         paint_scroller(cx, area, &self.rows, self.hovered);
+        super::paint_focus_ring(cx, r);
         if self.look == ListLook::Bordered {
             paint_box_border(cx, self.frame(r.size()).translate(r.origin()));
         }
@@ -1111,7 +1118,27 @@ impl Widget for TableView {
                     }
                     _ => {}
                 }
-                match self.rows.key(k) {
+                let result = match self.rows.key(k) {
+                    Some(c) => Some(c),
+                    None => {
+                        let texts: std::collections::BTreeMap<usize, Option<String>> = self
+                            .live
+                            .iter()
+                            .map(|(i, row)| {
+                                let t = row
+                                    .cells
+                                    .iter()
+                                    .flatten()
+                                    .find_map(|c| super::view_text(cx.ui(), *c));
+                                (*i, t)
+                            })
+                            .collect();
+                        self.rows.type_key(k, std::time::Instant::now(), &|i| {
+                            texts.get(&i).cloned().flatten()
+                        })
+                    }
+                };
+                match result {
                     Some(changed) => {
                         if changed {
                             self.selection_changed(cx);

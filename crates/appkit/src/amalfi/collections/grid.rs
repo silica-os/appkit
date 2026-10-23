@@ -101,6 +101,11 @@ impl GridView {
         self.dirty = true;
     }
 
+    /// The text of every item, for type-select (without it the text of the items in sight).
+    pub fn set_labels(&mut self, labels: super::Labels) {
+        self.items.labels = labels;
+    }
+
     /// Makes the tiles again (the data changed).
     pub fn reload(&mut self) {
         self.dirty = true;
@@ -316,6 +321,7 @@ impl Widget for GridView {
     fn paint_over(&mut self, cx: &mut PaintCx<'_>) {
         let b = cx.bounds();
         paint_scroller(cx, b, &self.lines, self.hovered);
+        super::paint_focus_ring(cx, b);
     }
 
     fn event(&mut self, cx: &mut EventCx<'_>, event: &Event) -> Handled {
@@ -350,7 +356,7 @@ impl Widget for GridView {
                     }
                     None => {
                         // A click between tiles clears the selection.
-                        if !mods.intersects(Mods::LOGO | Mods::SHIFT)
+                        if !mods.intersects(Mods::LOGO | Mods::CTRL | Mods::SHIFT)
                             && !self.items.selected.is_empty()
                         {
                             self.items.selected.clear();
@@ -371,15 +377,47 @@ impl Widget for GridView {
                     return Handled::Yes;
                 }
                 if let Key::Char('a') = k.key
-                    && k.mods.contains(Mods::LOGO)
+                    && k.mods.intersects(Mods::LOGO | Mods::CTRL)
                 {
                     if self.items.select_all() {
                         self.selection_changed(cx);
                     }
                     return Handled::Yes;
                 }
-                let Some(i) = self.navigate(&k.key) else {
+                if matches!(k.key, Key::Escape | Key::Space) {
+                    if let Some(changed) = self.items.key(k) {
+                        if changed {
+                            self.selection_changed(cx);
+                        }
+                        if let Some(c) = self.items.current() {
+                            self.scroll_to_item(c);
+                        }
+                        cx.request_layout();
+                        return Handled::Yes;
+                    }
                     return Handled::No;
+                }
+                let Some(i) = self.navigate(&k.key) else {
+                    let texts: BTreeMap<usize, Option<String>> = self
+                        .live
+                        .iter()
+                        .map(|(i, v)| (*i, super::view_text(cx.ui(), *v)))
+                        .collect();
+                    return match self.items.type_key(k, std::time::Instant::now(), &|i| {
+                        texts.get(&i).cloned().flatten()
+                    }) {
+                        Some(changed) => {
+                            if changed {
+                                self.selection_changed(cx);
+                            }
+                            if let Some(c) = self.items.current() {
+                                self.scroll_to_item(c);
+                            }
+                            cx.request_layout();
+                            Handled::Yes
+                        }
+                        None => Handled::No,
+                    };
                 };
                 if self.items.select(i, k.mods & Mods::SHIFT) {
                     self.selection_changed(cx);

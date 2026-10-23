@@ -23,6 +23,8 @@ pub use header::{Column, TableColumn, TableHeader};
 pub use table::{CellProvider, TableView, TreeSource};
 
 use std::collections::BTreeMap;
+use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use crate::amalfi::scrollbars::{BarLook, ScrollbarStyle, paint_bar};
 use crate::core::a11y::{A11y, Action, Role};
@@ -152,6 +154,47 @@ pub(crate) struct Rows {
     pub multiple: bool,
     /// A selection set before its rows existed (applied when the rows come).
     pending: Option<Vec<i64>>,
+    /// The prefix typed so far (type-select), and when the last character came.
+    typed: String,
+    typed_at: Option<Instant>,
+    /// The text of row `i` for type-select (none: the text of the row's view).
+    labels: Labels,
+}
+
+/// How long a typed prefix lives (macOS: a second between keystrokes).
+pub(crate) const TYPE_SELECT_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// The text of a row, for type-select.
+#[derive(Clone, Default)]
+pub struct Labels(Option<Rc<dyn Fn(usize) -> Option<String>>>);
+
+impl Labels {
+    /// Labels from a function.
+    pub fn new(f: impl Fn(usize) -> Option<String> + 'static) -> Labels {
+        Labels(Some(Rc::new(f)))
+    }
+}
+
+impl std::fmt::Debug for Labels {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0.is_some() {
+            "Labels(..)"
+        } else {
+            "Labels(-)"
+        })
+    }
+}
+
+/// The text of a row's view: the label of the first text under it.
+pub(crate) fn view_text(ui: &Ui, v: ViewId) -> Option<String> {
+    if let Some(a) = ui.accessibility_of(v)
+        && a.role == Role::Label
+        && let Some(l) = a.label
+        && !l.is_empty()
+    {
+        return Some(l);
+    }
+    ui.tree.children(v).iter().find_map(|c| view_text(ui, *c))
 }
 
 impl Rows {
@@ -223,7 +266,7 @@ impl Rows {
             return false;
         }
         let before = self.selected.clone();
-        if self.multiple && mods.contains(Mods::LOGO) {
+        if self.multiple && mods.intersects(Mods::LOGO | Mods::CTRL) {
             match self.selected.binary_search(&i) {
                 Ok(p) => {
                     self.selected.remove(p);
@@ -351,12 +394,94 @@ impl Rows {
     /// the key is not one of them.
     pub fn key(&mut self, k: &KeyEvent) -> Option<bool> {
         if let Key::Char('a') = k.key
-            && k.mods.contains(Mods::LOGO)
+            && k.mods.intersects(Mods::LOGO | Mods::CTRL)
         {
             return Some(self.select_all());
         }
+        match k.key {
+            Key::Escape => {
+                let changed = !self.selected.is_empty();
+                self.selected.clear();
+                self.anchor = None;
+                self.cursor = None;
+                self.typed.clear();
+                return Some(changed);
+            }
+            Key::Space if !k.mods.contains(Mods::ALT) => {
+                // Space toggles the row the keyboard is on in a multiple selection and
+                // selects it otherwise.
+                let i = self
+                    .current()
+                    .or(if self.count > 0 { Some(0) } else { None })?;
+                let mods = if self.multiple {
+                    Mods::CTRL
+                } else {
+                    Mods::empty()
+                };
+                let changed = if !self.multiple && self.is_selected(i) {
+                    false
+                } else {
+                    self.select(i, mods)
+                };
+                self.scroll_to(i);
+                return Some(changed);
+            }
+            _ => {}
+        }
         let i = self.navigate(&k.key)?;
         let changed = self.select(i, k.mods & Mods::SHIFT);
+        self.scroll_to(i);
+        Some(changed)
+    }
+
+    /// Type-select: a printable key extends the prefix typed within the last second (a new
+    /// one otherwise) and selects the next row whose text starts with it. `fallback` gives the
+    /// text of a row when no labels were set. Returns whether the selection changed, or `None`
+    /// when the key is not a character.
+    pub fn type_key(
+        &mut self,
+        k: &KeyEvent,
+        now: Instant,
+        fallback: &dyn Fn(usize) -> Option<String>,
+    ) -> Option<bool> {
+        if k.mods.intersects(Mods::LOGO | Mods::CTRL | Mods::ALT) {
+            return None;
+        }
+        let text = k
+            .text
+            .as_deref()
+            .filter(|t| t.chars().all(|c| !c.is_control()))?;
+        if text.is_empty() {
+            return None;
+        }
+        let fresh = self
+            .typed_at
+            .is_none_or(|t| now.saturating_duration_since(t) > TYPE_SELECT_TIMEOUT);
+        if fresh {
+            self.typed.clear();
+        }
+        self.typed_at = Some(now);
+        self.typed.push_str(&text.to_lowercase());
+        if self.count == 0 {
+            return Some(false);
+        }
+        let start = match (self.current(), self.typed.chars().count()) {
+            (Some(c), 1) => c + 1,
+            (Some(c), _) => c,
+            (None, _) => 0,
+        };
+        let labels = self.labels.0.clone();
+        let label = |i: usize| match &labels {
+            Some(f) => f(i),
+            None => fallback(i),
+        };
+        let found = (0..self.count)
+            .map(|d| (start + d) % self.count)
+            .find(|i| label(*i).is_some_and(|l| l.to_lowercase().starts_with(&self.typed)));
+        let Some(i) = found else {
+            return Some(false);
+        };
+        let changed = self.select(i, Mods::empty());
         self.scroll_to(i);
         Some(changed)
     }
@@ -379,6 +504,20 @@ pub(crate) fn selection_fill(cx: &PaintCx<'_>, emphasis: bool) -> crate::color::
         c.accent_amalfi
     } else {
         c.line_separator
+    }
+}
+
+/// The focus ring of a collection that has the keyboard focus (shown for keyboard focus, as
+/// the other controls).
+pub(crate) fn paint_focus_ring(cx: &mut PaintCx<'_>, rect: Rect) {
+    if cx.focus_visible() && !cx.is_disabled() {
+        let theme = *cx.theme();
+        crate::amalfi::foundation::focus_halo(
+            cx.rec,
+            rect,
+            Shape::rounded(metrics::BOX_RADIUS),
+            &theme,
+        );
     }
 }
 
@@ -578,6 +717,11 @@ impl ListView {
         self.dirty = true;
     }
 
+    /// The text of every row, for type-select (without it the text of the rows in sight).
+    pub fn set_labels(&mut self, labels: Labels) {
+        self.rows.labels = labels;
+    }
+
     /// Makes the rows again (the data changed).
     pub fn reload(&mut self) {
         self.dirty = true;
@@ -720,6 +864,7 @@ impl Widget for ListView {
         let r = cx.bounds();
         let area = self.viewport(r.size()).translate(r.origin());
         paint_scroller(cx, area, &self.rows, self.hovered);
+        paint_focus_ring(cx, r);
         if self.look == ListLook::Bordered {
             paint_box_border(cx, self.box_rect(r.size()).translate(r.origin()));
         }
@@ -764,7 +909,19 @@ impl Widget for ListView {
                     }
                     return Handled::Yes;
                 }
-                match self.rows.key(k) {
+                let result = match self.rows.key(k) {
+                    Some(c) => Some(c),
+                    None => {
+                        let texts: BTreeMap<usize, Option<String>> = self
+                            .live
+                            .iter()
+                            .map(|(i, v)| (*i, view_text(cx.ui(), *v)))
+                            .collect();
+                        self.rows
+                            .type_key(k, Instant::now(), &|i| texts.get(&i).cloned().flatten())
+                    }
+                };
+                match result {
                     Some(changed) => {
                         if changed {
                             self.selection_changed(cx);
