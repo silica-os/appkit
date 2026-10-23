@@ -23,15 +23,15 @@ const PRESS_SCALE_SEGMENTED: f32 = 1.035;
 /// Fixed measures.
 pub mod metrics {
     /// Space between a control's track and its items.
-    pub const TRACK_PADDING: f32 = 4.0;
+    pub const TRACK_PADDING: f32 = crate::amalfi::tokens::spacing::XS;
     /// Horizontal padding of a text item.
-    pub const TEXT_ITEM_PADDING: f32 = 8.0;
+    pub const TEXT_ITEM_PADDING: f32 = crate::amalfi::tokens::spacing::S;
     /// Separator width.
     pub const SEPARATOR_WIDTH: f32 = 1.0;
     /// Inset of a text highlight at its sides.
-    pub const TEXT_HIGHLIGHT_INSET: f32 = 4.0;
+    pub const TEXT_HIGHLIGHT_INSET: f32 = crate::amalfi::tokens::spacing::XS;
     /// Text boxes are a multiple of this wide (the 4 pt grid).
-    pub const STEP: f32 = 4.0;
+    pub const STEP: f32 = crate::amalfi::tokens::grid::BASE;
     /// The Icon + Label control: bar height.
     pub const PANE_BAR_HEIGHT: f32 = 52.0;
     /// The Icon + Label control: pane height.
@@ -39,7 +39,7 @@ pub mod metrics {
     /// The Icon + Label control: narrowest pane.
     pub const MIN_PANE_WIDTH: f32 = 72.0;
     /// The Icon + Label control: glyph size.
-    pub const PANE_GLYPH: f32 = 20.0;
+    pub const PANE_GLYPH: f32 = crate::amalfi::tokens::control_icons::LARGE;
     /// The Icon + Label control: top of the label in a pane.
     pub const PANE_LABEL_TOP: f32 = 26.0;
 }
