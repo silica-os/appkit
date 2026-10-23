@@ -389,9 +389,12 @@ impl Widget for Switch {
                     };
                     self.lens.animate_to(1.0, timing);
                 }
-                let x = self
-                    .metrics()
-                    .clamp_x(self.thumb_from + pos.x - self.drag_from);
+                // The lens stays 2 pt inside the track (ui-kit `onMove`).
+                let m = self.metrics();
+                let x = (self.thumb_from + pos.x - self.drag_from).clamp(
+                    SwitchMetrics::INSET,
+                    (m.track.width - m.thumb - SwitchMetrics::INSET).max(SwitchMetrics::INSET),
+                );
                 self.thumb.jump(x);
                 let fade = if reduce {
                     Timing::None
@@ -606,6 +609,19 @@ mod tests {
             ui.widget::<Switch>(id)
                 .is_some_and(|s| !s.lens.is_animating())
         );
+    }
+
+    #[test]
+    fn the_lens_stays_two_points_inside_the_track() {
+        let (mut ui, win, id, _log) = scene(Switch::new());
+        let r = ui.tree.window_rect(id);
+        let y = r.center().y;
+        ui.pointer_down(win, Point::new(r.x + 12.0, y), Button::Left, Mods::empty());
+        ui.pointer_move(win, Point::new(r.x + 17.0, y), Mods::empty());
+        ui.pointer_move(win, Point::new(r.x + 90.0, y), Mods::empty());
+        assert_eq!(ui.widget::<Switch>(id).map(|s| s.thumb.get()), Some(18.0));
+        ui.pointer_move(win, Point::new(r.x - 90.0, y), Mods::empty());
+        assert_eq!(ui.widget::<Switch>(id).map(|s| s.thumb.get()), Some(2.0));
     }
 
     #[test]
