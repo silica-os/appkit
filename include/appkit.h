@@ -321,6 +321,8 @@ typedef void (*AKAlertFn)(int64_t response, void *user);
 #define AK_KIND_FORM_VALUE 59u
 #define AK_KIND_FORM_FOOTER 60u
 #define AK_KIND_BOX_SURFACE 61u
+#define AK_KIND_GLASS_PANEL 62u
+#define AK_KIND_CALLOUT 63u
 
 /* Window kinds. */
 #define AK_WINDOW_NORMAL 1u
@@ -360,6 +362,13 @@ typedef void (*AKAlertFn)(int64_t response, void *user);
 #define AK_ALERT_GLASS 2u
 #define AK_ALERT_STACKED 4u
 #define AK_ALERT_DESTRUCTIVE 8u
+#define AK_APPEARANCE_REDUCE_MOTION 1u
+#define AK_APPEARANCE_INCREASE_CONTRAST 2u
+#define AK_APPEARANCE_REDUCE_TRANSPARENCY 3u
+#define AK_APPEARANCE_ACCENT 4u
+#define AK_PANEL_SWATCHES_ONLY 1u
+#define AK_PANEL_EXPANDED 1u
+#define AK_PANEL_OPEN 2u
 #define AK_SIDE_BELOW 0u
 #define AK_SIDE_ABOVE 1u
 #define AK_SIDE_AFTER 2u
@@ -458,6 +467,10 @@ AKStatus ak_alert_add_accessory(AKView *alert, AKView *view);
 AKWindow *ak_window_present_alert(AKWindow *parent, AKView *alert, AKAlertFn callback, void *user, AKDestroy destroy);
 AKWindow *ak_view_present_popover(AKView *anchor, AKView *content, uint32_t side, AKCallback closed, void *user, AKDestroy destroy);
 AKView *ak_menu_view_new(AKMenu *menu, AKMenuFn callback, void *user, AKDestroy destroy);
+AKView *ak_color_panel_new(const uint32_t *colors, size_t count, size_t columns, uint32_t selected, uint32_t flags);
+AKView *ak_file_panel_new(uint32_t flags, const char *name, const char *const *files, size_t count);
+AKStatus ak_set_appearance_option(uint32_t option, uint32_t value);
+uint32_t ak_appearance_option(uint32_t option);
 AKStatus ak_window_set_autosave(AKWindow *window, const char *name);
 
 #ifdef __cplusplus

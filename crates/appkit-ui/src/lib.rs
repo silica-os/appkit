@@ -44,7 +44,7 @@ pub use appkit_rs::Column;
 pub use element::{
     AlertSpec, Animation, Component, Element, Handler, IntoChildren, Key, MenuEntry, PValue,
     Transition, button, collection, column, component, custom, for_each, grid, group, host, label,
-    list, outline, overlay, row, spacer, symbol, table, tabs, text_view, view,
+    list, made, outline, overlay, row, spacer, symbol, table, tabs, text_view, view,
 };
 
 /// Everything an app needs.

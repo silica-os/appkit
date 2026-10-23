@@ -323,6 +323,59 @@ pub extern "C" fn ak_is_dark() -> u8 {
     })
 }
 
+/// Sets an appearance option for every window: Reduce Motion, Increase Contrast and Reduce
+/// Transparency take 0 or 1; the accent takes 0xRRGGBBAA, and 0 goes back to Amalfi's.
+#[unsafe(no_mangle)]
+pub extern "C" fn ak_set_appearance_option(option: u32, value: u32) -> AKStatus {
+    guard(AK_ERROR_PLATFORM, || {
+        if !(AK_APPEARANCE_REDUCE_MOTION..=AK_APPEARANCE_ACCENT).contains(&option) {
+            return set_last(AK_ERROR_INVALID_ARGUMENT);
+        }
+        status(with_ui(|ui| {
+            let mut a = ui.appearance;
+            match option {
+                AK_APPEARANCE_REDUCE_MOTION => a.reduce_motion = value != 0,
+                AK_APPEARANCE_INCREASE_CONTRAST => a.increase_contrast = value != 0,
+                AK_APPEARANCE_REDUCE_TRANSPARENCY => a.reduce_transparency = value != 0,
+                _ => {
+                    a.accent = (value != 0).then(|| {
+                        crate::color::Color::rgba(
+                            (value >> 24) as u8,
+                            (value >> 16) as u8,
+                            (value >> 8) as u8,
+                            value as u8,
+                        )
+                    })
+                }
+            }
+            ui.set_appearance(a);
+        }))
+    })
+}
+
+/// The appearance option `option` (see `ak_set_appearance_option`); 0 when unknown.
+#[unsafe(no_mangle)]
+pub extern "C" fn ak_appearance_option(option: u32) -> u32 {
+    guard(0, || {
+        with_ui(|ui| {
+            let a = ui.appearance;
+            match option {
+                AK_APPEARANCE_REDUCE_MOTION => u32::from(a.reduce_motion),
+                AK_APPEARANCE_INCREASE_CONTRAST => u32::from(a.increase_contrast),
+                AK_APPEARANCE_REDUCE_TRANSPARENCY => u32::from(a.reduce_transparency),
+                AK_APPEARANCE_ACCENT => a.accent.map_or(0, |c| {
+                    (u32::from(c.r) << 24)
+                        | (u32::from(c.g) << 16)
+                        | (u32::from(c.b) << 8)
+                        | u32::from(c.a)
+                }),
+                _ => 0,
+            }
+        })
+        .unwrap_or(0)
+    })
+}
+
 // ----- Views -------------------------------------------------------------------------------
 
 #[unsafe(no_mangle)]

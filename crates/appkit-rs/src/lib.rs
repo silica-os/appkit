@@ -443,6 +443,55 @@ pub fn is_dark() -> bool {
     unsafe { f::ak_is_dark() != 0 }
 }
 
+/// An appearance option (`appkit_sys::AK_APPEARANCE_*`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppearanceOption {
+    /// Springs become cross-fades.
+    ReduceMotion,
+    /// Increase Contrast.
+    IncreaseContrast,
+    /// Glass becomes opaque.
+    ReduceTransparency,
+}
+
+impl AppearanceOption {
+    fn id(self) -> u32 {
+        match self {
+            AppearanceOption::ReduceMotion => sys::AK_APPEARANCE_REDUCE_MOTION,
+            AppearanceOption::IncreaseContrast => sys::AK_APPEARANCE_INCREASE_CONTRAST,
+            AppearanceOption::ReduceTransparency => sys::AK_APPEARANCE_REDUCE_TRANSPARENCY,
+        }
+    }
+}
+
+/// Turns an appearance option on or off.
+pub fn set_appearance_option(option: AppearanceOption, on: bool) -> Result<()> {
+    // SAFETY: plain values.
+    check(unsafe { f::ak_set_appearance_option(option.id(), u32::from(on)) })
+}
+
+/// Whether an appearance option is on.
+pub fn appearance_option(option: AppearanceOption) -> bool {
+    // SAFETY: plain value.
+    unsafe { f::ak_appearance_option(option.id()) != 0 }
+}
+
+/// Sets the accent colour (`None`: Amalfi's).
+pub fn set_accent(color: Option<Color>) -> Result<()> {
+    let v = color.map_or(0, |c| {
+        (u32::from(c.r) << 24) | (u32::from(c.g) << 16) | (u32::from(c.b) << 8) | u32::from(c.a)
+    });
+    // SAFETY: plain value.
+    check(unsafe { f::ak_set_appearance_option(sys::AK_APPEARANCE_ACCENT, v) })
+}
+
+/// The accent colour set, if any.
+pub fn accent() -> Option<Color> {
+    // SAFETY: plain value.
+    let v = unsafe { f::ak_appearance_option(sys::AK_APPEARANCE_ACCENT) };
+    (v != 0).then(|| rgba(v))
+}
+
 // ----- Views --------------------------------------------------------------------------------
 
 /// A view (one reference).
@@ -915,6 +964,40 @@ impl View {
                 i.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()),
             )
         };
+        View::owned(p)
+    }
+
+    /// The colour panel's content (`ak_color_panel_new`): `colors` as 0xRRGGBB in rows of
+    /// `columns`, `selected` marked (`None`: the first), flags `appkit_sys::AK_PANEL_*`. It
+    /// emits `VALUE_CHANGED` with the colour.
+    pub fn color_panel(
+        colors: &[u32],
+        columns: usize,
+        selected: Option<u32>,
+        flags: u32,
+    ) -> Result<View> {
+        // SAFETY: the slice is alive for the call.
+        let p = unsafe {
+            f::ak_color_panel_new(
+                colors.as_ptr(),
+                colors.len(),
+                columns,
+                selected.unwrap_or(u32::MAX),
+                flags,
+            )
+        };
+        View::owned(p)
+    }
+
+    /// An open or save panel over `files` (`ak_file_panel_new`), flags `appkit_sys::AK_PANEL_*`;
+    /// `name` is the save panel's "Save As:" text. It emits `ACTIVATED` with a string
+    /// ("primary", "secondary", "new-folder", "back", "forward") and `EXPANDED_CHANGED`.
+    pub fn file_panel(flags: u32, name: &str, files: &[&str]) -> Result<View> {
+        let n = cstring(name)?;
+        let owned: Vec<CString> = files.iter().map(|b| cstring(b)).collect::<Result<_>>()?;
+        let ptrs: Vec<*const c_char> = owned.iter().map(|c| c.as_ptr()).collect();
+        // SAFETY: strings alive for the call.
+        let p = unsafe { f::ak_file_panel_new(flags, n.as_ptr(), ptrs.as_ptr(), ptrs.len()) };
         View::owned(p)
     }
 
@@ -1477,6 +1560,17 @@ pub struct Menu {
     ptr: *mut sys::AKMenu,
 }
 
+/// Panel flags (`View::color_panel`, `View::file_panel`).
+pub mod panel_flags {
+    use appkit_sys as sys;
+    /// The colour panel without its pad, hue slider and hex field.
+    pub const SWATCHES_ONLY: u32 = sys::AK_PANEL_SWATCHES_ONLY;
+    /// The save panel in its expanded form.
+    pub const EXPANDED: u32 = sys::AK_PANEL_EXPANDED;
+    /// An open panel (else a save panel).
+    pub const OPEN: u32 = sys::AK_PANEL_OPEN;
+}
+
 /// Alert flags (`View::alert`).
 pub mod alert_flags {
     use appkit_sys as sys;
@@ -1673,6 +1767,81 @@ mod tests {
         set_menu_bar(vec![menu], |_| {}).unwrap();
         w.close().unwrap();
         assert_eq!(b.set_bool(Prop::HIDDEN, true), Err(Error::NoSuchObject));
+    }
+
+    #[test]
+    fn appearance_options_round_trip() {
+        let _h = Headless::new().unwrap();
+        assert!(!appearance_option(AppearanceOption::ReduceMotion));
+        set_appearance_option(AppearanceOption::ReduceMotion, true).unwrap();
+        set_appearance_option(AppearanceOption::IncreaseContrast, true).unwrap();
+        assert!(appearance_option(AppearanceOption::ReduceMotion));
+        assert!(appearance_option(AppearanceOption::IncreaseContrast));
+        assert!(!appearance_option(AppearanceOption::ReduceTransparency));
+        set_accent(Some(rgba(0xC0392BFF))).unwrap();
+        assert_eq!(accent(), Some(rgba(0xC0392BFF)));
+        set_accent(None).unwrap();
+        assert_eq!(accent(), None);
+        // SAFETY: plain values.
+        assert!(unsafe { f::ak_set_appearance_option(99, 1) } != sys::AK_OK);
+        set_appearance_option(AppearanceOption::ReduceMotion, false).unwrap();
+        set_appearance_option(AppearanceOption::IncreaseContrast, false).unwrap();
+    }
+
+    #[test]
+    fn materials_callouts_and_panels_round_trip() {
+        let _h = Headless::new().unwrap();
+        let w = Window::new(720.0, 640.0).unwrap();
+        let col = View::new(Kind::COLUMN).unwrap();
+        // Glass and callouts take a tier and an edge; a bad tier is refused.
+        let g = View::new(Kind::GLASS_PANEL).unwrap();
+        g.set_int(Prop::STYLE, 2).unwrap();
+        assert_eq!(g.get_int(Prop::STYLE).unwrap(), 2);
+        assert!(g.set_int(Prop::STYLE, 9).is_err());
+        let c = View::new(Kind::CALLOUT).unwrap();
+        c.set_int(Prop::EDGE, 1).unwrap();
+        c.set_int(Prop::STYLE, 0).unwrap();
+        col.add(&g).unwrap();
+        col.add(&c).unwrap();
+        // The colour panel: swatches in rows, the chosen colour is emitted.
+        let colours = [0xFF0000, 0x00FF00, 0x0000FF, 0xFFFF00];
+        let p = View::color_panel(&colours, 2, Some(0x0000FF), 0).unwrap();
+        let got: Shared<Option<Color>> = Rc::default();
+        let g2 = got.clone();
+        p.on(Signal::VALUE_CHANGED, move |_, v| {
+            if let Value::Color(c) = v {
+                *g2.borrow_mut() = Some(*c);
+            }
+        })
+        .unwrap();
+        col.add(&p).unwrap();
+        let only = View::color_panel(&colours, 4, None, panel_flags::SWATCHES_ONLY).unwrap();
+        col.add(&only).unwrap();
+        assert!(View::color_panel(&colours, 0, None, 0).is_err());
+        // The file panels emit their buttons.
+        let f = View::file_panel(panel_flags::EXPANDED, "Untitled", &["a.txt", "b.txt"]).unwrap();
+        let acts: Shared<Vec<String>> = Rc::default();
+        let a2 = acts.clone();
+        f.on(Signal::ACTIVATED, move |_, v| {
+            if let Value::Str(s) = v {
+                a2.borrow_mut().push(s.clone());
+            }
+        })
+        .unwrap();
+        col.add(&f).unwrap();
+        let open = View::file_panel(panel_flags::OPEN, "", &[]).unwrap();
+        col.add(&open).unwrap();
+        w.set_content(&col).unwrap();
+        w.show().unwrap();
+        assert!(w.snapshot_png(1.0).unwrap().len() > 100);
+        f.find("Cancel")
+            .unwrap()
+            .perform(sys::AK_ACTION_CLICK)
+            .unwrap();
+        assert_eq!(*acts.borrow(), vec!["secondary".to_string()]);
+        let swatch = p.find("Colour 1").unwrap();
+        swatch.perform(sys::AK_ACTION_CLICK).unwrap();
+        assert_eq!(*got.borrow(), Some(rgba(0xFF0000FF)));
     }
 
     #[test]

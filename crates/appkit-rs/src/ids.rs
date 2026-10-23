@@ -196,6 +196,8 @@ impl Kind {
     pub const TABLE: Kind = Kind(sys::AK_KIND_TABLE);
     pub const OUTLINE: Kind = Kind(sys::AK_KIND_OUTLINE);
     pub const GRID_VIEW: Kind = Kind(sys::AK_KIND_GRID_VIEW);
+    pub const GLASS_PANEL: Kind = Kind(sys::AK_KIND_GLASS_PANEL);
+    pub const CALLOUT: Kind = Kind(sys::AK_KIND_CALLOUT);
     pub const TAB_VIEW: Kind = Kind(sys::AK_KIND_TAB_VIEW);
     pub const STATUS_ITEM: Kind = Kind(sys::AK_KIND_STATUS_ITEM);
     pub const TOOLBAR: Kind = Kind(sys::AK_KIND_TOOLBAR);

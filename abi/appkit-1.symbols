@@ -92,3 +92,7 @@ ak_window_present_alert
 ak_view_present_popover
 ak_menu_view_new
 ak_window_set_autosave
+ak_color_panel_new
+ak_file_panel_new
+ak_set_appearance_option
+ak_appearance_option

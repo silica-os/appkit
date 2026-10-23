@@ -897,6 +897,19 @@ pub fn custom<T: appkit_rs::Custom>(make: impl Fn() -> T + 'static) -> Element {
     }
 }
 
+/// A view made once per position by `make` (a presentation function's result); `T` tells
+/// the kinds of views apart when reconciling.
+pub fn made<T: 'static>(make: impl Fn() -> Option<KitView> + 'static) -> Element {
+    Element {
+        what: What::Custom(TypeId::of::<T>(), Rc::new(make)),
+        props: Vec::new(),
+        handlers: Vec::new(),
+        children: Vec::new(),
+        key: None,
+        effects: Effects::default(),
+    }
+}
+
 /// A virtualised list of `count` rows of `row_height`: `row` builds the element of a row when
 /// it scrolls into sight, and rows out of sight are dropped (a list of a million rows costs
 /// what is shown). Rows are built again on every render of the component holding the list.

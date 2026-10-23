@@ -100,6 +100,16 @@ pub fn make(kind: u32) -> Option<Box<dyn Widget>> {
         AK_KIND_FORM_VALUE => Box::new(crate::amalfi::forms::FormValue { expand: false }),
         AK_KIND_FORM_FOOTER => Box::new(crate::amalfi::forms::FormFooter),
         AK_KIND_BOX_SURFACE => Box::new(crate::amalfi::group_box::BoxSurface::default()),
+        AK_KIND_GLASS_PANEL => Box::new(crate::amalfi::materials::GlassPanel::new(
+            crate::amalfi::materials::Tier::Regular,
+            16.0,
+        )),
+        AK_KIND_CALLOUT => Box::new(crate::amalfi::callouts::Callout::new(
+            crate::amalfi::callouts::CalloutShape::new(
+                Some(crate::amalfi::popovers::Edge::Bottom),
+                crate::amalfi::popovers::Align::Center,
+            ),
+        )),
         _ => return None,
     })
 }
@@ -128,6 +138,8 @@ mod tests {
             AK_KIND_FORM_VALUE,
             AK_KIND_FORM_FOOTER,
             AK_KIND_BOX_SURFACE,
+            AK_KIND_GLASS_PANEL,
+            AK_KIND_CALLOUT,
         ];
         let mut missing = Vec::new();
         for (name, kind) in appkit_sys::KINDS {

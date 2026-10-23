@@ -329,3 +329,94 @@ pub fn color_well(color: &Binding<appkit_rs::Color>) -> Element {
 pub fn scroll_view(content: Element) -> Element {
     Element::of(Kind::SCROLL_VIEW).children(content)
 }
+
+/// A glass tier: 0 Thin, 1 Regular, 2 Thick.
+pub type Glass = i64;
+
+/// A glass panel of `tier` with corners of `radius` around `content`.
+pub fn glass_panel(tier: Glass, radius: f32, content: Element) -> Element {
+    Element::of(Kind::GLASS_PANEL)
+        .prop(Prop::STYLE, PValue::Int(tier))
+        .prop(Prop::VALUE, PValue::Float(f64::from(radius)))
+        .children(content)
+}
+
+/// A callout around `content`: a glass bubble whose arrow is on `edge` (0 top, 1 bottom,
+/// 2 leading, 3 trailing, anything else none).
+pub fn callout(edge: i64, tier: Glass, content: Element) -> Element {
+    Element::of(Kind::CALLOUT)
+        .prop(Prop::EDGE, PValue::Int(edge))
+        .prop(Prop::STYLE, PValue::Int(tier))
+        .children(content)
+}
+
+struct ColorPanelMark;
+struct FilePanelMark;
+
+/// The colour panel's content over `colors` (0xRRGGBB) in rows of `columns`; `chosen` gets
+/// the picked colour.
+pub fn color_panel(
+    colors: &[u32],
+    columns: usize,
+    swatches_only: bool,
+    color: &Binding<appkit_rs::Color>,
+) -> Element {
+    let list: Vec<u32> = colors.to_vec();
+    let sel = color.get();
+    let selected = (u32::from(sel.r) << 16) | (u32::from(sel.g) << 8) | u32::from(sel.b);
+    let flags = if swatches_only {
+        appkit_rs::panel_flags::SWATCHES_ONLY
+    } else {
+        0
+    };
+    let b = color.clone();
+    crate::element::made::<ColorPanelMark>(move || {
+        appkit_rs::View::color_panel(&list, columns, Some(selected), flags).ok()
+    })
+    .on(Signal::VALUE_CHANGED, move |v| {
+        if let Value::Color(c) = v {
+            b.set(*c);
+        }
+    })
+}
+
+/// An open or save panel over `files`. `expanded` is the form; the panel's chevrons ask
+/// for the other one through `set_expanded`, and its buttons call `on_action` with
+/// "primary", "secondary", "new-folder", "back" or "forward".
+pub fn file_panel(
+    open: bool,
+    expanded: &Binding<bool>,
+    name: &str,
+    files: &[&str],
+    on_action: impl Fn(&str) + 'static,
+) -> Element {
+    let files: Vec<String> = files.iter().map(|f| (*f).to_string()).collect();
+    let name = name.to_string();
+    let exp = expanded.get();
+    let flags = if open {
+        appkit_rs::panel_flags::OPEN
+    } else {
+        0
+    } | if exp || open {
+        appkit_rs::panel_flags::EXPANDED
+    } else {
+        0
+    };
+    let b = expanded.clone();
+    crate::element::made::<FilePanelMark>(move || {
+        let refs: Vec<&str> = files.iter().map(String::as_str).collect();
+        appkit_rs::View::file_panel(flags, &name, &refs).ok()
+    })
+    // A different form is a different panel: the key makes the reconciler build it again.
+    .key(i64::from(exp))
+    .on(Signal::EXPANDED_CHANGED, move |v| {
+        if let Value::Bool(e) = v {
+            b.set(*e);
+        }
+    })
+    .on(Signal::ACTIVATED, move |v| {
+        if let Value::Str(s) = v {
+            on_action(s);
+        }
+    })
+}

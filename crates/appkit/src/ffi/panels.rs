@@ -12,7 +12,11 @@ use super::{
 use crate::amalfi::alerts::{AlertButton, AlertSpec, ButtonKind, alert};
 use crate::amalfi::label::SymbolImage;
 use crate::amalfi::menus::{Row, RowKind, menu};
+use crate::amalfi::panels::{
+    FileEntry, FilePanelSpec, Mode as PanelMode, color_picker, file_panel,
+};
 use crate::amalfi::popovers::{self, Side};
+use crate::color::Color;
 use crate::core::event::Shortcut;
 use crate::core::layout::Proposal;
 use crate::core::menu::MenuItem;
@@ -320,6 +324,107 @@ pub extern "C" fn ak_menu_view_new(
             });
             v
         });
+        match r {
+            Ok(v) => {
+                set_last(AK_OK);
+                view_ptr(v)
+            }
+            Err(s) => null_with(s),
+        }
+    })
+}
+
+/// Makes the colour panel's content: `count` swatches (0xRRGGBB) in rows of `columns`, with
+/// `selected` (0xRRGGBB, or `u32::MAX` for none) marked; `AK_PANEL_SWATCHES_ONLY` leaves out
+/// the pad, the hue slider and the hex field. The view emits `VALUE_CHANGED` with the colour.
+#[unsafe(no_mangle)]
+pub extern "C" fn ak_color_panel_new(
+    colors: *const u32,
+    count: usize,
+    columns: usize,
+    selected: u32,
+    flags: u32,
+) -> *mut AKView {
+    guard(std::ptr::null_mut(), || {
+        if (colors.is_null() && count > 0) || columns == 0 || count > 4096 {
+            return null_with(AK_ERROR_INVALID_ARGUMENT);
+        }
+        let list: &[u32] = if count == 0 {
+            &[]
+        } else {
+            // SAFETY: the caller passes `count` colours.
+            unsafe { std::slice::from_raw_parts(colors, count) }
+        };
+        let rgb = |v: u32| Color::rgb((v >> 16) as u8, (v >> 8) as u8, v as u8);
+        let rows: Vec<Vec<(String, Color)>> = list
+            .chunks(columns)
+            .enumerate()
+            .map(|(r, row)| {
+                row.iter()
+                    .enumerate()
+                    .map(|(c, v)| (format!("Colour {}", r * columns + c + 1), rgb(*v)))
+                    .collect()
+            })
+            .collect();
+        let current = if selected == u32::MAX {
+            list.first().map_or(Color::rgb(0, 0, 0), |v| rgb(*v))
+        } else {
+            rgb(selected)
+        };
+        let r = with_ui(|ui| color_picker(ui, &rows, current, flags & AK_PANEL_SWATCHES_ONLY != 0));
+        match r {
+            Ok(v) => {
+                set_last(AK_OK);
+                view_ptr(v)
+            }
+            Err(s) => null_with(s),
+        }
+    })
+}
+
+/// Makes an open (`AK_PANEL_OPEN`) or save panel over `count` file names, expanded with
+/// `AK_PANEL_EXPANDED`; `name` is the save panel's "Save As:" text. The view emits `ACTIVATED`
+/// with "primary", "secondary", "new-folder", "back" or "forward".
+#[unsafe(no_mangle)]
+pub extern "C" fn ak_file_panel_new(
+    flags: u32,
+    name: *const c_char,
+    files: *const *const c_char,
+    count: usize,
+) -> *mut AKView {
+    guard(std::ptr::null_mut(), || {
+        let Ok(name) = opt_str(name) else {
+            return null_with(AK_ERROR_INVALID_ARGUMENT);
+        };
+        if files.is_null() && count > 0 {
+            return null_with(AK_ERROR_INVALID_ARGUMENT);
+        }
+        let mut entries = Vec::with_capacity(count.min(1024));
+        for i in 0..count.min(1024) {
+            // SAFETY: the caller passes `count` string pointers.
+            let p = unsafe { *files.add(i) };
+            match req_str(p) {
+                Ok(s) => entries.push(FileEntry::new(s, s, "doc", "Document", "Today")),
+                Err(e) => return null_with(e),
+            }
+        }
+        let mut spec = FilePanelSpec::new(if flags & AK_PANEL_OPEN != 0 {
+            PanelMode::Open
+        } else {
+            PanelMode::Save
+        });
+        spec.expanded = flags & AK_PANEL_EXPANDED != 0;
+        spec.name = name.unwrap_or_default().to_string();
+        spec.locations = vec!["Documents".to_string()];
+        spec.places = vec![(
+            "Favourites".to_string(),
+            vec![
+                ("documents".into(), "Documents".into(), "folder".into()),
+                ("downloads".into(), "Downloads".into(), "folder".into()),
+            ],
+        )];
+        spec.files = entries;
+        let r = with_ui(|ui| file_panel(ui, &spec).root);
         match r {
             Ok(v) => {
                 set_last(AK_OK);

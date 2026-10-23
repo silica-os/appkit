@@ -334,6 +334,13 @@ impl Widget for Callout {
 
     fn set_prop(&mut self, prop: Prop, value: &Value) -> PropChange {
         match (prop, value.as_int()) {
+            (Prop::Style, Some(n)) => match Tier::from_int(n) {
+                Some(t) => {
+                    self.tier = t;
+                    PropChange::Paint
+                }
+                None => PropChange::Unknown,
+            },
             (Prop::Edge, Some(n)) => {
                 self.shape.edge = match n {
                     0 => Some(Edge::Top),

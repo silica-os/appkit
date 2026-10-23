@@ -321,13 +321,16 @@ ids! { KINDS,
     AK_KIND_TABLE = 52, AK_KIND_OUTLINE = 53, AK_KIND_GRID_VIEW = 54,
     AK_KIND_TAB_VIEW = 55, AK_KIND_STATUS_ITEM = 56, AK_KIND_TOOLBAR = 57,
     AK_KIND_TOOLBAR_GROUP = 58, AK_KIND_FORM_VALUE = 59, AK_KIND_FORM_FOOTER = 60,
-    AK_KIND_BOX_SURFACE = 61,
+    AK_KIND_BOX_SURFACE = 61, AK_KIND_GLASS_PANEL = 62, AK_KIND_CALLOUT = 63,
 }
 
 // Alert flags and popover sides.
 ids! { PANEL_IDS,
     AK_ALERT_CRITICAL = 1, AK_ALERT_GLASS = 2, AK_ALERT_STACKED = 4,
     AK_ALERT_DESTRUCTIVE = 8,
+    AK_APPEARANCE_REDUCE_MOTION = 1, AK_APPEARANCE_INCREASE_CONTRAST = 2,
+    AK_APPEARANCE_REDUCE_TRANSPARENCY = 3, AK_APPEARANCE_ACCENT = 4,
+    AK_PANEL_SWATCHES_ONLY = 1, AK_PANEL_EXPANDED = 1, AK_PANEL_OPEN = 2,
     AK_SIDE_BELOW = 0, AK_SIDE_ABOVE = 1, AK_SIDE_AFTER = 2, AK_SIDE_BEFORE = 3,
 }
 
@@ -472,6 +475,10 @@ macro_rules! for_each_function {
             fn ak_window_present_alert(parent: *mut $crate::AKWindow, alert: *mut $crate::AKView, callback: $crate::AKAlertFn, user: *mut ::std::ffi::c_void, destroy: $crate::AKDestroy) -> *mut $crate::AKWindow;
             fn ak_view_present_popover(anchor: *mut $crate::AKView, content: *mut $crate::AKView, side: u32, closed: $crate::AKCallback, user: *mut ::std::ffi::c_void, destroy: $crate::AKDestroy) -> *mut $crate::AKWindow;
             fn ak_menu_view_new(menu: *mut $crate::AKMenu, callback: $crate::AKMenuFn, user: *mut ::std::ffi::c_void, destroy: $crate::AKDestroy) -> *mut $crate::AKView;
+            fn ak_color_panel_new(colors: *const u32, count: usize, columns: usize, selected: u32, flags: u32) -> *mut $crate::AKView;
+            fn ak_file_panel_new(flags: u32, name: *const ::std::ffi::c_char, files: *const *const ::std::ffi::c_char, count: usize) -> *mut $crate::AKView;
+            fn ak_set_appearance_option(option: u32, value: u32) -> $crate::AKStatus;
+            fn ak_appearance_option(option: u32) -> u32;
             fn ak_window_set_autosave(window: *mut $crate::AKWindow, name: *const ::std::ffi::c_char) -> $crate::AKStatus;
         }
     };
