@@ -326,3 +326,108 @@ fn text_from_the_atlas_agrees_with_the_cpu_and_is_cached() {
         assert!(cached > 10, "glyphs were cached: {cached}");
     }
 }
+
+#[test]
+fn a_layer_is_rendered_once_and_composited_from_its_texture() {
+    let Some(ctx) = context() else { return };
+    let mut gpu = GpuCanvas::new(&ctx, 64, 64);
+    let mut drawn = 0;
+    let mut direct = GpuCanvas::new(&ctx, 64, 64);
+    let scene = |p: &mut dyn Painter| {
+        p.fill_rect(Rect::new(4.0, 4.0, 20.0, 12.0), Color::rgb(30, 120, 220));
+        p.fill_rect(
+            Rect::new(10.0, 10.0, 30.0, 20.0),
+            Color::rgba(250, 60, 60, 160),
+        );
+    };
+    direct.begin(true);
+    direct.save();
+    direct.translate((8.0, 6.0));
+    scene(&mut direct);
+    direct.restore();
+    let want = direct.into_pixmap();
+    for version in [1u64, 1, 1, 2] {
+        gpu.begin(true);
+        gpu.save();
+        gpu.translate((8.0, 6.0));
+        let ok = gpu.layer_texture(7, version, Rect::new(0.0, 0.0, 44.0, 34.0), 1.0, &mut |p| {
+            drawn += 1;
+            scene(p);
+        });
+        gpu.restore();
+        assert!(ok);
+        if version == 1 {
+            let got = gpu.into_pixmap();
+            let (mean, _) = diff(&want, &got);
+            assert!(mean < 0.2, "mean {mean}");
+            gpu = GpuCanvas::new(&ctx, 64, 64);
+        }
+    }
+    // Rendered for version 1 (once: the second and third frames composite) and again for 2.
+    assert_eq!(drawn, 2);
+    assert_eq!(ctx.layers.borrow().len(), 1);
+    // Not on whole pixels: not kept. Partly outside the frame: kept.
+    gpu.begin(true);
+    gpu.save();
+    gpu.translate((0.5, 0.0));
+    assert!(!gpu.layer_texture(8, 1, Rect::new(0.0, 0.0, 10.0, 10.0), 1.0, &mut |_| {}));
+    gpu.restore();
+    gpu.save();
+    gpu.translate((60.0, 0.0));
+    assert!(gpu.layer_texture(9, 1, Rect::new(0.0, 0.0, 10.0, 10.0), 1.0, &mut |_| {}));
+    gpu.restore();
+}
+
+#[test]
+fn a_static_subtree_of_a_window_is_kept_as_a_texture_with_the_same_pixels() {
+    use crate::amalfi::button::{PushButton, PushVariant};
+    use crate::core::layout::{Alignment, Grid, Stack};
+    use crate::core::{Prop, Ui, Value, WindowKind};
+    use crate::geom::Size;
+    let Some(ctx) = context() else { return };
+    let scene = |cache: bool| {
+        let mut ui = Ui::new_headless();
+        ui.set_raster_cache(cache);
+        let w = ui.create_window(WindowKind::Normal, Size::new(300.0, 200.0));
+        let col = ui.create(Stack::column(8.0));
+        let grid = ui.create(Grid {
+            columns: 4,
+            column_spacing: 8.0,
+            row_spacing: 8.0,
+            alignment: Alignment::TOP_LEADING,
+        });
+        for i in 0..24 {
+            let b = ui.create(PushButton::new(&format!("B{i}")).variant(PushVariant::Secondary));
+            ui.add_child(grid, b);
+        }
+        ui.add_child(col, grid);
+        let _ = ui.set(col, Prop::Padding, Value::from(12.0));
+        ui.set_content(w, col);
+        ui.show_window(w);
+        (ui, w)
+    };
+    let render = |ui: &mut Ui, w| {
+        let _ = ui.prepare_frame(w);
+        let mut gpu = GpuCanvas::new(&ctx, 600, 400);
+        gpu.begin(true);
+        gpu.scale((2.0, 2.0));
+        ui.paint_window(w, &mut gpu, None);
+        gpu.into_pixmap()
+    };
+    let (mut on, w1) = scene(true);
+    let (mut off, w2) = scene(false);
+    let (mut a, mut b) = (None, None);
+    for _ in 0..8 {
+        on.advance(1.0 / 60.0);
+        off.advance(1.0 / 60.0);
+        a = Some(render(&mut on, w1));
+        b = Some(render(&mut off, w2));
+    }
+    let (Some(a), Some(b)) = (a, b) else { return };
+    // The grid became a texture, and no CPU image was made for it.
+    assert!(ctx.layers.borrow().len() > 0, "a layer texture was kept");
+    assert_eq!(on.raster_cache_bytes(), 0);
+    let (mean, max) = diff(&a, &b);
+    eprintln!("cached layers: mean {mean:.4}, max {max}");
+    assert!(mean < 0.1, "mean {mean}");
+}

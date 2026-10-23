@@ -30,6 +30,7 @@ use vello_cpu::{Glyph, Pixmap};
 use wgpu::util::DeviceExt;
 
 mod atlas;
+mod layers;
 mod present;
 pub use present::{PresentSurface, Presented};
 
@@ -120,6 +121,7 @@ pub struct GpuContext {
     pipelines: RefCell<HashMap<Key, wgpu::RenderPipeline>>,
     images: RefCell<HashMap<u64, wgpu::TextureView>>,
     atlas: RefCell<atlas::Atlas>,
+    layers: RefCell<layers::LayerCache>,
 }
 
 impl std::fmt::Debug for GpuContext {
@@ -281,6 +283,7 @@ impl GpuContext {
             pipelines: RefCell::new(HashMap::new()),
             images: RefCell::new(HashMap::new()),
             atlas,
+            layers: RefCell::new(layers::LayerCache::default()),
         });
         Some((ctx, surface))
     }
@@ -713,6 +716,7 @@ impl GpuCanvas {
     /// Starts a frame: the retained texture keeps what was painted before, so a frame that
     /// clips to a region repaints only that region. `clear` makes the whole frame transparent.
     pub fn begin(&mut self, clear: bool) {
+        self.ctx.layers.borrow_mut().tick();
         self.restore_to(0);
         self.end_pass();
         if clear {
@@ -2060,50 +2064,22 @@ impl Painter for GpuCanvas {
         let Some(view) = self.ctx.image_view(image) else {
             return;
         };
-        let (iw, ih) = (image.width() as f32, image.height() as f32);
-        let m = self.transform
-            * Affine::translate((f64::from(dst.x), f64::from(dst.y)))
-            * Affine::scale_non_uniform(f64::from(dst.width / iw), f64::from(dst.height / ih));
-        let inv = m.inverse().as_coeffs();
-        let (w, h) = self.target_size();
-        let mut p = identity_paint(w, h);
-        p.inv_a = [inv[0] as f32, inv[1] as f32, inv[2] as f32, inv[3] as f32];
-        p.inv_b[0] = inv[4] as f32;
-        p.inv_b[1] = inv[5] as f32;
-        p.g1 = [4.0, 0.0, if self.masks.is_empty() { 0.0 } else { 1.0 }, 0.0];
-        p.g0 = [iw, ih, 0.0, 0.0];
-        p.color = [opacity.clamp(0.0, 1.0), 0.0, 0.0, 0.0];
-        let t = self.transform;
-        let pt = |x: f32, y: f32| {
-            let q = t * kurbo::Point::new(f64::from(x), f64::from(y));
-            [q.x as f32, q.y as f32]
-        };
-        let corners = [
-            pt(dst.x, dst.y),
-            pt(dst.right(), dst.y),
-            pt(dst.right(), dst.bottom()),
-            pt(dst.x, dst.bottom()),
-        ];
-        self.draw(
-            &quad_of(corners),
-            Mode::Simple,
-            Blend::Over,
-            &p,
-            Some(&view),
-        );
-        let b = kurbo::Rect::new(
-            f64::from(dst.x),
-            f64::from(dst.y),
-            f64::from(dst.right()),
-            f64::from(dst.bottom()),
-        );
-        let bb = t.transform_rect_bbox(b);
-        self.mark(Rect::new(
-            bb.x0 as f32,
-            bb.y0 as f32,
-            bb.width() as f32,
-            bb.height() as f32,
-        ));
+        self.draw_view(&view, image.width(), image.height(), dst, opacity);
+    }
+
+    fn keeps_layer_textures(&self) -> bool {
+        true
+    }
+
+    fn layer_texture(
+        &mut self,
+        key: u64,
+        version: u64,
+        bounds: Rect,
+        scale: f32,
+        paint: &mut dyn FnMut(&mut dyn Painter),
+    ) -> bool {
+        GpuCanvas::layer_texture(self, key, version, bounds, scale, paint)
     }
 
     fn custom(&mut self, rect: Rect, draw: &dyn Fn(&mut Canvas, Rect)) {
@@ -2154,6 +2130,51 @@ impl Painter for GpuCanvas {
 }
 
 impl GpuCanvas {
+    /// Draws a texture of `iw` × `ih` texels (premultiplied) into `dst`.
+    fn draw_view(&mut self, view: &wgpu::TextureView, iw: u32, ih: u32, dst: Rect, opacity: f32) {
+        if dst.is_empty() || iw == 0 || ih == 0 {
+            return;
+        }
+        let (iw, ih) = (iw as f32, ih as f32);
+        let m = self.transform
+            * Affine::translate((f64::from(dst.x), f64::from(dst.y)))
+            * Affine::scale_non_uniform(f64::from(dst.width / iw), f64::from(dst.height / ih));
+        let inv = m.inverse().as_coeffs();
+        let (w, h) = self.target_size();
+        let mut p = identity_paint(w, h);
+        p.inv_a = [inv[0] as f32, inv[1] as f32, inv[2] as f32, inv[3] as f32];
+        p.inv_b[0] = inv[4] as f32;
+        p.inv_b[1] = inv[5] as f32;
+        p.g1 = [4.0, 0.0, if self.masks.is_empty() { 0.0 } else { 1.0 }, 0.0];
+        p.g0 = [iw, ih, 0.0, 0.0];
+        p.color = [opacity.clamp(0.0, 1.0), 0.0, 0.0, 0.0];
+        let t = self.transform;
+        let pt = |x: f32, y: f32| {
+            let q = t * kurbo::Point::new(f64::from(x), f64::from(y));
+            [q.x as f32, q.y as f32]
+        };
+        let corners = [
+            pt(dst.x, dst.y),
+            pt(dst.right(), dst.y),
+            pt(dst.right(), dst.bottom()),
+            pt(dst.x, dst.bottom()),
+        ];
+        self.draw(&quad_of(corners), Mode::Simple, Blend::Over, &p, Some(view));
+        let b = kurbo::Rect::new(
+            f64::from(dst.x),
+            f64::from(dst.y),
+            f64::from(dst.right()),
+            f64::from(dst.bottom()),
+        );
+        let bb = t.transform_rect_bbox(b);
+        self.mark(Rect::new(
+            bb.x0 as f32,
+            bb.y0 as f32,
+            bb.width() as f32,
+            bb.height() as f32,
+        ));
+    }
+
     /// A target for the device `region`, reusing a closed one of the same size.
     fn take_target(&mut self, format: wgpu::TextureFormat, region: [u32; 4]) -> Target {
         let size = |r: &[u32; 4]| (r[2], r[3]);

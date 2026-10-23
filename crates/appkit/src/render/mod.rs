@@ -30,6 +30,24 @@ pub trait Painter {
             c.restore();
         }
     }
+    /// Whether this painter keeps subtrees as textures ([`Painter::layer_texture`]); the CPU
+    /// canvas does not, and the raster cache makes images for it.
+    fn keeps_layer_textures(&self) -> bool {
+        false
+    }
+    /// Composites the texture kept for the subtree `key` over `bounds` (view coordinates,
+    /// whole device pixels at `scale`), first rendering it with `paint` when `version` is not
+    /// the kept one. `false` when the subtree cannot be kept: the caller paints it directly.
+    fn layer_texture(
+        &mut self,
+        _key: u64,
+        _version: u64,
+        _bounds: Rect,
+        _scale: f32,
+        _paint: &mut dyn FnMut(&mut dyn Painter),
+    ) -> bool {
+        false
+    }
     /// Pushes the transform and the open layers.
     fn save(&mut self);
     /// Pops to the matching save.

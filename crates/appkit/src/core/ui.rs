@@ -2703,6 +2703,21 @@ impl Ui {
         let Some(scale) = raster::aligned_scale(canvas, st.bounds) else {
             return false;
         };
+        if canvas.keeps_layer_textures() {
+            // The GPU keeps the subtree as a texture of its own: no CPU image.
+            let key = raster::hash_of(|h| std::hash::Hash::hash(&id, h));
+            let version = raster::hash_of(|h| {
+                std::hash::Hash::hash(&(st.changed_at, dimmed), h);
+                raster::hash_f32s(
+                    h,
+                    &[st.bounds.x, st.bounds.y, st.bounds.width, st.bounds.height],
+                );
+            });
+            let size = n.frame.size();
+            return canvas.layer_texture(key, version, st.bounds, scale, &mut |p| {
+                self.paint_content(id, p, opts, dimmed, size)
+            });
+        }
         {
             let cached = st.image.borrow();
             if let Some(c) = cached.as_ref()
