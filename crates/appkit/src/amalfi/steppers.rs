@@ -2,6 +2,7 @@
 //! into an up and a down half, each with a 12 pt chevron. Holding a half repeats it.
 
 use crate::amalfi::foundation::{ControlSize, control_shadow, focus_halo_named};
+use crate::amalfi::tokens;
 use crate::core::a11y::{A11y, Action, Role};
 use crate::core::event::{Button, Event, Handled, Key};
 use crate::core::layout::Proposal;
@@ -10,6 +11,7 @@ use crate::core::ui::Ui;
 use crate::core::value::{Prop, Signal, Value};
 use crate::core::widget::{EventCx, FocusKind, Interaction, LayoutCx, PaintCx, PropChange, Widget};
 use crate::geom::{Corners, Point, Rect, Size};
+use crate::motion::{Animated, Timing};
 use crate::shape::Shape;
 use crate::style::{Border, Style};
 
@@ -45,7 +47,7 @@ pub mod metrics {
     /// Seconds a held half waits before it repeats.
     pub const REPEAT_DELAY: f64 = 0.4;
     /// Seconds between repeats.
-    pub const REPEAT_INTERVAL: f64 = 0.08;
+    pub const REPEAT_INTERVAL: f64 = 0.06;
 }
 
 /// One half of the stepper.
@@ -73,6 +75,9 @@ pub struct Stepper {
     hovered: Option<Half>,
     held: Option<Half>,
     generation: u64,
+    /// Hover and press washes of the up and the down half (`fade.quick`).
+    hover_t: [Animated<f32>; 2],
+    press_t: [Animated<f32>; 2],
 }
 
 impl Stepper {
@@ -88,6 +93,8 @@ impl Stepper {
             hovered: None,
             held: None,
             generation: 0,
+            hover_t: [Animated::new(0.0); 2],
+            press_t: [Animated::new(0.0); 2],
         }
     }
 
@@ -151,7 +158,39 @@ impl Stepper {
             }
             return v;
         }
-        v.clamp(self.min.min(self.max), self.max)
+        self.tidy(v)
+    }
+
+    /// Moves the washes toward the hovered and held halves; returns whether they animate.
+    fn sync(&mut self, reduce: bool) -> bool {
+        let timing = if reduce {
+            Timing::None
+        } else {
+            Timing::curve(tokens::motion::FADE_QUICK_CURVE, tokens::motion::FADE_QUICK)
+        };
+        for (i, half) in [Half::Up, Half::Down].into_iter().enumerate() {
+            let h = f32::from(u8::from(self.hovered == Some(half) && self.held.is_none()));
+            let p = f32::from(u8::from(self.held == Some(half)));
+            if let Some(a) = self.hover_t.get_mut(i) {
+                a.animate_to(h, timing);
+            }
+            if let Some(a) = self.press_t.get_mut(i) {
+                a.animate_to(p, timing);
+            }
+        }
+        self.hover_t
+            .iter()
+            .chain(&self.press_t)
+            .any(|a| a.is_animating())
+    }
+
+    /// `v` rounded to the decimals of the step (no float drift) and kept in range.
+    fn tidy(&self, v: f64) -> f64 {
+        let text = format!("{}", self.step);
+        let dec = text.split('.').nth(1).map_or(0, str::len).min(8) as i32;
+        let k = 10f64.powi(dec);
+        let r = (v * k).round() / k;
+        r.clamp(self.min.min(self.max), self.max)
     }
 
     fn half_at(&self, p: Point) -> Half {
@@ -248,14 +287,16 @@ impl Widget for Stepper {
                 .with_border(Border::inside(c.line_border, 1.0))
                 .with_shadow(control_shadow(&theme)),
         );
-        for half in [Half::Up, Half::Down] {
+        for (i, half) in [Half::Up, Half::Down].into_iter().enumerate() {
             if !self.can(half, enabled) {
                 continue;
             }
-            let color = if self.held == Some(half) {
-                c.surface_control_pressed
-            } else if self.hovered == Some(half) && self.held.is_none() {
-                c.accent_amalfi_soft
+            let press = self.press_t.get(i).map_or(0.0, |a| a.get());
+            let hover = self.hover_t.get(i).map_or(0.0, |a| a.get());
+            let (color, alpha) = if press > 0.0 {
+                (c.surface_control_pressed, press)
+            } else if hover > 0.0 {
+                (c.accent_amalfi_soft, hover)
             } else {
                 continue;
             };
@@ -274,7 +315,7 @@ impl Widget for Stepper {
                     corners,
                     smoothing: 0.0,
                 },
-                Style::fill(color),
+                Style::fill(color).with_opacity(alpha),
             );
             cx.rec.pop();
         }
@@ -335,12 +376,20 @@ impl Widget for Stepper {
                 let h = h.filter(|h| self.can(*h, enabled));
                 if h != self.hovered {
                     self.hovered = h;
+                    let reduce = cx.theme().appearance.reduce_motion;
+                    if self.sync(reduce) {
+                        cx.animate();
+                    }
                     cx.request_paint();
                 }
                 Handled::No
             }
             Event::PointerLeave => {
                 if self.hovered.take().is_some() {
+                    let reduce = cx.theme().appearance.reduce_motion;
+                    if self.sync(reduce) {
+                        cx.animate();
+                    }
                     cx.request_paint();
                 }
                 Handled::No
@@ -357,8 +406,14 @@ impl Widget for Stepper {
                 self.held = Some(h);
                 self.generation += 1;
                 let g = self.generation;
+                // A press focuses the stepper, so the arrows work after it.
+                cx.focus_self();
                 self.step_by(cx.ui(), id, h);
                 Stepper::schedule_repeat(cx.ui(), id, g, metrics::REPEAT_DELAY);
+                let reduce = cx.theme().appearance.reduce_motion;
+                if self.sync(reduce) {
+                    cx.animate();
+                }
                 cx.request_paint();
                 Handled::Yes
             }
@@ -368,6 +423,10 @@ impl Widget for Stepper {
             } => {
                 self.held = None;
                 self.generation += 1;
+                let reduce = cx.theme().appearance.reduce_motion;
+                if self.sync(reduce) {
+                    cx.animate();
+                }
                 cx.request_paint();
                 Handled::Yes
             }
@@ -380,10 +439,44 @@ impl Widget for Stepper {
                     self.step_by(cx.ui(), id, Half::Down);
                     Handled::Yes
                 }
+                Key::PageUp | Key::PageDown => {
+                    let half = if k.key == Key::PageUp {
+                        Half::Up
+                    } else {
+                        Half::Down
+                    };
+                    for _ in 0..10 {
+                        if !self.step_by(cx.ui(), id, half) {
+                            break;
+                        }
+                    }
+                    Handled::Yes
+                }
+                Key::Home | Key::End => {
+                    let v = if k.key == Key::Home {
+                        self.min
+                    } else {
+                        self.max
+                    };
+                    if v.is_finite() && v != self.value && enabled {
+                        self.value = v;
+                        cx.emit(Signal::ValueChanged, Value::Float(v));
+                        cx.request_paint();
+                    }
+                    Handled::Yes
+                }
                 _ => Handled::No,
             },
             _ => Handled::No,
         }
+    }
+
+    fn tick(&mut self, _cx: &mut EventCx<'_>, dt: f32) -> bool {
+        let mut any = false;
+        for a in self.hover_t.iter_mut().chain(self.press_t.iter_mut()) {
+            any |= a.tick(dt);
+        }
+        any
     }
 
     fn interaction(&self) -> Interaction {
@@ -487,15 +580,31 @@ pub fn stepper_with_field(ui: &mut Ui, stepper: Stepper) -> ViewId {
             ui.emit(row, Signal::ValueChanged, Value::Float(n));
         }
     });
-    ui.connect(field, Signal::TextChanged, move |ui, _, v| {
-        if let Some(n) = v.as_str().and_then(|s| s.trim().parse::<f64>().ok())
-            && n.is_finite()
-        {
-            let n = n.clamp(min, max);
-            let _ = ui.set(step, Prop::Value, Value::Float(n));
-            ui.emit(row, Signal::ValueChanged, Value::Float(n));
+    // Typing is committed on Return or when the field loses the focus: the number is clamped,
+    // shown again, and a text that is not a number gives the value back.
+    let commit = move |ui: &mut Ui| {
+        let typed = ui
+            .get(field, Prop::Text)
+            .and_then(|v| v.as_str().map(str::to_string));
+        let current = ui.widget::<Stepper>(step).map(|s| s.value);
+        let (Some(typed), Some(current)) = (typed, current) else {
+            return;
+        };
+        let n = typed
+            .trim()
+            .replace(',', ".")
+            .parse::<f64>()
+            .ok()
+            .filter(|n| n.is_finite());
+        let v = n.map_or(current, |n| n.clamp(min, max));
+        let _ = ui.set(field, Prop::Text, Value::Str(format_value(v)));
+        if v != current {
+            let _ = ui.set(step, Prop::Value, Value::Float(v));
+            ui.emit(row, Signal::ValueChanged, Value::Float(v));
         }
-    });
+    };
+    ui.connect(field, Signal::Submitted, move |ui, _, _| commit(ui));
+    ui.connect(field, Signal::EditingEnded, move |ui, _, _| commit(ui));
     ui.connect(field, Signal::Activated, move |ui, _, v| {
         let up = v.as_int().is_some_and(|i| i > 0);
         let id = step;
@@ -608,11 +717,25 @@ mod tests {
         ui.pointer_down(win, up, Button::Left, Mods::empty());
         ui.pointer_up(win, up, Button::Left, Mods::empty());
         assert_eq!(ui.get(field, Prop::Text), Some(Value::from("13")));
-        // Typing sets the stepper; Down in the field steps.
+        // Typing is committed on Return, clamped; Down in the field steps.
         ui.set_focus(field, true);
         key_press(&mut ui, win, Key::Backspace);
         key_press(&mut ui, win, Key::Backspace);
+        ui.text_input(win, "400");
+        assert_eq!(
+            ui.get(step, Prop::Value),
+            Some(Value::Float(13.0)),
+            "not yet"
+        );
+        key_press(&mut ui, win, Key::Enter);
+        assert_eq!(ui.get(step, Prop::Value), Some(Value::Float(100.0)));
+        assert_eq!(ui.get(field, Prop::Text), Some(Value::from("100")));
+        ui.set_focus(field, true);
+        for _ in 0..3 {
+            key_press(&mut ui, win, Key::Backspace);
+        }
         ui.text_input(win, "40");
+        key_press(&mut ui, win, Key::Enter);
         assert_eq!(ui.get(step, Prop::Value), Some(Value::Float(40.0)));
         key_press(&mut ui, win, Key::Down);
         assert_eq!(ui.get(field, Prop::Text), Some(Value::from("39")));
@@ -621,6 +744,46 @@ mod tests {
 
     fn key_press(ui: &mut Ui, win: WindowId, k: Key) {
         ui.key(win, KeyEvent::press(k, Mods::empty()));
+    }
+
+    #[test]
+    fn page_and_home_end_keys_and_the_step_rounding() {
+        let (mut ui, win, id, log) = scene(Stepper::new().value(50.0));
+        ui.set_focus(id, true);
+        ui.key(win, KeyEvent::press(Key::PageUp, Mods::empty()));
+        assert_eq!(log.borrow().last(), Some(&60.0));
+        ui.key(win, KeyEvent::press(Key::Home, Mods::empty()));
+        assert_eq!(log.borrow().last(), Some(&0.0));
+        ui.key(win, KeyEvent::press(Key::End, Mods::empty()));
+        assert_eq!(log.borrow().last(), Some(&100.0));
+        // 0.1 + 0.2 does not drift.
+        let (mut ui, win, id, log) = scene(Stepper::new().step(0.1).value(0.2));
+        ui.set_focus(id, true);
+        ui.key(win, KeyEvent::press(Key::Up, Mods::empty()));
+        assert_eq!(log.borrow().last(), Some(&0.3));
+    }
+
+    #[test]
+    fn the_washes_fade_in_and_a_press_focuses() {
+        let (mut ui, win, id, _log) = scene(Stepper::new().value(10.0));
+        let up = at(&ui, id, 12.0, 4.0);
+        ui.pointer_move(win, up, Mods::empty());
+        let names = |ui: &mut Ui| {
+            ui.inspect_layers(id)
+                .into_iter()
+                .filter(|l| l.path.ends_with("State"))
+                .count()
+        };
+        ui.advance(0.0);
+        let _ = names(&mut ui);
+        for _ in 0..30 {
+            ui.advance(1.0 / 60.0);
+        }
+        ui.prepare_frame(win);
+        assert_eq!(names(&mut ui), 1, "the hover wash settles in");
+        ui.pointer_down(win, up, Button::Left, Mods::empty());
+        assert_eq!(ui.focus(win), Some(id));
+        ui.pointer_up(win, up, Button::Left, Mods::empty());
     }
 
     #[test]
