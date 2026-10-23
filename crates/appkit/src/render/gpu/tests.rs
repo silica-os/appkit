@@ -269,3 +269,17 @@ fn a_backdrop_inside_a_group_samples_the_group_and_agrees_with_the_cpu() {
         assert!(mean < 2.0, "opacity {opacity} blur {blur}: mean {mean}");
     }
 }
+
+#[test]
+fn the_gles_backend_agrees_with_the_cpu_too() {
+    let Some(ctx) = GpuContext::with_backends(Some(wgpu::Backends::GL)) else {
+        eprintln!("no GLES adapter: skipped");
+        return;
+    };
+    let theme = Theme::light();
+    let list = scene(&theme);
+    let (cpu, gpu) = render_both(&ctx, 200, 120, &list);
+    let (mean, max) = diff(&cpu, &gpu);
+    eprintln!("{}: mean {mean:.3}, max {max}", ctx.adapter());
+    assert!(mean < 2.5, "mean {mean}");
+}

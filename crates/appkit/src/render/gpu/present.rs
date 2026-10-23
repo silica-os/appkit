@@ -76,7 +76,7 @@ impl GpuContext {
     ) -> Option<(Rc<GpuContext>, PresentSurface)> {
         let desc =
             wgpu::InstanceDescriptor::new_with_display_handle(Box::new(WaylandDisplay(display)));
-        let (ctx, surface) = GpuContext::build(desc, |instance| {
+        let (ctx, surface) = GpuContext::build(desc, false, |instance| {
             // SAFETY: the caller guarantees both pointers (see above).
             unsafe { instance.create_surface_unsafe(wayland_target(display, window)) }.ok()
         })?;

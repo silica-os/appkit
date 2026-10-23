@@ -130,40 +130,72 @@ impl GpuContext {
     /// A context on the first adapter (Vulkan, then GLES; `WGPU_BACKEND` narrows it); `None`
     /// without one.
     pub fn new() -> Option<Rc<GpuContext>> {
-        Self::build(
-            wgpu::InstanceDescriptor::new_without_display_handle(),
-            |_| None,
-        )
-        .map(|(c, _)| c)
+        Self::with_backends(None)
+    }
+
+    /// A context restricted to `backends` (`None`: the defaults and the environment), for the
+    /// GLES fallback to be exercised on a machine that also has Vulkan.
+    pub fn with_backends(backends: Option<wgpu::Backends>) -> Option<Rc<GpuContext>> {
+        let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+        if let Some(b) = backends {
+            desc.backends = b;
+        }
+        Self::build(desc, backends.is_some(), |_| None).map(|(c, _)| c)
     }
 
     /// Creates the instance from `desc` (backends from the defaults and the environment) and
     /// the adapter, compatible with the surface `surface` makes when there is one.
     fn build(
         mut desc: wgpu::InstanceDescriptor,
+        fixed: bool,
         surface: impl FnOnce(&wgpu::Instance) -> Option<wgpu::Surface<'static>>,
     ) -> Option<(Rc<GpuContext>, Option<wgpu::Surface<'static>>)> {
-        desc.backends = match std::env::var("APPKIT_RENDERER").as_deref() {
-            Ok("gl") => wgpu::Backends::GL,
-            Ok("vulkan") => wgpu::Backends::VULKAN,
-            _ => wgpu::Backends::VULKAN | wgpu::Backends::GL,
+        let desc = if fixed {
+            desc
+        } else {
+            desc.backends = match std::env::var("APPKIT_RENDERER").as_deref() {
+                Ok("gl") => wgpu::Backends::GL,
+                Ok("vulkan") => wgpu::Backends::VULKAN,
+                _ => wgpu::Backends::VULKAN | wgpu::Backends::GL,
+            };
+            desc.with_env()
         };
-        let desc = desc.with_env();
+        let backends = desc.backends;
         let instance = wgpu::Instance::new(desc);
         let surface = surface(&instance);
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        let first = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             force_fallback_adapter: false,
             compatible_surface: surface.as_ref(),
             ..Default::default()
         }))
-        .ok()?;
+        .ok();
+        // The first adapter may not give a device (a vendor's GLES without a display, for
+        // one): the others of the instance are tried in turn, software ones left out.
+        let mut candidates: Vec<wgpu::Adapter> = first.into_iter().collect();
+        for a in pollster::block_on(instance.enumerate_adapters(backends)) {
+            let info = a.get_info();
+            let known = candidates.iter().any(|c| {
+                let ci = c.get_info();
+                ci.name == info.name && ci.backend == info.backend
+            });
+            if known
+                || info.device_type == wgpu::DeviceType::Cpu
+                || surface.as_ref().is_some_and(|s| !a.is_surface_supported(s))
+            {
+                continue;
+            }
+            candidates.push(a);
+        }
+        let (adapter, device, queue) = candidates.into_iter().find_map(|a| {
+            let (device, queue) = pollster::block_on(a.request_device(&wgpu::DeviceDescriptor {
+                label: Some("appkit"),
+                ..Default::default()
+            }))
+            .ok()?;
+            Some((a, device, queue))
+        })?;
         let info = adapter.get_info();
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("appkit"),
-            ..Default::default()
-        }))
-        .ok()?;
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("appkit canvas"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
