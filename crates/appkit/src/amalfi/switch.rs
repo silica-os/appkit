@@ -86,11 +86,11 @@ impl SwitchMetrics {
 /// The labelled row's measures (`AmalfiSwitchRowMetrics`).
 pub mod row {
     /// Horizontal padding.
-    pub const PAD_X: f32 = 12.0;
+    pub const PAD_X: f32 = crate::amalfi::tokens::spacing::M;
     /// Vertical padding.
-    pub const PAD_Y: f32 = 4.0;
+    pub const PAD_Y: f32 = crate::amalfi::tokens::spacing::XS;
     /// Gap between label and switch (inside the label's frame).
-    pub const GAP: f32 = 12.0;
+    pub const GAP: f32 = crate::amalfi::tokens::spacing::M;
 }
 
 /// Movement before a press becomes a drag.
