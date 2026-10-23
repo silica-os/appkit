@@ -29,6 +29,9 @@ use vello_cpu::peniko::FontData;
 use vello_cpu::{Glyph, Pixmap};
 use wgpu::util::DeviceExt;
 
+mod present;
+pub use present::{PresentSurface, Presented};
+
 use crate::color::Color;
 use crate::geom::{Rect, Transform};
 use crate::render::Painter;
@@ -102,6 +105,8 @@ struct Key {
 
 /// The device, the queue and what is shared by every canvas.
 pub struct GpuContext {
+    instance: wgpu::Instance,
+    adapter_handle: wgpu::Adapter,
     device: wgpu::Device,
     queue: wgpu::Queue,
     adapter: String,
@@ -122,15 +127,34 @@ impl std::fmt::Debug for GpuContext {
 }
 
 impl GpuContext {
-    /// A context on the first adapter (Vulkan, then GLES); `None` without one.
+    /// A context on the first adapter (Vulkan, then GLES; `WGPU_BACKEND` narrows it); `None`
+    /// without one.
     pub fn new() -> Option<Rc<GpuContext>> {
-        let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
-        desc.backends = wgpu::Backends::VULKAN | wgpu::Backends::GL;
+        Self::build(
+            wgpu::InstanceDescriptor::new_without_display_handle(),
+            |_| None,
+        )
+        .map(|(c, _)| c)
+    }
+
+    /// Creates the instance from `desc` (backends from the defaults and the environment) and
+    /// the adapter, compatible with the surface `surface` makes when there is one.
+    fn build(
+        mut desc: wgpu::InstanceDescriptor,
+        surface: impl FnOnce(&wgpu::Instance) -> Option<wgpu::Surface<'static>>,
+    ) -> Option<(Rc<GpuContext>, Option<wgpu::Surface<'static>>)> {
+        desc.backends = match std::env::var("APPKIT_RENDERER").as_deref() {
+            Ok("gl") => wgpu::Backends::GL,
+            Ok("vulkan") => wgpu::Backends::VULKAN,
+            _ => wgpu::Backends::VULKAN | wgpu::Backends::GL,
+        };
+        let desc = desc.with_env();
         let instance = wgpu::Instance::new(desc);
+        let surface = surface(&instance);
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             force_fallback_adapter: false,
-            compatible_surface: None,
+            compatible_surface: surface.as_ref(),
             ..Default::default()
         }))
         .ok()?;
@@ -207,7 +231,9 @@ impl GpuContext {
             &[255, 255, 255, 255],
         );
         let white = white_tex.create_view(&wgpu::TextureViewDescriptor::default());
-        Some(Rc::new(GpuContext {
+        let ctx = Rc::new(GpuContext {
+            instance,
+            adapter_handle: adapter,
             device,
             queue,
             adapter: format!("{} ({:?})", info.name, info.backend),
@@ -219,7 +245,8 @@ impl GpuContext {
             white,
             pipelines: RefCell::new(HashMap::new()),
             images: RefCell::new(HashMap::new()),
-        }))
+        });
+        Some((ctx, surface))
     }
 
     /// The adapter's name and backend.
