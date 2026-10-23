@@ -173,8 +173,9 @@ impl CalloutShape {
     }
 }
 
-/// A closed polygon with a radius at each vertex (clamped to half the shorter neighbouring
-/// side), `shift` added to every point.
+/// A closed polygon with a radius at each vertex, `shift` added to every point. Where two
+/// rounded vertices need more than the side between them, both shrink in proportion, so a
+/// corner next to the arrow keeps as much of its radius as the side allows.
 fn rounded_polygon(v: &[(f32, f32, f32)], shift: (f32, f32)) -> Path {
     let n = v.len();
     let mut b = PathBuilder::new();
@@ -182,33 +183,7 @@ fn rounded_polygon(v: &[(f32, f32, f32)], shift: (f32, f32)) -> Path {
         return b.detach();
     }
     let at = |i: usize| v.get(i % n).copied().unwrap_or((0.0, 0.0, 0.0));
-    // Each vertex: the point where its arc starts, and the radius that fits.
-    let mut starts = Vec::with_capacity(n);
-    let mut radii = Vec::with_capacity(n);
-    for i in 0..n {
-        let (x, y, r) = at(i);
-        let (px, py, _) = at(i + n - 1);
-        let (nx, ny, _) = at(i + 1);
-        let (ax, ay) = (px - x, py - y);
-        let (bx, by) = (nx - x, ny - y);
-        let (la, lb) = (ax.hypot(ay), bx.hypot(by));
-        if la <= f32::EPSILON || lb <= f32::EPSILON {
-            starts.push((x, y));
-            radii.push(0.0);
-            continue;
-        }
-        let cos = ((ax * bx + ay * by) / (la * lb)).clamp(-1.0, 1.0);
-        let tn = (cos.acos() / 2.0).tan();
-        let mut d = if tn.abs() > 1e-6 { r / tn } else { 0.0 };
-        let mut rr = r;
-        let dmax = la.min(lb) / 2.0;
-        if d > dmax {
-            d = dmax;
-            rr = d * tn;
-        }
-        starts.push((x + ax / la * d, y + ay / la * d));
-        radii.push(if r > 0.0 { rr } else { 0.0 });
-    }
+    let (starts, radii) = arcs(v);
     let sh = |p: (f32, f32)| (p.0 + shift.0, p.1 + shift.1);
     for i in 0..n {
         let (x, y, _) = at(i);
@@ -228,6 +203,61 @@ fn rounded_polygon(v: &[(f32, f32, f32)], shift: (f32, f32)) -> Path {
     }
     b.close();
     b.detach()
+}
+
+/// For each vertex of a polygon with radii: the point where its arc starts and the radius
+/// that fits.
+fn arcs(v: &[(f32, f32, f32)]) -> (Vec<(f32, f32)>, Vec<f32>) {
+    let n = v.len();
+    let at = |i: usize| v.get(i % n).copied().unwrap_or((0.0, 0.0, 0.0));
+    let side = |i: usize| {
+        let ((x, y, _), (nx, ny, _)) = (at(i), at(i + 1));
+        (nx - x).hypot(ny - y)
+    };
+    // Each vertex: the distance from it to where its arc starts, and tan(half its angle).
+    let mut want = Vec::with_capacity(n);
+    for i in 0..n {
+        let (x, y, r) = at(i);
+        let (px, py, _) = at(i + n - 1);
+        let (nx, ny, _) = at(i + 1);
+        let (ax, ay) = (px - x, py - y);
+        let (bx, by) = (nx - x, ny - y);
+        let (la, lb) = (ax.hypot(ay), bx.hypot(by));
+        if r <= 0.0 || la <= f32::EPSILON || lb <= f32::EPSILON {
+            want.push((0.0, 0.0));
+            continue;
+        }
+        let cos = ((ax * bx + ay * by) / (la * lb)).clamp(-1.0, 1.0);
+        let tn = (cos.acos() / 2.0).tan();
+        want.push((if tn.abs() > 1e-6 { r / tn } else { 0.0 }, tn));
+    }
+    let d_at = |i: usize| want.get(i % n).map_or(0.0, |w| w.0);
+    // The share of a side its two vertices may take: 1, or less when they overlap.
+    let fit = |i: usize| {
+        let need = d_at(i) + d_at(i + 1);
+        if need > side(i) && need > 0.0 {
+            side(i) / need
+        } else {
+            1.0
+        }
+    };
+    let mut starts = Vec::with_capacity(n);
+    let mut radii = Vec::with_capacity(n);
+    for i in 0..n {
+        let (x, y, _) = at(i);
+        let (px, py, _) = at(i + n - 1);
+        let la = (px - x).hypot(py - y);
+        let (d, tn) = want.get(i).copied().unwrap_or((0.0, 0.0));
+        let d = d * fit(i + n - 1).min(fit(i));
+        if la <= f32::EPSILON || d <= 0.0 {
+            starts.push((x, y));
+            radii.push(0.0);
+            continue;
+        }
+        starts.push((x + (px - x) / la * d, y + (py - y) / la * d));
+        radii.push(d * tn);
+    }
+    (starts, radii)
 }
 
 /// A callout: glass in the outline of its [`CalloutShape`], its children inside `padding`
@@ -386,6 +416,26 @@ mod tests {
         let label = Rect::new(0.0, 0.0, 64.0, 34.0);
         assert_eq!(d.body(label), Rect::new(0.0, 0.0, 64.0, 28.0));
         assert_eq!(d.tip(label), Some(Point::new(32.0, 34.0)));
+    }
+
+    #[test]
+    fn arrow_corners_shrink_by_the_overlap_only() {
+        // Corner (0,0) r 16, then the arrow's base 15 further on: the corner and the base
+        // (r 4 at about 141 degrees) share 15, so the corner keeps about 13.6, not 7.5.
+        let v = [
+            (0.0, 0.0, 16.0),
+            (100.0, 0.0, 16.0),
+            (100.0, 50.0, 16.0),
+            (0.0, 50.0, 16.0),
+            (0.0, 35.0, 4.0),
+            (-8.0, 25.0, 3.0),
+            (0.0, 15.0, 4.0),
+        ];
+        let (_, r) = arcs(&v);
+        let corner = r.first().copied().unwrap_or(0.0);
+        assert!(corner > 13.0 && corner < 16.0, "corner {corner}");
+        let far = r.get(1).copied().unwrap_or(0.0);
+        assert!((far - 16.0).abs() < 1e-3);
     }
 
     #[test]
