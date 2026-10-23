@@ -332,6 +332,7 @@ typedef void (*AKAlertFn)(int64_t response, void *user);
 #define AK_KIND_SIDEBAR_FOOTER 68u
 #define AK_KIND_COMBO_BUTTON 69u
 #define AK_KIND_VALUE_FIELD 70u
+#define AK_KIND_SWATCH_CHIP 71u
 
 /* Window kinds. */
 #define AK_WINDOW_NORMAL 1u

@@ -634,3 +634,24 @@ pub fn number_field(
         });
     crate::row((field, stepper)).spacing(8.0).alignment(1)
 }
+
+/// A swatch chip: a round colour with the selection ring when `selected`; `pick` runs on a click.
+pub fn swatch_chip(color: appkit_rs::Color, selected: bool, pick: impl Fn() + 'static) -> Element {
+    Element::of(Kind::SWATCH_CHIP)
+        .prop(Prop::COLOR_VALUE, PValue::Color(color))
+        .prop(Prop::STATE, PValue::Bool(selected))
+        .on(Signal::ACTIVATED, move |_| pick())
+}
+
+/// A row of swatch chips (8 apart, 4 around) over `colors`; `selected` holds the chosen index.
+pub fn swatch_row(colors: &[appkit_rs::Color], selected: &Binding<Option<usize>>) -> Element {
+    let chips: Vec<Element> = colors
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let b = selected.clone();
+            swatch_chip(*c, selected.get() == Some(i), move || b.set(Some(i))).key(i as i64)
+        })
+        .collect();
+    crate::row(chips).spacing(8.0).padding(4.0)
+}

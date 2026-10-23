@@ -732,3 +732,44 @@ fn a_number_field_steps_clamps_and_shows_the_value() {
     rt.advance(0.01);
     assert_eq!(field.get_str(Prop::TEXT).unwrap(), "99");
 }
+
+struct Swatches;
+
+impl Component for Swatches {
+    fn body(&self, cx: &mut Cx) -> Element {
+        let pick = cx.state(|| Some(0usize));
+        let colors = [rgba(0xFF0000FF), rgba(0x00FF00FF), rgba(0x0000FFFF)];
+        column((
+            swatch_row(&colors, &pick.binding()).id("row"),
+            label(format!("{:?}", pick.get())).id("chosen"),
+        ))
+    }
+}
+
+#[test]
+fn a_swatch_row_selects_the_chip_that_is_clicked() {
+    let rt = Headless::new().unwrap();
+    let root = mount(host(), || Swatches);
+    let row = root.host().find("row").unwrap();
+    assert_eq!(
+        root.host()
+            .find("chosen")
+            .unwrap()
+            .get_str(Prop::TEXT)
+            .unwrap(),
+        "Some(0)"
+    );
+    let chips = row.children();
+    assert_eq!(chips.len(), 3);
+    chips[2].click().unwrap();
+    rt.advance(0.01);
+    assert_eq!(
+        root.host()
+            .find("chosen")
+            .unwrap()
+            .get_str(Prop::TEXT)
+            .unwrap(),
+        "Some(2)"
+    );
+    assert!(chips[2].get_bool(Prop::STATE).unwrap());
+}
