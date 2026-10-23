@@ -386,6 +386,8 @@ macro_rules! for_each_function {
             fn ak_after(seconds: f64, callback: $crate::AKCallback, user: *mut ::std::ffi::c_void, destroy: $crate::AKDestroy) -> u64;
             fn ak_cancel(timer: u64);
             fn ak_set_dark(dark: u8) -> $crate::AKStatus;
+            fn ak_clipboard_set_text(text: *const ::std::ffi::c_char) -> $crate::AKStatus;
+            fn ak_view_request_paste(view: *mut $crate::AKView) -> $crate::AKStatus;
             fn ak_is_dark() -> u8;
             // Views.
             fn ak_view_new(kind: u32) -> *mut $crate::AKView;

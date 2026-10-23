@@ -395,6 +395,10 @@ void ak_advance(double seconds);
 uint64_t ak_after(double seconds, AKCallback callback, void *user, AKDestroy destroy);
 void ak_cancel(uint64_t timer);
 AKStatus ak_set_dark(uint8_t dark);
+/* Writes text to the clipboard. */
+AKStatus ak_clipboard_set_text(const char *text);
+/* Asks for the clipboard text: the view receives it as a paste. */
+AKStatus ak_view_request_paste(AKView *view);
 uint8_t ak_is_dark(void);
 AKView *ak_view_new(uint32_t kind);
 AKView *ak_custom_view_new(AKDrawFn draw, AKMeasureFn measure, AKEventFn event, void *user, AKDestroy destroy);

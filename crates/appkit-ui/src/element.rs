@@ -719,6 +719,11 @@ impl Element {
         self.prop(Prop::STYLE, PValue::Int(s))
     }
 
+    /// A label's text can be selected with the pointer and copied.
+    pub fn selectable(self, on: bool) -> Self {
+        self.prop(Prop::SELECTABLE, PValue::Bool(on))
+    }
+
     /// A text field's clear button, shown while there is text.
     pub fn clearable(self, on: bool) -> Self {
         self.prop(Prop::SHOWS_CLEAR, PValue::Bool(on))

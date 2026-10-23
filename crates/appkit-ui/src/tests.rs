@@ -794,3 +794,11 @@ fn a_canvas_element_is_drawn_by_its_closure() {
     assert_eq!(png.get(1..4), Some(&b"PNG"[..]));
     assert!(drawn.get() >= 1, "the closure drew");
 }
+
+#[test]
+fn the_clipboard_is_written_through_the_abi() {
+    let _rt = Headless::new().unwrap();
+    appkit_rs::set_clipboard("#0E77E6").unwrap();
+    let host = host();
+    assert!(host.request_paste().is_ok());
+}

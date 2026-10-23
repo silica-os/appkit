@@ -1453,6 +1453,31 @@ pub extern "C" fn ak_view_perform(view: *mut AKView, action: u32) -> AKStatus {
     })
 }
 
+/// Writes `text` to the clipboard.
+#[unsafe(no_mangle)]
+pub extern "C" fn ak_clipboard_set_text(text: *const c_char) -> AKStatus {
+    guard(AK_ERROR_PLATFORM, || match req_str(text) {
+        Ok(t) => status(with_ui(|ui| ui.set_clipboard(t.to_string()))),
+        Err(_) => set_last(AK_ERROR_INVALID_ARGUMENT),
+    })
+}
+
+/// Asks for the clipboard's text: `view` receives it as a paste (a text field inserts it).
+#[unsafe(no_mangle)]
+pub extern "C" fn ak_view_request_paste(view: *mut AKView) -> AKStatus {
+    guard(AK_ERROR_PLATFORM, || {
+        status(view_id(view).and_then(|v| {
+            with_ui(|ui| {
+                if !ui.tree.contains(v) {
+                    return Err(AK_ERROR_NO_SUCH_OBJECT);
+                }
+                ui.request_paste(v);
+                Ok(())
+            })?
+        }))
+    })
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn ak_view_window(view: *mut AKView) -> *mut AKWindow {
     guard(std::ptr::null_mut(), || {

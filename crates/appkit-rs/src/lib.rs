@@ -431,6 +431,13 @@ pub fn after(seconds: f64, cb: impl FnOnce() + 'static) -> Result<Timer> {
     }
 }
 
+/// Writes `text` to the clipboard.
+pub fn set_clipboard(text: &str) -> Result<()> {
+    let t = cstring(text)?;
+    // SAFETY: the string is alive for the call.
+    check(unsafe { f::ak_clipboard_set_text(t.as_ptr()) })
+}
+
 /// Sets the dark appearance (the platform follows the system otherwise).
 pub fn set_dark(dark: bool) -> Result<()> {
     // SAFETY: plain value.
@@ -999,6 +1006,12 @@ impl View {
         // SAFETY: strings alive for the call.
         let p = unsafe { f::ak_file_panel_new(flags, n.as_ptr(), ptrs.as_ptr(), ptrs.len()) };
         View::owned(p)
+    }
+
+    /// Asks for the clipboard's text: the view receives it as a paste.
+    pub fn request_paste(&self) -> Result<()> {
+        // SAFETY: a handle.
+        check(unsafe { f::ak_view_request_paste(self.as_ptr()) })
     }
 
     /// Adds an accessory view to an alert, above its buttons.
