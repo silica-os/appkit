@@ -220,3 +220,52 @@ fn custom_drawing_is_rasterized_and_agrees_with_the_cpu() {
     assert!(at(60, 30)[2] > 100, "blue part drawn");
     assert_eq!(at(90, 70)[3], 0, "nothing outside");
 }
+
+/// A backdrop inside a group: the left half is black, the right white, a red square is drawn
+/// in the group before the backdrop, and a clip opens inside the group.
+fn grouped_backdrop(p: &mut dyn Painter, opacity: f32, blur: bool) {
+    p.fill_rect(Rect::new(0.0, 0.0, 32.0, 64.0), Color::rgb(0, 0, 0));
+    p.fill_rect(Rect::new(32.0, 0.0, 32.0, 64.0), Color::rgb(255, 255, 255));
+    p.save();
+    if blur {
+        p.push_blur(1.5);
+    } else {
+        p.push_opacity(opacity);
+    }
+    p.fill_rect(Rect::new(8.0, 8.0, 20.0, 20.0), Color::rgb(255, 0, 0));
+    p.save();
+    p.clip_rect(Rect::new(0.0, 0.0, 64.0, 48.0));
+    let mut b = crate::render::path::PathBuilder::new();
+    b.add_rect(Rect::new(14.0, 14.0, 36.0, 28.0));
+    p.backdrop(
+        &b.detach(),
+        Backdrop {
+            sigma: 3.0,
+            saturation: 1.0,
+            brightness: 1.0,
+            glass: None,
+            to_device: Transform::IDENTITY,
+        },
+    );
+    p.restore();
+    // Drawn after the backdrop, in the same group.
+    p.fill_rect(Rect::new(40.0, 40.0, 16.0, 16.0), Color::rgb(0, 0, 255));
+    p.restore();
+}
+
+#[test]
+fn a_backdrop_inside_a_group_samples_the_group_and_agrees_with_the_cpu() {
+    let Some(ctx) = context() else { return };
+    for (opacity, blur) in [(0.5, false), (1.0, false), (1.0, true)] {
+        let mut cpu = Canvas::new(64, 64);
+        grouped_backdrop(&mut cpu, opacity, blur);
+        let a = cpu.into_pixmap();
+        let mut gpu = GpuCanvas::new(&ctx, 64, 64);
+        gpu.begin(true);
+        grouped_backdrop(&mut gpu, opacity, blur);
+        let b = gpu.into_pixmap();
+        let (mean, max) = diff(&a, &b);
+        eprintln!("group opacity {opacity} blur {blur}: mean {mean:.3}, max {max}");
+        assert!(mean < 2.0, "opacity {opacity} blur {blur}: mean {mean}");
+    }
+}

@@ -1773,123 +1773,59 @@ impl Painter for GpuCanvas {
         }
     }
 
-    fn backdrop(&mut self, outline: &Path, mut bd: Backdrop) {
-        if outline.is_empty() {
+    fn backdrop(&mut self, outline: &Path, bd: Backdrop) {
+        if self.layers.is_empty() {
+            self.backdrop_flat(outline, bd, 1.0);
             return;
         }
-        bd.to_device = self.transform_t();
-        let dev = outline.transformed(bd.to_device);
-        let b = dev.bounds().intersect(self.scissor_as_rect());
-        if b.is_empty() {
-            return;
+        // Inside groups: like the CPU canvas, flatten what the open groups hold so far into
+        // the frame (faded, blurred or added as they will be), filter that, and draw the
+        // result at the groups' combined opacity. The groups are reopened empty.
+        let opacity: f32 = self
+            .layers
+            .iter()
+            .map(|l| match l.kind {
+                LayerKind::Opacity(o) => o,
+                _ => 1.0,
+            })
+            .product();
+        let stack: Vec<(LayerKind, [u32; 4], usize)> = self
+            .layers
+            .iter()
+            .map(|l| (l.kind, l.scissor, l.masks))
+            .collect();
+        let base = stack.first().map_or(0, |l| l.2).min(self.masks.len());
+        // The clips opened inside the groups: closing the groups drops them.
+        let inner: Vec<(Path, bool)> = self
+            .masks
+            .iter()
+            .skip(base)
+            .map(|m| (m.path.clone(), m.invert))
+            .collect();
+        let scissor = self.scissor;
+        while !self.layers.is_empty() {
+            self.close_layer();
         }
-        // Where samples can come from: the region grown by the blur's and the refraction's reach.
-        let refract_reach = bd.glass.map_or(0.0, |(r, g)| {
-            let band = g.depth.max(0.0) * r.width.min(r.height) / 2.0;
-            let lens = if (g.magnification - 1.0).abs() > 1e-3 {
-                r.width.max(r.height)
-            } else {
-                0.0
-            };
-            (band * (g.distortion.max(0.0) + g.chromatic_aberration.max(0.0)) + lens)
-                * bd.to_device.m[0].abs().max(bd.to_device.m[3].abs())
-        });
-        let reach = (bd.sigma.max(0.0) * 3.0 + refract_reach).ceil() + 2.0;
-        let (fw, fh) = (self.width as f32, self.height as f32);
-        let sx0 = (b.x - reach).floor().max(0.0) as u32;
-        let sy0 = (b.y - reach).floor().max(0.0) as u32;
-        let sx1 = ((b.right() + reach).ceil().min(fw)) as u32;
-        let sy1 = ((b.bottom() + reach).ceil().min(fh)) as u32;
-        if sx1 <= sx0 || sy1 <= sy0 {
-            return;
+        for (path, invert) in &inner {
+            self.push_mask(path, *invert);
         }
-        let (sw, sh) = (sx1 - sx0, sy1 - sy0);
-        // What is drawn so far: the frame (the groups open now are composited later).
-        self.end_pass();
-        let ctx = self.ctx.clone();
-        let region = ctx.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("backdrop"),
-            size: wgpu::Extent3d {
-                width: sw,
-                height: sh,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: COLOR,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        let src = self.main.color.clone();
-        self.encoder().copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &src,
-                mip_level: 0,
-                origin: wgpu::Origin3d {
-                    x: sx0,
-                    y: sy0,
-                    z: 0,
-                },
-                aspect: wgpu::TextureAspect::All,
-            },
-            region.as_image_copy(),
-            wgpu::Extent3d {
-                width: sw,
-                height: sh,
-                depth_or_array_layers: 1,
-            },
-        );
-        let rview = region.create_view(&wgpu::TextureViewDescriptor::default());
-        let Some(plane) = self.blur_texture(&rview, sw, sh, bd.sigma) else {
-            return;
-        };
-        let (w, h) = self.target_size();
-        let mut p = identity_paint(w, h);
-        p.g1 = [5.0, 0.0, if self.masks.is_empty() { 0.0 } else { 1.0 }, 0.0];
-        p.color = [1.0, 0.0, 0.0, 0.0];
-        p.g2 = [sx0 as f32, sy0 as f32, sw as f32, sh as f32];
-        let inv = bd.to_device.invert().unwrap_or(Transform::IDENTITY).m;
-        p.inv_a = [inv[0], inv[1], inv[2], inv[3]];
-        p.inv_b[0] = inv[4];
-        p.inv_b[1] = inv[5];
-        p.fwd_a = [
-            bd.to_device.m[0],
-            bd.to_device.m[1],
-            bd.to_device.m[2],
-            bd.to_device.m[3],
-        ];
-        p.fwd_b = [bd.to_device.m[4], bd.to_device.m[5], 0.0, 0.0];
-        let m = backdrop::saturation_brightness_matrix(bd.saturation, bd.brightness);
-        p.m0 = [m[0][0], m[0][1], m[0][2], 0.0];
-        p.m1 = [m[1][0], m[1][1], m[1][2], 0.0];
-        p.m2 = [m[2][0], m[2][1], m[2][2], 0.0];
-        if let Some((rect, g)) = bd.glass {
-            let band = g.depth.max(0.0) * rect.width.min(rect.height) / 2.0;
-            let magnify = g.magnification.is_finite() && (g.magnification - 1.0).abs() > 1e-3;
-            if (band > 0.0 && g.distortion > 0.0) || magnify {
-                p.g3 = [rect.x, rect.y, rect.width, rect.height];
-                p.g4 = [
-                    g.distortion,
-                    g.depth,
-                    g.chromatic_aberration,
-                    g.magnification,
-                ];
-                p.g5 = [
-                    rect.width.min(rect.height) / 2.0,
-                    crate::shape::AMALFI_SMOOTHING,
-                    1.0,
-                    0.0,
-                ];
+        self.scissor = scissor;
+        self.backdrop_flat(outline, bd, opacity);
+        self.truncate_masks(base);
+        for (kind, sc, count) in stack {
+            let want = count.saturating_sub(base).min(inner.len());
+            self.truncate_masks(base);
+            for (path, invert) in inner.iter().take(want) {
+                self.push_mask(path, *invert);
             }
+            self.scissor = sc;
+            self.push_layer(kind);
         }
-        self.cover_fill(
-            &outline.bez,
-            outline.even_odd,
-            &p,
-            Some(&plane),
-            Blend::Over,
-        );
+        self.truncate_masks(base);
+        for (path, invert) in &inner {
+            self.push_mask(path, *invert);
+        }
+        self.scissor = scissor;
     }
 
     fn fill_blurred_path(&mut self, path: &Path, sigma: f32, color: Color) {
@@ -2197,6 +2133,135 @@ impl GpuCanvas {
     fn transform_t(&self) -> Transform {
         Transform {
             m: self.transform.as_coeffs().map(|v| v as f32),
+        }
+    }
+
+    /// A backdrop filter over the frame (no group open), drawn at `opacity`.
+    fn backdrop_flat(&mut self, outline: &Path, mut bd: Backdrop, opacity: f32) {
+        if outline.is_empty() {
+            return;
+        }
+        bd.to_device = self.transform_t();
+        let dev = outline.transformed(bd.to_device);
+        let b = dev.bounds().intersect(self.scissor_as_rect());
+        if b.is_empty() {
+            return;
+        }
+        // Where samples can come from: the region grown by the blur's and the refraction's reach.
+        let refract_reach = bd.glass.map_or(0.0, |(r, g)| {
+            let band = g.depth.max(0.0) * r.width.min(r.height) / 2.0;
+            let lens = if (g.magnification - 1.0).abs() > 1e-3 {
+                r.width.max(r.height)
+            } else {
+                0.0
+            };
+            (band * (g.distortion.max(0.0) + g.chromatic_aberration.max(0.0)) + lens)
+                * bd.to_device.m[0].abs().max(bd.to_device.m[3].abs())
+        });
+        let reach = (bd.sigma.max(0.0) * 3.0 + refract_reach).ceil() + 2.0;
+        let (fw, fh) = (self.width as f32, self.height as f32);
+        let sx0 = (b.x - reach).floor().max(0.0) as u32;
+        let sy0 = (b.y - reach).floor().max(0.0) as u32;
+        let sx1 = ((b.right() + reach).ceil().min(fw)) as u32;
+        let sy1 = ((b.bottom() + reach).ceil().min(fh)) as u32;
+        if sx1 <= sx0 || sy1 <= sy0 {
+            return;
+        }
+        let (sw, sh) = (sx1 - sx0, sy1 - sy0);
+        // What is drawn so far: the frame (the groups open now are composited later).
+        self.end_pass();
+        let ctx = self.ctx.clone();
+        let region = ctx.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("backdrop"),
+            size: wgpu::Extent3d {
+                width: sw,
+                height: sh,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: COLOR,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let src = self.main.color.clone();
+        self.encoder().copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &src,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: sx0,
+                    y: sy0,
+                    z: 0,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            region.as_image_copy(),
+            wgpu::Extent3d {
+                width: sw,
+                height: sh,
+                depth_or_array_layers: 1,
+            },
+        );
+        let rview = region.create_view(&wgpu::TextureViewDescriptor::default());
+        let Some(plane) = self.blur_texture(&rview, sw, sh, bd.sigma) else {
+            return;
+        };
+        let (w, h) = self.target_size();
+        let mut p = identity_paint(w, h);
+        p.g1 = [5.0, 0.0, if self.masks.is_empty() { 0.0 } else { 1.0 }, 0.0];
+        p.color = [opacity, 0.0, 0.0, 0.0];
+        p.g2 = [sx0 as f32, sy0 as f32, sw as f32, sh as f32];
+        let inv = bd.to_device.invert().unwrap_or(Transform::IDENTITY).m;
+        p.inv_a = [inv[0], inv[1], inv[2], inv[3]];
+        p.inv_b[0] = inv[4];
+        p.inv_b[1] = inv[5];
+        p.fwd_a = [
+            bd.to_device.m[0],
+            bd.to_device.m[1],
+            bd.to_device.m[2],
+            bd.to_device.m[3],
+        ];
+        p.fwd_b = [bd.to_device.m[4], bd.to_device.m[5], 0.0, 0.0];
+        let m = backdrop::saturation_brightness_matrix(bd.saturation, bd.brightness);
+        p.m0 = [m[0][0], m[0][1], m[0][2], 0.0];
+        p.m1 = [m[1][0], m[1][1], m[1][2], 0.0];
+        p.m2 = [m[2][0], m[2][1], m[2][2], 0.0];
+        if let Some((rect, g)) = bd.glass {
+            let band = g.depth.max(0.0) * rect.width.min(rect.height) / 2.0;
+            let magnify = g.magnification.is_finite() && (g.magnification - 1.0).abs() > 1e-3;
+            if (band > 0.0 && g.distortion > 0.0) || magnify {
+                p.g3 = [rect.x, rect.y, rect.width, rect.height];
+                p.g4 = [
+                    g.distortion,
+                    g.depth,
+                    g.chromatic_aberration,
+                    g.magnification,
+                ];
+                p.g5 = [
+                    rect.width.min(rect.height) / 2.0,
+                    crate::shape::AMALFI_SMOOTHING,
+                    1.0,
+                    0.0,
+                ];
+            }
+        }
+        self.cover_fill(
+            &outline.bez,
+            outline.even_odd,
+            &p,
+            Some(&plane),
+            Blend::Over,
+        );
+    }
+
+    /// Drops the clips above the first `n`, keeping their mask targets for reuse.
+    fn truncate_masks(&mut self, n: usize) {
+        if self.masks.len() > n {
+            let extra = self.masks.split_off(n);
+            self.retired
+                .extend(extra.into_iter().filter_map(|m| m.target));
         }
     }
 
