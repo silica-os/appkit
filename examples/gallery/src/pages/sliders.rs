@@ -42,7 +42,7 @@ impl Component for Page {
                         label(format!("{:.0}", volume.get() * 100.0)).color("Text/Secondary"),
                     ))
                     .spacing(8.0)
-                    .alignment(1),
+                    .alignment(4),
                     label("Drag the slider, or focus it and use the arrow keys, Home and End.")
                         .color("Text/Tertiary"),
                 ))

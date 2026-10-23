@@ -59,7 +59,7 @@ impl Component for Page {
                             .color("Text/Secondary"),
                     ))
                     .spacing(12.0)
-                    .alignment(1),
+                    .alignment(4),
                 ))
                 .spacing(12.0)
                 .alignment(0)

@@ -271,6 +271,61 @@ pub fn toolbar(items: impl crate::IntoChildren) -> Element {
     Element::of(Kind::TOOLBAR).children(items).fill_width()
 }
 
+/// A window split into a full-height sidebar and its content (ui-kit `SWindow` with a split
+/// toolbar). `sidebar_bar` are the items of the section above the sidebar (after the window
+/// controls; a hide button closes it), `bar` those of the content's section; `open` holds
+/// whether the sidebar is shown, and `width` is its width (the grip on its edge resizes it).
+/// The window's content becomes full size, as with [`Element::toolbar`].
+pub fn split_window(
+    open: &Binding<bool>,
+    width: f32,
+    sidebar_bar: impl crate::IntoChildren,
+    sidebar: Element,
+    bar: impl crate::IntoChildren,
+    content: Element,
+) -> Element {
+    let toggle = |b: &Binding<bool>, show: bool, label: &str| {
+        let b = b.clone();
+        toolbar_button("sidebar")
+            .tooltip(label)
+            .accessibility_label(label)
+            .on_activate(move || b.set(show))
+    };
+    let mut side_items = sidebar_bar.into_children();
+    side_items.push(crate::spacer());
+    side_items.push(toggle(open, false, "Hide Sidebar"));
+    let side = crate::column((
+        toolbar(side_items).prop(Prop::STYLE, PValue::Int(2)),
+        sidebar.fill(),
+    ))
+    .spacing(0.0)
+    .alignment(0)
+    .fill()
+    .background_role("Surface/Sidebar");
+    let main = crate::column((
+        toolbar(bar).prop(Prop::STYLE, PValue::Int(1)),
+        content.fill(),
+    ))
+    .spacing(0.0)
+    .alignment(0)
+    .fill();
+    // The grip only needs to be hit: a clear fill makes it so.
+    let grip = Element::of(Kind::VIEW).background(appkit_rs::rgba(0));
+    let b = open.clone();
+    let mut e = Element::of(Kind::SPLIT_WINDOW)
+        .prop(Prop::EXPANDED, PValue::Bool(open.get()))
+        .prop(Prop::VALUE, PValue::Float(f64::from(width)))
+        .on(Signal::EXPANDED_CHANGED, move |v| {
+            if let Some(o) = v.as_bool() {
+                b.set(o);
+            }
+        })
+        .children(vec![side, main, toggle(open, true, "Show Sidebar"), grip])
+        .fill();
+    e.effects.toolbar = Some(52.0);
+    e
+}
+
 /// A form (kit `Forms/Layout`): a window-coloured panel with a title and its parts (sections,
 /// then the footer) 20 apart.
 pub fn form(title: Option<&str>, parts: impl crate::IntoChildren) -> Element {

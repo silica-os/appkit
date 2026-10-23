@@ -205,6 +205,7 @@ impl Kind {
     pub const SIDEBAR_BADGE: Kind = Kind(sys::AK_KIND_SIDEBAR_BADGE);
     pub const SIDEBAR_EJECT: Kind = Kind(sys::AK_KIND_SIDEBAR_EJECT);
     pub const SWATCH_CHIP: Kind = Kind(sys::AK_KIND_SWATCH_CHIP);
+    pub const SPLIT_WINDOW: Kind = Kind(sys::AK_KIND_SPLIT_WINDOW);
     pub const VALUE_FIELD: Kind = Kind(sys::AK_KIND_VALUE_FIELD);
     pub const COMBO_BUTTON: Kind = Kind(sys::AK_KIND_COMBO_BUTTON);
     pub const SIDEBAR_FOOTER: Kind = Kind(sys::AK_KIND_SIDEBAR_FOOTER);

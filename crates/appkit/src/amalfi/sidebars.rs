@@ -879,12 +879,16 @@ pub fn footer(ui: &mut Ui) -> ViewId {
 pub struct Panel {
     /// Space above the first child (12; 60 under a window's toolbar, 8 below its bar).
     pub top: f32,
+    /// The panel draws its surface (not in a split window's sidebar, whose column does, so
+    /// what sits above the rows can cast its shadow on them).
+    pub surface: bool,
 }
 
 impl Default for Panel {
     fn default() -> Self {
         Panel {
             top: metrics::PANEL_PADDING,
+            surface: true,
         }
     }
 }
@@ -943,6 +947,9 @@ impl Widget for Panel {
     }
 
     fn paint(&mut self, cx: &mut PaintCx<'_>) {
+        if !self.surface {
+            return;
+        }
         let c = cx.theme().colors;
         cx.rec.layer(
             "Surface",
@@ -950,6 +957,21 @@ impl Widget for Panel {
             Shape::RECT,
             Style::fill(c.surface_sidebar),
         );
+    }
+
+    fn set_prop(&mut self, prop: Prop, value: &Value) -> PropChange {
+        // 0: on its own surface, 1: on the surface of the column it sits in.
+        match (prop, value.as_int()) {
+            (Prop::Style, Some(s @ 0..=1)) => {
+                self.surface = s == 0;
+                PropChange::Paint
+            }
+            _ => PropChange::Unknown,
+        }
+    }
+
+    fn prop(&self, prop: Prop) -> Option<Value> {
+        (prop == Prop::Style).then_some(Value::Int(if self.surface { 0 } else { 1 }))
     }
 
     fn accessibility(&self, a: &mut A11y) {

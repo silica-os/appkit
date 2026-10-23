@@ -23,7 +23,7 @@ impl Component for Page {
                 label(format!("quantity {}", qty.get())).color("Text/Secondary"),
             ))
             .spacing(8.0)
-            .alignment(1),
+            .alignment(4),
             label("Click or hold either half; focus the stepper and use ↑ ↓.")
                 .color("Text/Tertiary"),
             matrix(

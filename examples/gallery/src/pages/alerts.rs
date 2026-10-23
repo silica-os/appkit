@@ -136,7 +136,7 @@ impl Component for Page {
                     .alert(&st.binding(), spec),
             );
         }
-        let variants = row(kids).spacing(12.0).alignment(1);
+        let variants = row(kids).spacing(12.0).alignment(4);
         page(vec![
             lead(
                 "The 280 pt alert: icon, title, message, up to three stacked buttons, an optional suppression checkbox or any accessory (a text field). Buttons and checkbox are the real SButton and SCheckbox.",

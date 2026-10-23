@@ -176,7 +176,8 @@ impl Component for Gallery {
             }
         };
         let current = page.get().min(count().saturating_sub(1));
-        let bar = toolbar((
+        let sidebar_open = cx.state(|| true);
+        let bar = (
             toolbar_title(&name_of(current)),
             spacer(),
             toolbar_views(&[("sun", "Light"), ("moon", "Dark")], &appearance).id("appearance"),
@@ -196,7 +197,7 @@ impl Component for Gallery {
                     .on_activate(move || open.set(true))
                     .popover(&access_open.binding(), (260.0, 108.0), access_menu)
             },
-        ));
+        );
         let go: Rc<dyn Fn(usize)> = {
             let page = page.clone();
             Rc::new(move |i| page.set(i))
@@ -250,31 +251,34 @@ impl Component for Gallery {
             .padding(36.0)
             .max_width(1100.0)
             .fill_width();
-        row((
-            // Sidebar.vue: 264 wide on the panel, 16 by 12 in, a 1 pt rule on its right.
+        // Sidebar.vue in SWindow's split: the brand and the search across the sidebar (in by
+        // the panel's padding, as the rows are), then the pages.
+        let side = column((
             column((
                 row((brand, label("Amalfi 1.0").color("Text/Secondary")))
                     .spacing(4.0)
                     .alignment(10),
-                search_field("Search pages and components", &query.binding()).id("search"),
-                scroll_view(sidebar(rows)).fill(),
+                search_field("Search pages and components", &query.binding())
+                    .id("search")
+                    .fill_width(),
             ))
             .spacing(12.0)
             .alignment(0)
-            .padding_edges(16.0, 12.0, 0.0, 12.0)
-            .width(263.0)
-            .max_height(f32::INFINITY)
-            .background_role("Surface/Sidebar"),
-            view(Kind::VIEW)
-                .width(1.0)
-                .max_height(f32::INFINITY)
-                .background_role("Line/Separator"),
-            scroll_view(body).fill().background_role("Surface/Window"),
+            .padding_edges(4.0, 12.0, 0.0, 12.0)
+            .fill_width(),
+            scroll_view(sidebar(rows).style(1)).fill(),
         ))
         .spacing(0.0)
-        .alignment(0)
-        .fill()
-        .toolbar(bar)
+        .alignment(0);
+        split_window(
+            &sidebar_open.binding(),
+            264.0,
+            Vec::new(),
+            side,
+            bar,
+            scroll_view(body).fill().background_role("Surface/Window"),
+        )
+        .id("window")
     }
 }
 

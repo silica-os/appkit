@@ -49,7 +49,7 @@ impl Component for Page {
                     checkbox("indeterminate", &indeterminate.binding()),
                 ))
                 .spacing(12.0)
-                .alignment(1),
+                .alignment(4),
             ))
             .spacing(14.0)
             .alignment(0),

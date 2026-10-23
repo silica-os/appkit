@@ -139,7 +139,10 @@ fn child_view(ui: &mut Ui, k: &KitLayer, col: &mut Collect, abs: Point) -> Optio
 /// The sidebar body: the rows and headers of a panel without footer.
 fn body_view(ui: &mut Ui, kit: &KitLayer, master: &str, inactive: bool) -> Option<ViewId> {
     let top = if master.contains("/Full/") { 60.0 } else { 8.0 };
-    let p = ui.create(Panel { top });
+    let p = ui.create(Panel {
+        top,
+        ..Panel::default()
+    });
     let mut kids: Vec<&KitLayer> = kit.children.iter().filter(|c| c.master.is_some()).collect();
     kids.sort_by(|a, b| a.frame.y.total_cmp(&b.frame.y));
     for k in kids {

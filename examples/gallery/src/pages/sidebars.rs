@@ -61,7 +61,7 @@ impl Component for Page {
             .color("Text/Secondary"),
         ))
         .spacing(16.0)
-        .alignment(1);
+        .alignment(4);
         page(vec![
             lead(
                 "A 240 pt sidebar: rows with a coloured glyph, groups with a disclosure chevron that fold away, count badges, volumes with an eject button, a footer toolbar. v-model is the selected row; arrow keys move.",

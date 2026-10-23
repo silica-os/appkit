@@ -29,6 +29,9 @@ pub mod metrics {
     pub const TRAILING: f32 = 12.0;
     /// Before the first piece when there are no window controls (a sheet's toolbar).
     pub const LEADING: f32 = 12.0;
+    /// The window controls' room in a split window's sidebar section (ui-kit `SWindow`:
+    /// `padding-left: 94px`).
+    pub const REGION_CONTROLS: f32 = 94.0;
 }
 
 /// The toolbar.
@@ -36,11 +39,21 @@ pub mod metrics {
 pub struct Toolbar {
     /// Room is kept for the window controls.
     pub controls: bool,
+    /// The section above a split window's sidebar: room for the controls, no surface of its
+    /// own (the sidebar's shows through).
+    pub sidebar: bool,
+    /// Extra room before the first piece, which a split window animates while its sidebar
+    /// folds (the controls and the reveal button move into this section).
+    pub inset: f32,
 }
 
 impl Default for Toolbar {
     fn default() -> Self {
-        Toolbar { controls: true }
+        Toolbar {
+            controls: true,
+            sidebar: false,
+            inset: 0.0,
+        }
     }
 }
 
@@ -55,11 +68,14 @@ fn flexible(ui: &Ui, id: ViewId) -> bool {
 
 impl Toolbar {
     fn leading(&self) -> f32 {
-        if self.controls {
+        let room = if self.sidebar {
+            metrics::REGION_CONTROLS
+        } else if self.controls {
             metrics::CONTROLS
         } else {
             metrics::LEADING
-        }
+        };
+        room + self.inset
     }
 
     /// Each item, its natural size and whether it flexes.
@@ -143,6 +159,9 @@ impl Widget for Toolbar {
     }
 
     fn paint(&mut self, cx: &mut PaintCx<'_>) {
+        if self.sidebar {
+            return;
+        }
         let c = cx.theme().colors;
         let r = cx.bounds();
         cx.rec
@@ -155,13 +174,15 @@ impl Widget for Toolbar {
 
     fn set_prop(&mut self, prop: Prop, value: &Value) -> PropChange {
         match prop {
-            // 0: the window's toolbar (room for the controls), 1: no controls.
+            // 0: the window's toolbar (room for the controls), 1: no controls, 2: the section
+            // above a split window's sidebar.
             Prop::Style => match value.as_int() {
-                Some(s) => {
-                    self.controls = s == 0;
+                Some(s @ 0..=2) => {
+                    self.controls = s != 1;
+                    self.sidebar = s == 2;
                     PropChange::Layout
                 }
-                None => PropChange::Unknown,
+                _ => PropChange::Unknown,
             },
             _ => PropChange::Unknown,
         }
@@ -169,7 +190,11 @@ impl Widget for Toolbar {
 
     fn prop(&self, prop: Prop) -> Option<Value> {
         match prop {
-            Prop::Style => Some(Value::Int(if self.controls { 0 } else { 1 })),
+            Prop::Style => Some(Value::Int(match (self.sidebar, self.controls) {
+                (true, _) => 2,
+                (false, true) => 0,
+                (false, false) => 1,
+            })),
             _ => None,
         }
     }

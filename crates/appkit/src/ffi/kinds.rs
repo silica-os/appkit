@@ -96,6 +96,7 @@ pub fn make(kind: u32) -> Option<Box<dyn Widget>> {
             crate::amalfi::statusbar::ItemContent::Glyph(String::new()),
         )),
         AK_KIND_TOOLBAR => Box::new(crate::amalfi::toolbar::Toolbar::default()),
+        AK_KIND_SPLIT_WINDOW => Box::new(crate::amalfi::split::SplitWindow::default()),
         AK_KIND_TOOLBAR_GROUP => Box::new(crate::amalfi::segments::ActionSegments::new(Vec::new())),
         AK_KIND_FORM_VALUE => Box::new(crate::amalfi::forms::FormValue { expand: false }),
         AK_KIND_FORM_FOOTER => Box::new(crate::amalfi::forms::FormFooter::default()),
@@ -150,6 +151,7 @@ mod tests {
             AK_KIND_BOX_SURFACE,
             AK_KIND_GLASS_PANEL,
             AK_KIND_CALLOUT,
+            AK_KIND_SPLIT_WINDOW,
         ];
         let mut missing = Vec::new();
         for (name, kind) in appkit_sys::KINDS {

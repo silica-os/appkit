@@ -33,7 +33,7 @@ impl Component for Page {
                 help_button().disabled(d),
             ))
             .spacing(12.0)
-            .alignment(1),
+            .alignment(4),
             row((
                 button("Add")
                     .style(1)
@@ -47,7 +47,7 @@ impl Component for Page {
                 label(format!("{} items", items.get())).color("Text/Secondary"),
             ))
             .spacing(8.0)
-            .alignment(1),
+            .alignment(4),
             label(format!(
                 "pop-up “{}” · action “{}”",
                 fruits.get(fruit.get()).copied().unwrap_or_default(),

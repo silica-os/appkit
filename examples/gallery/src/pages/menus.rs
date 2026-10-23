@@ -63,7 +63,7 @@ impl Component for Page {
                     .color("Text/Secondary"),
                 ))
                 .spacing(16.0)
-                .alignment(1),
+                .alignment(4),
             ),
             code("pull_down(\"File\", &[\"New Window\", …], |i| …)"),
             h2("Menu items"),

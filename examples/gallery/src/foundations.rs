@@ -204,7 +204,7 @@ impl Component for Typography {
                     label(sample.get()).text_style(t.name),
                 ))
                 .spacing(16.0)
-                .alignment(1)
+                .alignment(10)
                 .key(t.name)
             })
             .collect();
@@ -634,7 +634,7 @@ impl Component for Sample {
             .width(260.0),
         ))
         .spacing(16.0)
-        .alignment(1)
+        .alignment(4)
     }
 }
 
@@ -695,7 +695,7 @@ impl Component for Lab {
             .spacing(0.0)
             .width(420.0)
             .height(100.0)
-            .alignment(1);
+            .alignment(4);
         let rust = format!(
             "view.animation(Animation::{});",
             t.name
@@ -723,7 +723,7 @@ impl Component for Lab {
                     .on_activate(move || f2.set(!f2.get())),
             ))
             .spacing(12.0)
-            .alignment(1),
+            .alignment(4),
             section("Stage", stage),
             section("Curve", curve_graph(&t.curve)),
             section("Rust", mono(&rust)),

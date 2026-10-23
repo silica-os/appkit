@@ -24,7 +24,7 @@ impl Component for Page {
                     label("Hover the controls").color("Text/Secondary"),
                 ))
                 .spacing(16.0)
-                .alignment(1),
+                .alignment(4),
             ),
         ])
     }
