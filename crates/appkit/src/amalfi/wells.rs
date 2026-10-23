@@ -378,7 +378,7 @@ impl ColorWell {
 
     fn close_panel(&mut self, ui: &mut Ui) {
         if let Some(w) = self.panel.take() {
-            ui.close_window(w);
+            ui.dismiss_window(w);
         }
     }
 }
@@ -671,7 +671,7 @@ fn open_panel(
                 closing = w.panel.take();
             });
             if let Some(w) = closing {
-                ui.close_window(w);
+                ui.dismiss_window(w);
             }
             ui.emit(well, Signal::ValueChanged, Value::Color(color));
         });

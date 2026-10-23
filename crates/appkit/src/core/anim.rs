@@ -10,6 +10,13 @@ use crate::core::ui::Ui;
 use crate::geom::{Point, Rect};
 use crate::motion::{Animated, Timing};
 
+/// A window's content motion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Presentation {
+    Popover,
+    Sheet,
+}
+
 /// How a view enters and leaves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Transition {
@@ -218,6 +225,87 @@ impl Ui {
         true
     }
 
+    /// The motion a window's content plays, if it has one (the ui-kit's `SPopover`, `SDialog`
+    /// and `SWindow` sheet transitions): popovers fade in with `fade.instant` while scaling
+    /// from 0.96 with `spring.panel`; sheets fade in with `fade.standard` while moving down 20 pt
+    /// with `spring.panel`. Both leave with a `fade.instant` fade. Reduce Motion: a
+    /// `fade.quick` fade, no scale or move. Menus, pop-up lists and tooltips have their own.
+    fn presentation(
+        &self,
+        window: crate::core::window::WindowId,
+    ) -> Option<(ViewId, Presentation)> {
+        use crate::core::window::WindowKind;
+        let w = self.window(window)?;
+        let root = w.root;
+        match w.kind {
+            WindowKind::Sheet { .. } => Some((root, Presentation::Sheet)),
+            WindowKind::Popup { .. } => {
+                let first = self.tree.children(root).first().copied()?;
+                let popover = self
+                    .tree
+                    .widget(first)
+                    .is_some_and(|w| w.kind() == "Popover");
+                popover.then_some((root, Presentation::Popover))
+            }
+            _ => None,
+        }
+    }
+
+    /// Plays the enter motion of a window that was just shown.
+    pub(crate) fn animate_present(&mut self, window: crate::core::window::WindowId) {
+        let Some((root, kind)) = self.presentation(window) else {
+            return;
+        };
+        let reduce = self.appearance.reduce_motion;
+        let fade = match (reduce, kind) {
+            (true, _) => Timing::curve(motion::FADE_QUICK_CURVE, motion::FADE_QUICK),
+            (false, Presentation::Popover) => {
+                Timing::curve(motion::FADE_INSTANT_CURVE, motion::FADE_INSTANT)
+            }
+            (false, Presentation::Sheet) => {
+                Timing::curve(motion::FADE_STANDARD_CURVE, motion::FADE_STANDARD)
+            }
+        };
+        let Some(a) = self.anim_mut(root) else { return };
+        a.opacity.jump(0.0);
+        a.opacity.animate_to(1.0, fade);
+        if !reduce {
+            let spring = Timing::Spring(motion::SPRING_PANEL);
+            match kind {
+                Presentation::Popover => {
+                    a.scale.jump(0.96);
+                    a.scale.animate_to(1.0, spring);
+                }
+                Presentation::Sheet => {
+                    a.offset.jump(Point::new(0.0, -20.0));
+                    a.offset.animate_to(Point::ZERO, spring);
+                }
+            }
+        }
+        self.track(root);
+    }
+
+    /// Closes a window the way the ui-kit leaves: a popover or sheet fades out first (the
+    /// platform's own dismissals, which have no surface left to animate, use
+    /// [`Ui::close_window`]). Other windows close at once.
+    pub fn dismiss_window(&mut self, window: crate::core::window::WindowId) {
+        let Some((root, _)) = self.presentation(window) else {
+            self.close_window(window);
+            return;
+        };
+        let reduce = self.appearance.reduce_motion;
+        let (curve, dur) = if reduce {
+            (motion::FADE_QUICK_CURVE, motion::FADE_QUICK)
+        } else {
+            (motion::FADE_INSTANT_CURVE, motion::FADE_INSTANT)
+        };
+        if let Some(a) = self.anim_mut(root) {
+            a.opacity.animate_to(0.0, Timing::curve(curve, dur));
+        }
+        self.track(root);
+        self.after(f64::from(dur) + 0.02, move |ui| ui.close_window(window));
+    }
+
     /// Advances the views' implicit animations; removes views whose leave transition ended.
     pub(crate) fn tick_node_anims(&mut self, dt: f32) {
         let list = std::mem::take(&mut self.node_anims);
@@ -267,6 +355,102 @@ mod tests {
         ui.set(v, Prop::Width, Value::from(20.0)).unwrap();
         ui.set(v, Prop::Height, Value::from(20.0)).unwrap();
         v
+    }
+
+    fn anim_of(ui: &Ui, window: crate::core::window::WindowId) -> (f32, f32, Point) {
+        let root = ui.window(window).map(|w| w.root);
+        root.and_then(|r| ui.tree.get(r))
+            .and_then(|n| n.anim.as_ref())
+            .map_or((1.0, 1.0, Point::ZERO), |a| {
+                (a.opacity.get(), a.scale.get(), a.offset.get())
+            })
+    }
+
+    fn parent(ui: &mut Ui) -> crate::core::window::WindowId {
+        let win = ui.create_window(WindowKind::Normal, Size::new(400.0, 300.0));
+        ui.show_window(win);
+        win
+    }
+
+    #[test]
+    fn a_popover_fades_in_and_scales_from_96_percent() {
+        let mut ui = Ui::new_headless();
+        let win = parent(&mut ui);
+        let content = ui.create(crate::amalfi::text::Text::new("Hello"));
+        let pop = crate::amalfi::popovers::present(
+            &mut ui,
+            win,
+            Rect::new(100.0, 40.0, 40.0, 20.0),
+            content,
+            crate::amalfi::popovers::Side::Below,
+            16.0,
+        );
+        let (o, k, _) = anim_of(&ui, pop);
+        assert_eq!((o, k), (0.0, 0.96));
+        ui.advance(0.05);
+        let (o, k, _) = anim_of(&ui, pop);
+        assert!(o > 0.0 && k > 0.96, "{o} {k}");
+        for _ in 0..120 {
+            ui.advance(1.0 / 60.0);
+        }
+        assert_eq!(anim_of(&ui, pop), (1.0, 1.0, Point::ZERO));
+    }
+
+    #[test]
+    fn a_sheet_fades_in_moving_down_20_points() {
+        let mut ui = Ui::new_headless();
+        let win = parent(&mut ui);
+        let sheet = ui.create_window(WindowKind::Sheet { parent: win }, Size::new(200.0, 100.0));
+        let v = boxed(&mut ui);
+        ui.set_content(sheet, v);
+        ui.show_window(sheet);
+        assert_eq!(anim_of(&ui, sheet), (0.0, 1.0, Point::new(0.0, -20.0)));
+        ui.advance(0.05);
+        let (o, _, off) = anim_of(&ui, sheet);
+        assert!(o > 0.0 && off.y > -20.0 && off.y < 0.0, "{o} {off:?}");
+        for _ in 0..120 {
+            ui.advance(1.0 / 60.0);
+        }
+        assert_eq!(anim_of(&ui, sheet), (1.0, 1.0, Point::ZERO));
+    }
+
+    #[test]
+    fn dismissing_fades_out_in_place_and_then_closes() {
+        let mut ui = Ui::new_headless();
+        let win = parent(&mut ui);
+        let sheet = ui.create_window(WindowKind::Sheet { parent: win }, Size::new(200.0, 100.0));
+        let v = boxed(&mut ui);
+        ui.set_content(sheet, v);
+        ui.show_window(sheet);
+        for _ in 0..120 {
+            ui.advance(1.0 / 60.0);
+        }
+        ui.dismiss_window(sheet);
+        ui.advance(0.05);
+        let (o, _, off) = anim_of(&ui, sheet);
+        assert!(o < 1.0 && off == Point::ZERO, "{o} {off:?}");
+        assert!(ui.window(sheet).is_some(), "still there while it fades");
+        ui.advance(0.2);
+        assert!(ui.window(sheet).is_none());
+        // A normal window closes at once.
+        ui.dismiss_window(win);
+        assert!(ui.window(win).is_none());
+    }
+
+    #[test]
+    fn with_reduce_motion_a_sheet_only_fades() {
+        let mut ui = Ui::new_headless();
+        let mut a = ui.appearance;
+        a.reduce_motion = true;
+        ui.set_appearance(a);
+        let win = parent(&mut ui);
+        let sheet = ui.create_window(WindowKind::Sheet { parent: win }, Size::new(200.0, 100.0));
+        let v = boxed(&mut ui);
+        ui.set_content(sheet, v);
+        ui.show_window(sheet);
+        assert_eq!(anim_of(&ui, sheet), (0.0, 1.0, Point::ZERO));
+        ui.advance(0.2);
+        assert_eq!(anim_of(&ui, sheet).0, 1.0);
     }
 
     #[test]

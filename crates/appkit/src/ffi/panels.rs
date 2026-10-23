@@ -184,7 +184,7 @@ pub extern "C" fn ak_window_present_alert(
                         // SAFETY: the caller's callback with its own data.
                         enter(ui, || unsafe { f(response, user) });
                     }
-                    ui.close_window(w);
+                    ui.dismiss_window(w);
                 };
                 let r1 = Rc::new(respond);
                 let r2 = r1.clone();

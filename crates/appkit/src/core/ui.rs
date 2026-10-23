@@ -951,6 +951,7 @@ impl Ui {
 
     /// Shows a window.
     pub fn show_window(&mut self, window: WindowId) {
+        let was_visible = self.window(window).is_some_and(|w| w.visible);
         if let Some(w) = self.window_mut(window) {
             w.visible = true;
             w.needs_layout = true;
@@ -958,6 +959,9 @@ impl Ui {
             w.input_region = None;
         }
         self.requests.push(Request::ShowWindow(window));
+        if !was_visible {
+            self.animate_present(window);
+        }
         self.request_frame(window);
     }
 

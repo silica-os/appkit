@@ -1846,7 +1846,7 @@ mod tests {
 
     #[test]
     fn alerts_popovers_menus_tabs_and_status_items() {
-        let _h = Headless::new().unwrap();
+        let h = Headless::new().unwrap();
         let w = Window::new(500.0, 400.0).unwrap();
         let col = View::new(Kind::COLUMN).unwrap();
         w.set_content(&col).unwrap();
@@ -1871,6 +1871,8 @@ mod tests {
         let delete = a.find("Delete").unwrap();
         delete.perform(sys::AK_ACTION_CLICK).unwrap();
         assert_eq!(*got.borrow(), 1);
+        // The sheet fades out first (fade.instant), then it closes.
+        h.advance(0.3);
         assert_eq!(sheet.show(), Err(Error::NoSuchObject), "closed");
         // A popover against a button.
         let b = View::new(Kind::PUSH_BUTTON).unwrap();
