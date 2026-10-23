@@ -20,7 +20,7 @@ use crate::style::{Border, BorderPosition, Style};
 /// Fixed measures (silica_ui's `AmalfiSliderMetrics`).
 pub mod metrics {
     /// The thumb's diameter.
-    pub const THUMB: f32 = 20.0;
+    pub const THUMB: f32 = crate::amalfi::tokens::control_heights::MINI;
     /// The track's thickness.
     pub const TRACK: f32 = 4.0;
     /// Default length of a horizontal slider.
@@ -28,19 +28,19 @@ pub mod metrics {
     /// Default length of a vertical slider.
     pub const VERTICAL_LENGTH: f32 = 160.0;
     /// Thickness of a slider.
-    pub const THICKNESS: f32 = 20.0;
+    pub const THICKNESS: f32 = crate::amalfi::tokens::control_heights::MINI;
     /// Thickness with tick marks.
     pub const THICKNESS_WITH_TICKS: f32 = 36.0;
     /// Gap between the track and the tick marks.
-    pub const TICK_GAP: f32 = 8.0;
+    pub const TICK_GAP: f32 = crate::amalfi::tokens::spacing::S;
     /// A tick mark's width.
     pub const TICK_WIDTH: f32 = 2.0;
     /// A tick mark's length.
-    pub const TICK_LENGTH: f32 = 8.0;
+    pub const TICK_LENGTH: f32 = crate::amalfi::tokens::spacing::S;
     /// Glyph size at the ends.
-    pub const GLYPH: f32 = 16.0;
+    pub const GLYPH: f32 = crate::amalfi::tokens::control_icons::SMALL;
     /// Gap between a glyph and the track.
-    pub const GLYPH_GAP: f32 = 8.0;
+    pub const GLYPH_GAP: f32 = crate::amalfi::tokens::spacing::S;
     /// The lens: 8 beyond the thumb along the track, 12 beyond the track across it.
     pub const LENS_LONG: f32 = THUMB + 16.0;
     /// The lens across the track.
