@@ -29,6 +29,7 @@ use vello_cpu::peniko::FontData;
 use vello_cpu::{Glyph, Pixmap};
 use wgpu::util::DeviceExt;
 
+mod atlas;
 mod present;
 pub use present::{PresentSurface, Presented};
 
@@ -118,6 +119,7 @@ pub struct GpuContext {
     white: wgpu::TextureView,
     pipelines: RefCell<HashMap<Key, wgpu::RenderPipeline>>,
     images: RefCell<HashMap<u64, wgpu::TextureView>>,
+    atlas: RefCell<atlas::Atlas>,
 }
 
 impl std::fmt::Debug for GpuContext {
@@ -263,6 +265,7 @@ impl GpuContext {
             &[255, 255, 255, 255],
         );
         let white = white_tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let atlas = RefCell::new(atlas::Atlas::new(&device));
         let ctx = Rc::new(GpuContext {
             instance,
             adapter_handle: adapter,
@@ -277,6 +280,7 @@ impl GpuContext {
             white,
             pipelines: RefCell::new(HashMap::new()),
             images: RefCell::new(HashMap::new()),
+            atlas,
         });
         Some((ctx, surface))
     }
@@ -2135,6 +2139,9 @@ impl Painter for GpuCanvas {
         color: Color,
     ) {
         if glyphs.is_empty() || color.a == 0 {
+            return;
+        }
+        if self.fill_glyphs_atlas(font, size, coords, glyphs, color) {
             return;
         }
         let outline = GpuCanvas::glyph_outlines(font, size, coords, glyphs);

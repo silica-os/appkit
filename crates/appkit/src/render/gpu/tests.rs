@@ -283,3 +283,46 @@ fn the_gles_backend_agrees_with_the_cpu_too() {
     eprintln!("{}: mean {mean:.3}, max {max}", ctx.adapter());
     assert!(mean < 2.5, "mean {mean}");
 }
+
+#[test]
+fn text_from_the_atlas_agrees_with_the_cpu_and_is_cached() {
+    use crate::text::layout::{TextLayout, TextStyle};
+    let Some(ctx) = context() else { return };
+    let style = TextStyle {
+        color: Color::rgb(20, 20, 30),
+        ..TextStyle::default()
+    };
+    let layout = TextLayout::plain(
+        "Silica 1.0 — Amalfi: quick brown fox, 0123456789",
+        &style,
+        400.0,
+    );
+    for scale in [1.0f32, 1.25, 2.0] {
+        let paint = |p: &mut dyn Painter| {
+            p.fill_rect(Rect::new(0.0, 0.0, 420.0, 60.0), Color::rgb(245, 245, 240));
+            p.save();
+            p.scale((scale, scale));
+            layout.paint(p, Point::new(6.3, 7.7));
+            p.restore();
+        };
+        let (w, h) = ((420.0 * scale) as u32, (60.0 * scale) as u32);
+        let mut cpu = Canvas::new(w, h);
+        paint(&mut cpu);
+        let a = cpu.into_pixmap();
+        let mut gpu = GpuCanvas::new(&ctx, w, h);
+        gpu.begin(true);
+        paint(&mut gpu);
+        let b = gpu.into_pixmap();
+        let (mean, max) = diff(&a, &b);
+        eprintln!("text at {scale}: mean {mean:.3}, max {max}");
+        assert!(mean < 1.5, "scale {scale}: mean {mean}");
+        // Painted twice, the second run adds nothing to the atlas.
+        let cached = ctx.atlas_len();
+        let mut again = GpuCanvas::new(&ctx, w, h);
+        again.begin(true);
+        paint(&mut again);
+        again.submit();
+        assert_eq!(ctx.atlas_len(), cached);
+        assert!(cached > 10, "glyphs were cached: {cached}");
+    }
+}
