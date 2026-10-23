@@ -2,7 +2,8 @@
 //!
 //! ```text
 //! cargo xtask sync-kit [--design DIR] [PREFIX ...]   copy kit masters into the fixtures
-//! cargo xtask check-sources [--desktop DIR]          compare data/ with silica-desktop
+//! cargo xtask sync-sources                          copy tokens, symbols and protocols in
+//! cargo xtask check-sources                         compare those copies with the checkouts
 //! cargo xtask header                                 regenerate include/appkit.h
 //! cargo xtask package [--debug]                      libappkit.so.1 with versioned symbols
 //! cargo xtask abi-check                              compare the exported ABI with abi/
@@ -27,13 +28,17 @@ fn main() {
     let rest = args.get(1..).unwrap_or_default();
     let result = match args.first().map(String::as_str) {
         Some("sync-kit") => kit::sync(rest),
+        Some("sync-sources") => sync_sources(rest),
         Some("check-sources") => check_sources(rest),
         Some("header") => abi::header(),
         Some("abi-check") => abi::check(rest),
         Some("package") => abi::package(rest).map(|_| ()),
         Some("vm") => vm::vm(rest),
         Some("bench") => bench(),
-        _ => Err("usage: cargo xtask <sync-kit|check-sources|header|abi-check|vm> …".to_string()),
+        _ => Err(
+            "usage: cargo xtask <sync-kit|sync-sources|check-sources|header|abi-check|vm> …"
+                .to_string(),
+        ),
     };
     if let Err(e) = result {
         eprintln!("xtask: {e}");
@@ -81,35 +86,73 @@ pub fn sibling(dir: &str) -> PathBuf {
     home.join("silica").join(dir)
 }
 
-/// The copies of silica-desktop's and silica-icons' sources in `crates/appkit/data`.
-fn check_sources(args: &[String]) -> Result<()> {
-    let desktop = PathBuf::from(flag(
+/// The files AppKit copies from its sibling repositories: (source, copy). Tokens, the motion
+/// runtime it is checked against and the animations come from silica-os/ui-kit, the symbols
+/// font from silica-os/symbols, the protocol bindings from silica-os/compositor.
+fn sources(args: &[String]) -> Result<Vec<(PathBuf, PathBuf)>> {
+    let ui_kit = PathBuf::from(flag(args, "--ui-kit", &sibling("ui-kit").to_string_lossy()));
+    let symbols = PathBuf::from(flag(
         args,
-        "--desktop",
-        &sibling("silica").to_string_lossy(),
+        "--symbols",
+        &sibling("symbols").to_string_lossy(),
     ));
-    let icons = PathBuf::from(flag(
+    let compositor = PathBuf::from(flag(
         args,
-        "--icons",
-        &sibling("silica-icons").to_string_lossy(),
+        "--compositor",
+        &sibling("compositor").to_string_lossy(),
     ));
-    let data = root().join("crates/appkit/data");
-    let pairs = [
+    let lib = root().join("crates/appkit");
+    let mut pairs = vec![
         (
-            desktop.join("docs/design/amalfi/tokens.json"),
-            data.join("amalfi-tokens.json"),
+            ui_kit.join("tokens/tokens.json"),
+            lib.join("data/tokens.json"),
         ),
         (
-            desktop.join("docs/design/amalfi/motion.md"),
-            data.join("amalfi-motion.md"),
+            ui_kit.join("rust/silica_motion.rs"),
+            lib.join("data/silica_motion.rs"),
         ),
         (
-            icons.join("fonts/codepoints.json"),
-            data.join("silica-symbols-codepoints.json"),
+            symbols.join("fonts/codepoints.json"),
+            lib.join("data/symbols-codepoints.json"),
         ),
     ];
+    for weight in ["Light", "Regular", "Semibold"] {
+        let name = format!("fonts/SilicaSymbols-{weight}.otf");
+        pairs.push((symbols.join(&name), lib.join(&name)));
+    }
+    let protocols = compositor.join("crates/protocols");
+    let copy = root().join("crates/silica-protocols");
+    pairs.push((protocols.join("build.rs"), copy.join("build.rs")));
+    for dir in ["src", "src/menu", "xml"] {
+        let entries =
+            std::fs::read_dir(protocols.join(dir)).map_err(|e| format!("{}: {e}", dir))?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                let rel = Path::new(dir).join(entry.file_name());
+                pairs.push((path, copy.join(rel)));
+            }
+        }
+    }
+    Ok(pairs)
+}
+
+/// `cargo xtask sync-sources`: refreshes the copies from the sibling checkouts.
+fn sync_sources(args: &[String]) -> Result<()> {
+    for (src, copy) in sources(args)? {
+        if let Some(dir) = copy.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        }
+        std::fs::copy(&src, &copy).map_err(|e| format!("{}: {e}", src.display()))?;
+    }
+    println!("sources copied");
+    Ok(())
+}
+
+/// `cargo xtask check-sources`: compares the copies with the sibling checkouts.
+fn check_sources(args: &[String]) -> Result<()> {
     let mut stale = Vec::new();
-    for (src, copy) in pairs {
+    for (src, copy) in sources(args)? {
         let a = std::fs::read(&src).map_err(|e| format!("{}: {e}", src.display()))?;
         let b = std::fs::read(&copy).map_err(|e| format!("{}: {e}", copy.display()))?;
         if a != b {

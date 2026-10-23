@@ -130,8 +130,8 @@ struct Surface {
     frame_pending: bool,
     wants_frame: bool,
     pool: Option<SlotPool>,
-    gl: Option<crate::render::gl::GlWindow>,
-    vkw: Option<crate::render::vulkan::VkWindow>,
+    /// The retained frame (premultiplied RGBA): only the damage is repainted into it.
+    frame: Option<crate::render::canvas::Canvas>,
     silica_window: Option<SilicaWindowV1>,
     /// The modal dialog object of a sheet.
     dialog: Option<XdgDialogV1>,
@@ -143,73 +143,19 @@ struct Surface {
 /// The renderer chosen for this process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Renderer {
-    /// Skia on Vulkan.
-    Vulkan,
-    /// Skia on GLES through EGL.
-    Gl,
-    /// Skia raster into shared-memory buffers.
+    /// vello_cpu into a retained frame, copied into shared-memory buffers (the GPU path
+    /// through wgpu comes later).
     Software,
 }
 
-impl Renderer {
-    /// `APPKIT_RENDERER` (`vulkan`, `gl`, `software`); otherwise Vulkan, then GL, then
-    /// software, each falling back to the next when it fails. A backend that failed on this
-    /// machine is recorded ([`record_failure`]) and not tried again by later processes, so
-    /// a broken driver is never retried in a loop (until Settings1 has a key for it).
-    fn from_env() -> Renderer {
-        match std::env::var("APPKIT_RENDERER").as_deref() {
-            Ok("software") | Ok("shm") => Renderer::Software,
-            Ok("gl") | Ok("gles") => Renderer::Gl,
-            Ok("vulkan") => Renderer::Vulkan,
-            _ => {
-                let failed = failed_backends();
-                if !failed.iter().any(|f| f == "vulkan") {
-                    Renderer::Vulkan
-                } else if !failed.iter().any(|f| f == "gl") {
-                    Renderer::Gl
-                } else {
-                    Renderer::Software
-                }
-            }
-        }
+/// Copies premultiplied RGBA into a premultiplied BGRA (`Argb8888`, little endian) buffer.
+fn copy_bgra(src: &[u8], dst: &mut [u8]) {
+    let (dst, _) = dst.as_chunks_mut::<4>();
+    let (src, _) = src.as_chunks::<4>();
+    for (d, &[r, g, b, a]) in dst.iter_mut().zip(src) {
+        *d = [b, g, r, a];
     }
 }
-
-fn failure_file() -> Option<std::path::PathBuf> {
-    let base = std::env::var_os("XDG_STATE_HOME")
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/state"))
-        })?;
-    Some(base.join("appkit/failed-renderers"))
-}
-
-/// The backends recorded as failing on this machine.
-fn failed_backends() -> Vec<String> {
-    failure_file()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .unwrap_or_default()
-        .lines()
-        .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty())
-        .collect()
-}
-
-/// Records that `backend` fails on this machine.
-fn record_failure(backend: &str) {
-    let Some(p) = failure_file() else { return };
-    let mut list = failed_backends();
-    if list.iter().any(|f| f == backend) {
-        return;
-    }
-    list.push(backend.to_string());
-    if let Some(d) = p.parent() {
-        let _ = std::fs::create_dir_all(d);
-    }
-    let _ = std::fs::write(p, list.join("\n") + "\n");
-}
-
-impl Renderer {}
 
 /// Removes a file when dropped.
 struct RemoveOnDrop(std::path::PathBuf);
@@ -363,8 +309,6 @@ pub struct Platform {
     pending: std::rc::Rc<std::cell::RefCell<Pending>>,
     a11y: Option<crate::platform::a11y::Accessibility>,
     renderer: Renderer,
-    gl: Option<crate::render::gl::GlContext>,
-    vk: Option<crate::render::vulkan::VkContext>,
     app_id: String,
     had_windows: bool,
     start: Instant,
@@ -643,9 +587,7 @@ impl Platform {
             cursor: Cursor::Default,
             pending: std::rc::Rc::default(),
             a11y: None,
-            renderer: Renderer::from_env(),
-            gl: None,
-            vk: None,
+            renderer: Renderer::Software,
             had_windows: false,
             start: Instant::now(),
             first_frame_done: false,
@@ -1124,8 +1066,7 @@ impl Platform {
             frame_pending: false,
             wants_frame: true,
             pool: None,
-            gl: None,
-            vkw: None,
+            frame: None,
             silica_window,
             dialog: sheet_dialog,
             glass,
@@ -1145,12 +1086,6 @@ impl Platform {
             }
             if let Some(v) = s.viewport {
                 v.destroy();
-            }
-            if let (Some(ctx), Some(w)) = (self.gl.as_mut(), s.gl) {
-                ctx.destroy_window(w);
-            }
-            if let (Some(ctx), Some(w)) = (self.vk.as_mut(), s.vkw) {
-                ctx.destroy_window(w);
             }
             if let Some(d) = s.dialog {
                 d.destroy();
@@ -1209,10 +1144,6 @@ impl Platform {
         self.render_frame(id);
         if !self.first_frame_done {
             self.first_frame_done = true;
-            // The pipelines of later frames compile now, not in the first animation.
-            if let Some(vk) = self.vk.as_mut() {
-                vk.warm_up();
-            }
             // Cold start (#254 budget: 150 ms), from entering the app loop to the first
             // frame presented.
             let ms = RUN_START
@@ -1242,12 +1173,6 @@ impl Platform {
             self.ui.advance(dt.min(0.1));
         }
         let damage = self.ui.prepare_frame(id);
-        if self.renderer == Renderer::Vulkan && self.render_vk(id, damage) {
-            return;
-        }
-        if self.renderer == Renderer::Gl && self.render_gl(id, damage) {
-            return;
-        }
         let Some(s) = self.surfaces.iter_mut().find(|s| s.id == id) else {
             return;
         };
@@ -1272,19 +1197,39 @@ impl Platform {
                 return;
             }
         };
-        let info = skia_safe::ImageInfo::new(
-            (w, h),
-            skia_safe::ColorType::BGRA8888,
-            skia_safe::AlphaType::Premul,
-            None,
-        );
-        if let Some(mut surface) =
-            skia_safe::surfaces::wrap_pixels(&info, canvas, stride as usize, None)
-        {
-            let c = surface.canvas();
-            c.clear(skia_safe::Color::TRANSPARENT);
+        // Repaint the damage (everything on a new or resized frame) into the retained frame,
+        // then copy it into the buffer as BGRA.
+        let size_px = (w as u32, h as u32);
+        let fresh = s
+            .frame
+            .as_ref()
+            .is_none_or(|f| (f.width(), f.height()) != size_px);
+        if fresh {
+            s.frame = Some(crate::render::canvas::Canvas::new(size_px.0, size_px.1));
+        }
+        if let Some(c) = s.frame.as_mut() {
+            let logical = if fresh || damage.is_empty() {
+                Rect::from_size(s.size)
+            } else {
+                damage.round_out(scale)
+            };
+            let device = Rect::new(
+                logical.x * scale,
+                logical.y * scale,
+                logical.width * scale,
+                logical.height * scale,
+            )
+            .round_out(1.0);
+            // Only the damaged pixels are rasterized: a flush costs the region it covers.
+            c.begin_region(device);
+            c.save();
+            c.clear_rect(device);
+            c.clip_rect(device);
             c.scale((scale, scale));
-            self.ui.paint_window(id, c, None);
+            self.ui.paint_window(id, c, (!fresh).then_some(logical));
+            c.restore();
+            c.end_region();
+            copy_bgra(c.pixmap().data_as_u8_slice(), canvas);
         }
         let wl = s.role.wl_surface().clone();
         if let Some(vp) = &s.viewport {
@@ -1314,200 +1259,6 @@ impl Platform {
         s.frame_pending = true;
         s.wants_frame = self.ui.is_animating();
         s.last_frame = now;
-    }
-
-    /// Renders with Vulkan; false when Vulkan is unavailable (the caller falls back to GL).
-    fn render_vk(&mut self, id: WindowId, damage: Rect) -> bool {
-        let Some(wl) = self.surface(id).map(|s| s.role.wl_surface().clone()) else {
-            return false;
-        };
-        if self.vk.is_none() {
-            stage("vulkan: creating the context");
-            let made = crate::render::vulkan::VkContext::new(&self.conn, &wl);
-            stage("vulkan: context");
-            match made {
-                Ok((ctx, w)) => {
-                    tracing::info!("renderer: Skia Vulkan on {}", ctx.renderer());
-                    self.vk = Some(ctx);
-                    if let Some(s) = self.surface_mut(id) {
-                        s.vkw = Some(w);
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("Vulkan unavailable ({e}): trying GL");
-                    record_failure("vulkan");
-                    self.renderer = Renderer::Gl;
-                    return false;
-                }
-            }
-        }
-        let regions = self.ui.glass_regions(id);
-        let Some(ctx) = self.vk.as_mut() else {
-            return false;
-        };
-        let Some(s) = self.surfaces.iter_mut().find(|s| s.id == id) else {
-            return false;
-        };
-        if s.vkw.is_none() {
-            match ctx.create_window(&wl) {
-                Ok(w) => s.vkw = Some(w),
-                Err(e) => {
-                    tracing::warn!("Vulkan window: {e}");
-                    return false;
-                }
-            }
-        }
-        let scale = s.scale.max(0.5);
-        let px = (
-            (s.size.width * scale).round().max(1.0) as i32,
-            (s.size.height * scale).round().max(1.0) as i32,
-        );
-        if let Some(vp) = &s.viewport {
-            vp.set_destination(s.size.width.round() as i32, s.size.height.round() as i32);
-        } else {
-            wl.set_buffer_scale(scale.round().max(1.0) as i32);
-        }
-        send_glass(s, regions);
-        wl.frame(&self.qh, wl.clone());
-        let Some(w) = s.vkw.as_mut() else {
-            return false;
-        };
-        let ui = &self.ui;
-        let device_damage = if damage.is_empty() {
-            Rect::ZERO
-        } else {
-            Rect::new(
-                damage.x * scale,
-                damage.y * scale,
-                damage.width * scale,
-                damage.height * scale,
-            )
-            .round_out(1.0)
-        };
-        let result = ctx.render(w, px, device_damage, |canvas, repaint| {
-            canvas.save();
-            let logical_clip = repaint.map(|r| {
-                canvas.clip_rect(r.to_sk(), skia_safe::ClipOp::Intersect, false);
-                Rect::new(r.x / scale, r.y / scale, r.width / scale, r.height / scale)
-                    .round_out(scale)
-            });
-            canvas.clear(skia_safe::Color::TRANSPARENT);
-            canvas.scale((scale, scale));
-            ui.paint_window(id, canvas, logical_clip);
-            canvas.restore();
-        });
-        if let Err(e) = result {
-            // A Vulkan that cannot present here (no dmabuf import in the compositor, a lost
-            // surface): fall back to GL for the process, once (never retried in a loop).
-            tracing::warn!("Vulkan frame: {e}: falling back to GL");
-            record_failure("vulkan");
-            let w = s.vkw.take();
-            s.frame_pending = false;
-            s.wants_frame = true;
-            if let Some(w) = w {
-                ctx.destroy_window(w);
-            }
-            self.renderer = Renderer::Gl;
-            return false;
-        }
-        s.frame_pending = true;
-        s.wants_frame = self.ui.is_animating();
-        s.last_frame = Instant::now();
-        true
-    }
-
-    /// Renders with GL; false when GL is unavailable (the caller falls back to shm).
-    fn render_gl(&mut self, id: WindowId, damage: Rect) -> bool {
-        let Some(wl) = self.surface(id).map(|s| s.role.wl_surface().clone()) else {
-            return false;
-        };
-        if self.gl.is_none() {
-            match crate::render::gl::GlContext::new(&self.conn, &wl) {
-                Ok(ctx) => {
-                    tracing::info!("renderer: Skia GL on {}", ctx.renderer());
-                    self.gl = Some(ctx);
-                }
-                Err(e) => {
-                    tracing::warn!("GL unavailable ({e}): rendering in software");
-                    record_failure("gl");
-                    self.renderer = Renderer::Software;
-                    return false;
-                }
-            }
-        }
-        let Some(ctx) = self.gl.as_mut() else {
-            return false;
-        };
-        let Some(s) = self.surfaces.iter_mut().find(|s| s.id == id) else {
-            return false;
-        };
-        let scale = s.scale.max(0.5);
-        let px = (
-            (s.size.width * scale).round().max(1.0) as i32,
-            (s.size.height * scale).round().max(1.0) as i32,
-        );
-        if s.gl.is_none() {
-            match ctx.create_window(&wl, px) {
-                Ok(w) => s.gl = Some(w),
-                Err(e) => {
-                    tracing::warn!("GL window: {e}");
-                    return false;
-                }
-            }
-        }
-        if s.gl.is_none() {
-            return false;
-        }
-        if let Some(vp) = &s.viewport {
-            vp.set_destination(s.size.width.round() as i32, s.size.height.round() as i32);
-        } else {
-            wl.set_buffer_scale(scale.round().max(1.0) as i32);
-        }
-        let device_damage = if damage.is_empty() {
-            Rect::new(0.0, 0.0, px.0 as f32, px.1 as f32)
-        } else {
-            Rect::new(
-                damage.x * scale,
-                damage.y * scale,
-                damage.width * scale,
-                damage.height * scale,
-            )
-            .round_out(1.0)
-        };
-        let regions = self.ui.glass_regions(id);
-        if let Some(s) = self.surfaces.iter_mut().find(|s| s.id == id) {
-            send_glass(s, regions);
-        }
-        let Some(ctx) = self.gl.as_mut() else {
-            return false;
-        };
-        let Some(s) = self.surfaces.iter_mut().find(|s| s.id == id) else {
-            return false;
-        };
-        let Some(glw) = s.gl.as_mut() else {
-            return false;
-        };
-        wl.frame(&self.qh, wl.clone());
-        let ui = &self.ui;
-        let result = ctx.render(glw, px, device_damage, |canvas, repaint| {
-            canvas.save();
-            let logical_clip = repaint.map(|r| {
-                canvas.clip_rect(r.to_sk(), skia_safe::ClipOp::Intersect, false);
-                Rect::new(r.x / scale, r.y / scale, r.width / scale, r.height / scale)
-                    .round_out(scale)
-            });
-            canvas.clear(skia_safe::Color::TRANSPARENT);
-            canvas.scale((scale, scale));
-            ui.paint_window(id, canvas, logical_clip);
-            canvas.restore();
-        });
-        if let Err(e) = result {
-            tracing::warn!("GL frame: {e}");
-        }
-        s.frame_pending = true;
-        s.wants_frame = self.ui.is_animating();
-        s.last_frame = Instant::now();
-        true
     }
 
     fn send_menu_bar(&mut self) {

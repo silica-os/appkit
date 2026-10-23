@@ -3,8 +3,8 @@
 
 mod common;
 
-use common::alert_view as build;
 use appkit_test::{KitMaster, Scene, Tolerance};
+use common::alert_view as build;
 
 /// The solid panel with a big soft shadow, push buttons and fields inside.
 const ALERT: Tolerance = Tolerance {

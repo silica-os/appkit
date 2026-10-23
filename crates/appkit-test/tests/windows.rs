@@ -6,7 +6,6 @@
 
 mod common;
 
-use common::{Fixed, Swatch, alert_view, child, set_id, sidebar_view, text_at, titlebar_view};
 use appkit::amalfi::button::{PushButton, PushVariant};
 use appkit::amalfi::buttons::MenuButton;
 use appkit::amalfi::fields::TextField;
@@ -18,6 +17,7 @@ use appkit::amalfi::windows::{Block, BlockFill, WindowFrame};
 use appkit::core::{Prop, Ui, Value, ViewId};
 use appkit::geom::{Point, Rect, Size};
 use appkit_test::{KitLayer, KitMaster, Scene, Tolerance};
+use common::{Fixed, Swatch, alert_view, child, set_id, sidebar_view, text_at, titlebar_view};
 
 /// Whole windows: glass bars, rounded corners and nested controls.
 const WINDOW: Tolerance = Tolerance {

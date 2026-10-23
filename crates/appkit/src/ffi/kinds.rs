@@ -71,9 +71,7 @@ pub fn make(kind: u32) -> Option<Box<dyn Widget>> {
         AK_KIND_DISCLOSURE => Box::new(Disclosure::new()),
         AK_KIND_DISCLOSURE_GROUP => Box::new(DisclosureGroup::new("")),
         AK_KIND_GROUP_BOX => Box::new(GroupBox::new(None)),
-        AK_KIND_COLOR_WELL => {
-            Box::new(ColorWell::new(crate::color::Color::rgb(0x0e, 0x77, 0xe6)))
-        }
+        AK_KIND_COLOR_WELL => Box::new(ColorWell::new(crate::color::Color::rgb(0x0e, 0x77, 0xe6))),
         AK_KIND_IMAGE_WELL => Box::new(ImageWell::new()),
         AK_KIND_SCROLL_VIEW => Box::new(ScrollView::new()),
         AK_KIND_DIAL => Box::new(Dial::new()),
@@ -98,9 +96,7 @@ pub fn make(kind: u32) -> Option<Box<dyn Widget>> {
             crate::amalfi::statusbar::ItemContent::Glyph(String::new()),
         )),
         AK_KIND_TOOLBAR => Box::new(crate::amalfi::toolbar::Toolbar::default()),
-        AK_KIND_TOOLBAR_GROUP => {
-            Box::new(crate::amalfi::segments::ActionSegments::new(Vec::new()))
-        }
+        AK_KIND_TOOLBAR_GROUP => Box::new(crate::amalfi::segments::ActionSegments::new(Vec::new())),
         AK_KIND_FORM_VALUE => Box::new(crate::amalfi::forms::FormValue { expand: false }),
         AK_KIND_FORM_FOOTER => Box::new(crate::amalfi::forms::FormFooter),
         AK_KIND_BOX_SURFACE => Box::new(crate::amalfi::group_box::BoxSurface::default()),

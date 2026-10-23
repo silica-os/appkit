@@ -381,7 +381,7 @@ impl Widget for CustomView {
         let data = self.data.clone();
         let draw: crate::core::display::CustomDraw = std::rc::Rc::new(move |canvas, rect| {
             canvas.translate((rect.x, rect.y));
-            let c = canvas as *const skia_safe::Canvas as *mut AKCanvas;
+            let c = canvas as *mut crate::render::canvas::Canvas as *mut AKCanvas;
             // SAFETY: the canvas lives for the call; the callback is the caller's.
             unsafe { f(c, rect.width, rect.height, data.user) };
         });
@@ -579,10 +579,7 @@ pub extern "C" fn ak_view_release(view: *mut AKView) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn ak_view_add_child(
-    parent: *mut AKView,
-    child: *mut AKView,
-) -> AKStatus {
+pub extern "C" fn ak_view_add_child(parent: *mut AKView, child: *mut AKView) -> AKStatus {
     ak_view_insert_child(parent, usize::MAX, child)
 }
 
@@ -708,20 +705,12 @@ pub extern "C" fn ak_view_set_string(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn ak_view_set_color(
-    view: *mut AKView,
-    prop: u32,
-    value: AKColor,
-) -> AKStatus {
+pub extern "C" fn ak_view_set_color(view: *mut AKView, prop: u32, value: AKColor) -> AKStatus {
     set_value(view, prop, Value::Color(color_of(value)))
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn ak_view_set_insets(
-    view: *mut AKView,
-    prop: u32,
-    value: AKInsets,
-) -> AKStatus {
+pub extern "C" fn ak_view_set_insets(view: *mut AKView, prop: u32, value: AKInsets) -> AKStatus {
     set_value(
         view,
         prop,
@@ -745,12 +734,7 @@ pub extern "C" fn ak_view_set_size(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn ak_view_set_point(
-    view: *mut AKView,
-    prop: u32,
-    x: f32,
-    y: f32,
-) -> AKStatus {
+pub extern "C" fn ak_view_set_point(view: *mut AKView, prop: u32, x: f32, y: f32) -> AKStatus {
     set_value(view, prop, Value::Point(Point::new(x, y)))
 }
 
@@ -790,11 +774,7 @@ fn get_value(view: *mut AKView, prop: u32) -> Result<Value, AKStatus> {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn ak_view_get_bool(
-    view: *mut AKView,
-    prop: u32,
-    out: *mut u8,
-) -> AKStatus {
+pub extern "C" fn ak_view_get_bool(view: *mut AKView, prop: u32, out: *mut u8) -> AKStatus {
     guard(AK_ERROR_PLATFORM, || {
         if out.is_null() {
             return set_last(AK_ERROR_INVALID_ARGUMENT);
@@ -809,11 +789,7 @@ pub extern "C" fn ak_view_get_bool(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn ak_view_get_int(
-    view: *mut AKView,
-    prop: u32,
-    out: *mut i64,
-) -> AKStatus {
+pub extern "C" fn ak_view_get_int(view: *mut AKView, prop: u32, out: *mut i64) -> AKStatus {
     guard(AK_ERROR_PLATFORM, || {
         if out.is_null() {
             return set_last(AK_ERROR_INVALID_ARGUMENT);
@@ -828,11 +804,7 @@ pub extern "C" fn ak_view_get_int(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn ak_view_get_float(
-    view: *mut AKView,
-    prop: u32,
-    out: *mut f64,
-) -> AKStatus {
+pub extern "C" fn ak_view_get_float(view: *mut AKView, prop: u32, out: *mut f64) -> AKStatus {
     guard(AK_ERROR_PLATFORM, || {
         if out.is_null() {
             return set_last(AK_ERROR_INVALID_ARGUMENT);
@@ -1129,10 +1101,7 @@ pub extern "C" fn ak_view_frame(view: *mut AKView, out: *mut AKRect) -> AKStatus
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn ak_view_find(
-    root: *mut AKView,
-    identifier: *const c_char,
-) -> *mut AKView {
+pub extern "C" fn ak_view_find(root: *mut AKView, identifier: *const c_char) -> *mut AKView {
     guard(std::ptr::null_mut(), || {
         let r = (|| {
             let v = view_id(root)?;
@@ -1260,10 +1229,7 @@ fn with_window(window: *mut AKWindow, f: impl FnOnce(&mut Ui, WindowId)) -> AKSt
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn ak_window_set_title(
-    window: *mut AKWindow,
-    title: *const c_char,
-) -> AKStatus {
+pub extern "C" fn ak_window_set_title(window: *mut AKWindow, title: *const c_char) -> AKStatus {
     guard(AK_ERROR_PLATFORM, || match req_str(title) {
         Ok(t) => with_window(window, |ui, w| ui.set_title(w, t)),
         Err(e) => set_last(e),
@@ -1271,10 +1237,7 @@ pub extern "C" fn ak_window_set_title(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn ak_window_set_content(
-    window: *mut AKWindow,
-    view: *mut AKView,
-) -> AKStatus {
+pub extern "C" fn ak_window_set_content(window: *mut AKWindow, view: *mut AKView) -> AKStatus {
     guard(AK_ERROR_PLATFORM, || match view_id(view) {
         Ok(v) => with_window(window, |ui, w| ui.set_content(w, v)),
         Err(e) => set_last(e),
@@ -1307,11 +1270,7 @@ pub extern "C" fn ak_window_close(window: *mut AKWindow) -> AKStatus {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn ak_window_set_size(
-    window: *mut AKWindow,
-    width: f32,
-    height: f32,
-) -> AKStatus {
+pub extern "C" fn ak_window_set_size(window: *mut AKWindow, width: f32, height: f32) -> AKStatus {
     guard(AK_ERROR_PLATFORM, || {
         with_window(window, |ui, w| {
             let scale = ui.window(w).map(|x| x.scale).unwrap_or(1.0);
@@ -1341,10 +1300,7 @@ pub extern "C" fn ak_window_set_size_limits(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn ak_window_set_appearance(
-    window: *mut AKWindow,
-    appearance: u32,
-) -> AKStatus {
+pub extern "C" fn ak_window_set_appearance(window: *mut AKWindow, appearance: u32) -> AKStatus {
     guard(AK_ERROR_PLATFORM, || {
         let o = match appearance {
             0 => None,
@@ -1369,20 +1325,14 @@ pub extern "C" fn ak_window_set_appearance(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn ak_window_set_toolbar_height(
-    window: *mut AKWindow,
-    height: f32,
-) -> AKStatus {
+pub extern "C" fn ak_window_set_toolbar_height(window: *mut AKWindow, height: f32) -> AKStatus {
     guard(AK_ERROR_PLATFORM, || {
         with_window(window, |ui, w| ui.set_toolbar_height(w, height))
     })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn ak_window_set_keep_on_close_request(
-    window: *mut AKWindow,
-    keep: u8,
-) -> AKStatus {
+pub extern "C" fn ak_window_set_keep_on_close_request(window: *mut AKWindow, keep: u8) -> AKStatus {
     guard(AK_ERROR_PLATFORM, || {
         with_window(window, |ui, w| {
             if let Some(win) = ui.window_mut(w) {
@@ -1404,14 +1354,14 @@ pub extern "C" fn ak_window_snapshot_png(
             return set_last(AK_ERROR_INVALID_ARGUMENT);
         };
         let png = match window_id(window).and_then(|w| with_ui(|ui| ui.snapshot(w, scale))) {
-            Ok(Some(img)) => img.encode(None, skia_safe::EncodedImageFormat::PNG, None),
+            Ok(Some(img)) => img.encode_png(),
             Ok(None) => return set_last(AK_ERROR_NO_SUCH_OBJECT),
             Err(e) => return set_last(e),
         };
         let Some(png) = png else {
             return set_last(AK_ERROR_PLATFORM);
         };
-        let bytes = png.as_bytes();
+        let bytes = png.as_slice();
         // SAFETY: the caller's callback; the bytes live for the call.
         unsafe { f(bytes.as_ptr(), bytes.len(), user) };
         set_last(AK_OK)
@@ -1574,10 +1524,7 @@ mod tests {
         assert!(!win.is_null());
         let col = ak_view_new(AK_KIND_COLUMN);
         let b = ak_view_new(AK_KIND_PUSH_BUTTON);
-        assert_eq!(
-            ak_view_set_string(b, AK_PROP_TITLE, c"OK".as_ptr()),
-            AK_OK
-        );
+        assert_eq!(ak_view_set_string(b, AK_PROP_TITLE, c"OK".as_ptr()), AK_OK);
         assert_eq!(
             ak_view_set_string(b, 9999, c"x".as_ptr()),
             AK_ERROR_UNKNOWN_PROPERTY

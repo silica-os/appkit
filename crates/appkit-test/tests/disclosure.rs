@@ -1,8 +1,6 @@
 //! Kit parity of `Disclosure`: the triangle, the button, the group header and the group.
 
-use appkit::amalfi::disclosure::{
-    Disclosure, DisclosureGroup, DisclosureStyle, disclosure_group,
-};
+use appkit::amalfi::disclosure::{Disclosure, DisclosureGroup, DisclosureStyle, disclosure_group};
 use appkit::amalfi::text::{Text, TextRole};
 use appkit::amalfi::tokens::typography;
 use appkit::geom::Point;

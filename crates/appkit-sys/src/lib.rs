@@ -208,17 +208,11 @@ pub type AKCallback = Option<unsafe extern "C" fn(user: *mut c_void)>;
 pub type AKDestroy = Option<unsafe extern "C" fn(user: *mut c_void)>;
 /// A signal callback.
 pub type AKSignalFn = Option<
-    unsafe extern "C" fn(
-        view: *mut AKView,
-        signal: u32,
-        value: *const AKValue,
-        user: *mut c_void,
-    ),
+    unsafe extern "C" fn(view: *mut AKView, signal: u32, value: *const AKValue, user: *mut c_void),
 >;
 /// A custom view's drawing, in its own coordinates.
-pub type AKDrawFn = Option<
-    unsafe extern "C" fn(canvas: *mut AKCanvas, width: f32, height: f32, user: *mut c_void),
->;
+pub type AKDrawFn =
+    Option<unsafe extern "C" fn(canvas: *mut AKCanvas, width: f32, height: f32, user: *mut c_void)>;
 /// A custom view's size for a proposal (NaN: unspecified, infinity: maximum).
 pub type AKMeasureFn = Option<
     unsafe extern "C" fn(
@@ -230,12 +224,10 @@ pub type AKMeasureFn = Option<
     ),
 >;
 /// A custom view's event handler; returns 1 when it handled the event.
-pub type AKEventFn = Option<
-    unsafe extern "C" fn(view: *mut AKView, event: *const AKEvent, user: *mut c_void) -> u8,
->;
+pub type AKEventFn =
+    Option<unsafe extern "C" fn(view: *mut AKView, event: *const AKEvent, user: *mut c_void) -> u8>;
 /// Receives bytes (a PNG …), borrowed for the call.
-pub type AKBytesFn =
-    Option<unsafe extern "C" fn(data: *const u8, len: usize, user: *mut c_void)>;
+pub type AKBytesFn = Option<unsafe extern "C" fn(data: *const u8, len: usize, user: *mut c_void)>;
 /// A menu item was chosen (id), or a pop-up menu ended (0: dismissed).
 pub type AKMenuFn = Option<unsafe extern "C" fn(id: u32, user: *mut c_void)>;
 /// Makes the view of row `index` of a list (a new reference the list takes over), or null.

@@ -1,6 +1,7 @@
 //! The platform: the Wayland client and the input mapping.
 
 pub mod a11y;
+mod apps;
 pub mod keys;
 pub mod registry;
 pub mod wayland;

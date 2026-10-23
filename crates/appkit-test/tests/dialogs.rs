@@ -3,13 +3,13 @@
 
 mod common;
 
-use common::{build_footer, build_row, build_section, child, sidebar_view, text_at};
 use appkit::amalfi::button::{PushButton, PushVariant};
 use appkit::amalfi::dialogs::{Dialog, browser, dialog, dialog_footer};
 use appkit::amalfi::text::{Text, TextRole};
 use appkit::amalfi::tokens::typography;
 use appkit::core::{Prop, Ui, Value, ViewId};
 use appkit_test::{KitLayer, KitMaster, Scene, Tolerance};
+use common::{build_footer, build_row, build_section, child, sidebar_view, text_at};
 
 /// Raised surfaces with controls and rows inside.
 const DIALOG: Tolerance = Tolerance {

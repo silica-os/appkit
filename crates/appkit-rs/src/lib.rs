@@ -18,9 +18,9 @@ use std::ffi::{CString, c_char, c_void};
 use std::ptr::NonNull;
 use std::rc::Rc;
 
-pub use ids::{Kind, Prop, Signal};
 use appkit_sys as sys;
 use appkit_sys::functions as f;
+pub use ids::{Kind, Prop, Signal};
 
 /// An error of the API (the ABI's status).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -622,9 +622,7 @@ impl View {
             .collect::<Result<_>>()?;
         let ptrs: Vec<*const c_char> = owned.iter().map(|c| c.as_ptr()).collect();
         // SAFETY: `ptrs` holds `len` strings alive for the call.
-        check(unsafe {
-            f::ak_view_set_strings(self.as_ptr(), prop.0, ptrs.as_ptr(), ptrs.len())
-        })
+        check(unsafe { f::ak_view_set_strings(self.as_ptr(), prop.0, ptrs.as_ptr(), ptrs.len()) })
     }
 
     /// Sets a list of integers (selected rows, column widths, expanded nodes).
@@ -1308,9 +1306,7 @@ impl Window {
     /// A popup anchored to a rectangle of `parent`.
     pub fn popup(parent: Window, anchor: Rect, width: f32, height: f32) -> Result<Window> {
         // SAFETY: a handle and plain values.
-        Window::from(unsafe {
-            f::ak_window_new_popup(parent.ptr.as_ptr(), anchor, width, height)
-        })
+        Window::from(unsafe { f::ak_window_new_popup(parent.ptr.as_ptr(), anchor, width, height) })
     }
 
     /// Shows `alert` (made by [`View::alert`]) as a sheet of `parent`, or in a panel of

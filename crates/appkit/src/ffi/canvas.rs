@@ -2,34 +2,31 @@
 
 use std::ffi::c_char;
 
-use skia_safe::{Canvas, ClipOp, Font, Paint, PaintStyle};
 use appkit_sys::*;
 
 use super::{color_of, guard, opt_str, req_str, set_last};
-use crate::text::fonts::{Fonts, UI_FAMILY};
+use crate::geom::Rect;
+use crate::render::canvas::{Brush, Canvas, StrokeStyle};
+use crate::render::path::PathBuilder;
+use crate::text::fonts::UI_FAMILY;
+use crate::text::{TextLayout, TextStyle};
 
-fn canvas<'a>(c: *mut AKCanvas) -> Option<&'a Canvas> {
+fn canvas<'a>(c: *mut AKCanvas) -> Option<&'a mut Canvas> {
     if c.is_null() {
         None
     } else {
-        // SAFETY: the pointer is the `&Canvas` handed to the draw callback, valid during it.
-        Some(unsafe { &*(c as *const Canvas) })
+        // SAFETY: the pointer is the `&mut Canvas` handed to the draw callback, valid and
+        // not otherwise borrowed during it.
+        Some(unsafe { &mut *(c as *mut Canvas) })
     }
 }
 
-fn paint(color: AKColor, stroke: Option<f32>) -> Paint {
-    let mut p = Paint::default();
-    p.set_anti_alias(true);
-    p.set_color(color_of(color).to_sk());
-    if let Some(w) = stroke {
-        p.set_style(PaintStyle::Stroke);
-        p.set_stroke_width(w);
-    }
-    p
+fn rect(r: AKRect) -> Rect {
+    Rect::new(r.x, r.y, r.width.max(0.0), r.height.max(0.0))
 }
 
-fn sk(r: AKRect) -> skia_safe::Rect {
-    skia_safe::Rect::from_xywh(r.x, r.y, r.width.max(0.0), r.height.max(0.0))
+fn brush(color: AKColor) -> Brush {
+    Brush::Solid(color_of(color))
 }
 
 #[unsafe(no_mangle)]
@@ -45,7 +42,7 @@ pub extern "C" fn ak_canvas_save(c: *mut AKCanvas) {
 pub extern "C" fn ak_canvas_restore(c: *mut AKCanvas) {
     guard((), || {
         if let Some(c) = canvas(c)
-            && c.save_count() > 1
+            && c.save_count() > 0
         {
             c.restore();
         }
@@ -62,19 +59,19 @@ pub extern "C" fn ak_canvas_translate(c: *mut AKCanvas, x: f32, y: f32) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn ak_canvas_clip_rect(c: *mut AKCanvas, rect: AKRect) {
+pub extern "C" fn ak_canvas_clip_rect(c: *mut AKCanvas, r: AKRect) {
     guard((), || {
         if let Some(c) = canvas(c) {
-            c.clip_rect(sk(rect), ClipOp::Intersect, true);
+            c.clip_rect(rect(r));
         }
     });
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn ak_canvas_fill_rect(c: *mut AKCanvas, rect: AKRect, color: AKColor) {
+pub extern "C" fn ak_canvas_fill_rect(c: *mut AKCanvas, r: AKRect, color: AKColor) {
     guard((), || {
         if let Some(c) = canvas(c) {
-            c.draw_rect(sk(rect), &paint(color, None));
+            c.fill_rect(rect(r), color_of(color));
         }
     });
 }
@@ -82,44 +79,36 @@ pub extern "C" fn ak_canvas_fill_rect(c: *mut AKCanvas, rect: AKRect, color: AKC
 #[unsafe(no_mangle)]
 pub extern "C" fn ak_canvas_fill_rounded_rect(
     c: *mut AKCanvas,
-    rect: AKRect,
+    r: AKRect,
     radius: f32,
     color: AKColor,
 ) {
     guard((), || {
         if let Some(c) = canvas(c) {
-            let r = crate::geom::Rect::new(rect.x, rect.y, rect.width, rect.height);
-            c.draw_path(
-                &crate::shape::Shape::rounded(radius).path(r),
-                &paint(color, None),
-            );
+            let path = crate::shape::Shape::rounded(radius).path(rect(r));
+            c.fill_path(&path, &brush(color), 1.0);
         }
     });
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn ak_canvas_stroke_rect(
-    c: *mut AKCanvas,
-    rect: AKRect,
-    width: f32,
-    color: AKColor,
-) {
+pub extern "C" fn ak_canvas_stroke_rect(c: *mut AKCanvas, r: AKRect, width: f32, color: AKColor) {
     guard((), || {
         if let Some(c) = canvas(c) {
-            c.draw_rect(sk(rect), &paint(color, Some(width)));
+            let mut b = PathBuilder::new();
+            b.add_rect(rect(r));
+            c.stroke_path(&b.detach(), &brush(color), 1.0, &StrokeStyle::new(width));
         }
     });
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn ak_canvas_fill_ellipse(
-    c: *mut AKCanvas,
-    rect: AKRect,
-    color: AKColor,
-) {
+pub extern "C" fn ak_canvas_fill_ellipse(c: *mut AKCanvas, r: AKRect, color: AKColor) {
     guard((), || {
         if let Some(c) = canvas(c) {
-            c.draw_oval(sk(rect), &paint(color, None));
+            let mut b = PathBuilder::new();
+            b.add_oval(rect(r));
+            c.fill_path(&b.detach(), &brush(color), 1.0);
         }
     });
 }
@@ -136,22 +125,23 @@ pub extern "C" fn ak_canvas_line(
 ) {
     guard((), || {
         if let Some(c) = canvas(c) {
-            c.draw_line((x0, y0), (x1, y1), &paint(color, Some(width)));
+            let mut b = PathBuilder::new();
+            b.move_to((x0, y0)).line_to((x1, y1));
+            c.stroke_path(&b.detach(), &brush(color), 1.0, &StrokeStyle::new(width));
         }
     });
 }
 
-fn font(family: Option<&str>, size: f32, weight: u32) -> Option<Font> {
-    let tf = Fonts::with(|f| {
-        f.typeface(
-            family.unwrap_or(UI_FAMILY),
-            u16::try_from(weight).unwrap_or(400),
-            false,
-        )
-    })?;
-    let mut font = Font::from_typeface(tf, size.max(0.0));
-    font.set_subpixel(true);
-    Some(font)
+fn layout(text: &str, family: Option<&str>, size: f32, weight: u32, color: AKColor) -> TextLayout {
+    let style = TextStyle {
+        family: family.unwrap_or(UI_FAMILY).to_string(),
+        size: size.max(0.0),
+        weight: u16::try_from(weight).unwrap_or(400),
+        line_height: None,
+        color: color_of(color),
+        ..TextStyle::default()
+    };
+    TextLayout::plain(text, &style, f32::INFINITY)
 }
 
 #[unsafe(no_mangle)]
@@ -169,18 +159,15 @@ pub extern "C" fn ak_canvas_text(
         let (Some(c), Ok(text), Ok(family)) = (canvas(c), req_str(text), opt_str(family)) else {
             return;
         };
-        if let Some(f) = font(family, size, weight) {
-            // (x, y) is the top left of the text box; the baseline is the ascent below it.
-            let (_, m) = f.metrics();
-            c.draw_str(text, (x, y - m.ascent), &f, &paint(color, None));
-        }
+        // (x, y) is the top left of the text box.
+        layout(text, family, size, weight, color).paint(c, crate::geom::Point::new(x, y));
     });
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn ak_canvas_glyph(
     c: *mut AKCanvas,
-    rect: AKRect,
+    r: AKRect,
     symbol: *const c_char,
     weight: u32,
     color: AKColor,
@@ -190,12 +177,11 @@ pub extern "C" fn ak_canvas_glyph(
             return;
         };
         if let Some(ch) = crate::text::fonts::symbols::codepoint(name) {
-            let r = crate::geom::Rect::new(rect.x, rect.y, rect.width, rect.height);
             crate::core::display::paint_glyph(
                 c,
-                r,
+                rect(r),
                 ch,
-                rect.height,
+                r.height,
                 u16::try_from(weight).unwrap_or(400),
                 color_of(color),
             );
@@ -216,18 +202,15 @@ pub extern "C" fn ak_measure_text(
         let (Ok(text), Ok(family)) = (req_str(text), opt_str(family)) else {
             return set_last(AK_ERROR_INVALID_ARGUMENT);
         };
-        let Some(f) = font(family, size, weight) else {
-            return set_last(AK_ERROR_PLATFORM);
-        };
-        let (w, _) = f.measure_str(text, None);
-        let (_, m) = f.metrics();
+        let l = layout(text, family, size, weight, AKColor::default());
+        let s = l.size();
         if !out_width.is_null() {
             // SAFETY: the caller's out pointer, checked non-null.
-            unsafe { *out_width = w };
+            unsafe { *out_width = s.width };
         }
         if !out_height.is_null() {
             // SAFETY: as above.
-            unsafe { *out_height = m.descent - m.ascent };
+            unsafe { *out_height = s.height };
         }
         set_last(AK_OK)
     })

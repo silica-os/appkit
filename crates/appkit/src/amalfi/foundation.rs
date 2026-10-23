@@ -123,6 +123,9 @@ pub fn control_shadow(theme: &Theme) -> Shadow {
 pub struct Label {
     key: Option<(String, TextStyle, Align, u32, Option<usize>, u64)>,
     layout: Option<Rc<TextLayout>>,
+    /// The last `width` measurement, kept apart so that measuring and laying out in turn
+    /// do not evict each other.
+    measured: Option<(String, TextStyle, u64, f32)>,
 }
 
 impl Label {
@@ -166,8 +169,27 @@ impl Label {
 
     /// The width of `text` in `style` on one line.
     pub fn width(&mut self, text: &str, style: &TextStyle) -> f32 {
-        self.layout(text, style, Align::Start, f32::INFINITY, Some(1))
-            .max_intrinsic_width()
+        let generation = crate::text::fonts::generation();
+        if let Some((t, s, g, w)) = &self.measured
+            && t == text
+            && s == style
+            && *g == generation
+        {
+            return *w;
+        }
+        let w = TextLayout::new(
+            &AttributedString::plain(text),
+            style,
+            &ParagraphOptions {
+                align: Align::Start,
+                max_lines: Some(1),
+                ..ParagraphOptions::default()
+            },
+            f32::INFINITY,
+        )
+        .max_intrinsic_width();
+        self.measured = Some((text.to_string(), style.clone(), generation, w));
+        w
     }
 }
 

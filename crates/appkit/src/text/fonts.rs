@@ -3,12 +3,14 @@
 //! the fallback (Noto Color Emoji, CJK).
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
 
-use skia_safe::ConditionallySend;
-use skia_safe::textlayout::{FontCollection, TypefaceFontProvider};
-use skia_safe::{Data, FontMgr, FontStyle, Typeface, font_style};
+use parley::fontique::{Blob, Collection, CollectionOptions, SourceCache};
+use parley::{FontContext, FontData, LayoutContext};
+
+use crate::color::Color;
 
 /// The bundled faces: (family, CSS weight, bytes).
 static BUNDLED: &[(&str, u16, &[u8])] = &[
@@ -55,21 +57,33 @@ pub const MONO_FAMILY: &str = "JetBrains Mono";
 
 /// The font system of the thread (all UI runs on the main thread).
 pub struct Fonts {
-    collection: FontCollection,
-    bundled: Vec<(String, u16, Typeface)>,
-    /// The system font manager (fontconfig): made on a thread of its own, since scanning
-    /// the fonts can take a second (a cold cache) and the first frame needs only the
-    /// bundled faces.
+    /// Families and faces (parley's font context).
+    pub fcx: FontContext,
+    /// Scratch space of the layout builder.
+    pub lcx: LayoutContext<Color>,
+    bundled: Vec<(String, u16, FontData)>,
+    /// The system fonts (fontconfig): scanned on a thread of their own, since a cold cache
+    /// can take a second and the first frame needs only the bundled faces.
     system: System,
+    /// Symbol glyphs: (codepoint, weight) → (glyph id, advance per em).
+    symbols: HashMap<(char, u16), Option<(u32, f32)>>,
+}
+
+impl std::fmt::Debug for Fonts {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Fonts")
+            .field("bundled", &self.bundled.len())
+            .finish()
+    }
 }
 
 enum System {
     /// Not wanted (deterministic rendering).
     Off,
     /// Being made.
-    Loading(Receiver<skia_safe::Sendable<FontMgr>>),
-    /// Ready (and installed as the collection's fallback).
-    Ready(FontMgr),
+    Loading(Receiver<Collection>),
+    /// Installed.
+    Ready,
     /// The loader failed: no system fonts.
     Failed,
 }
@@ -86,84 +100,101 @@ thread_local! {
     static FONTS: RefCell<Option<Fonts>> = const { RefCell::new(None) };
 }
 
+fn register_bundled(collection: &mut Collection) -> Vec<(String, u16, FontData)> {
+    let mut out = Vec::new();
+    for (family, weight, bytes) in BUNDLED {
+        let blob = Blob::new(std::sync::Arc::new(*bytes));
+        let faces = collection.register_fonts(blob.clone(), None);
+        if faces.is_empty() {
+            tracing::error!("bundled font {family} {weight} failed to load");
+            continue;
+        }
+        out.push(((*family).to_string(), *weight, FontData::new(blob, 0)));
+    }
+    out
+}
+
 impl Fonts {
     fn new(system_fallback: bool) -> Fonts {
         // The bundled faces load without scanning the system's fonts.
-        let loader = FontMgr::custom_empty().unwrap_or_else(FontMgr::empty);
-        let mut provider = TypefaceFontProvider::new();
-        let mut bundled = Vec::new();
-        for (family, weight, bytes) in BUNDLED {
-            match loader.new_from_data(Data::new_copy(bytes), None) {
-                Some(tf) => {
-                    provider.register_typeface(tf.clone(), Some(*family));
-                    bundled.push(((*family).to_string(), *weight, tf));
-                }
-                None => tracing::error!("bundled font {family} {weight} failed to load"),
-            }
-        }
-        let mut collection = FontCollection::new();
-        let provider: FontMgr = provider.into();
-        collection.set_asset_font_manager(Some(provider));
-        collection.set_dynamic_font_manager(None);
-        collection.enable_font_fallback();
+        let mut collection = Collection::new(CollectionOptions {
+            shared: false,
+            system_fonts: false,
+        });
+        let bundled = register_bundled(&mut collection);
         let system = if system_fallback {
             let (tx, rx) = std::sync::mpsc::channel();
             let spawned = std::thread::Builder::new()
                 .name("appkit-fonts".into())
                 .spawn(move || {
-                    let mgr = FontMgr::new();
-                    // Touch the configuration so the scan happens here.
-                    let _ = mgr.count_families();
-                    if let Ok(m) = mgr.wrap_send() {
-                        let _ = tx.send(m);
+                    let mut c = Collection::new(CollectionOptions {
+                        shared: false,
+                        system_fonts: true,
+                    });
+                    // Touch the families so that the scan happens here, then lay out a line
+                    // in each bundled family: the first lookups in a system collection are
+                    // slow, and would land on the first frame that lays text out again.
+                    let _ = c.family_names().count();
+                    let _ = register_bundled(&mut c);
+                    let mut fcx = FontContext {
+                        collection: c,
+                        source_cache: SourceCache::default(),
+                    };
+                    let mut lcx: LayoutContext<Color> = LayoutContext::new();
+                    for (family, weight, _) in BUNDLED {
+                        let mut b = lcx.ranged_builder(&mut fcx, "Ag Button", 1.0, false);
+                        b.push_default(parley::StyleProperty::FontFamily(
+                            parley::FontFamily::Source(
+                                format!("\"{family}\", \"{UI_FAMILY}\"").into(),
+                            ),
+                        ));
+                        b.push_default(parley::StyleProperty::FontWeight(parley::FontWeight::new(
+                            f32::from(*weight),
+                        )));
+                        let mut l = b.build("Ag Button");
+                        l.break_all_lines(None);
                     }
+                    let _ = tx.send(fcx.collection);
                 });
             match spawned {
                 Ok(_) => System::Loading(rx),
-                Err(_) => System::Ready(FontMgr::new()),
+                Err(_) => System::Failed,
             }
         } else {
             System::Off
         };
         let mut f = Fonts {
-            collection,
+            fcx: FontContext {
+                collection,
+                source_cache: SourceCache::default(),
+            },
+            lcx: LayoutContext::new(),
             bundled,
             system,
+            symbols: HashMap::new(),
         };
         f.install_system();
         f
     }
 
-    /// The system font manager when it is ready (`wait`: block until it is).
-    fn system(&mut self, wait: bool) -> Option<FontMgr> {
-        if let System::Loading(rx) = &self.system {
-            let got = if wait {
-                rx.recv().map_err(|_| TryRecvError::Disconnected)
-            } else {
-                rx.try_recv()
-            };
-            match got {
-                Ok(m) => self.system = System::Ready(m.into_inner()),
-                Err(TryRecvError::Empty) => return None,
-                Err(TryRecvError::Disconnected) => self.system = System::Failed,
-            }
-            if let System::Ready(m) = &self.system {
-                self.collection.set_dynamic_font_manager(Some(m.clone()));
-                self.collection.clear_caches();
-                GENERATION.fetch_add(1, Ordering::Relaxed);
-            }
-        }
-        match &self.system {
-            System::Ready(m) => Some(m.clone()),
-            _ => None,
-        }
-    }
-
     /// Installs the system fonts if they finished loading; returns whether they just did.
     pub fn install_system(&mut self) -> bool {
-        let before = generation();
-        let _ = self.system(false);
-        generation() != before
+        let System::Loading(rx) = &self.system else {
+            return false;
+        };
+        match rx.try_recv() {
+            Ok(c) => {
+                self.fcx.collection = c;
+                self.system = System::Ready;
+                GENERATION.fetch_add(1, Ordering::Relaxed);
+                true
+            }
+            Err(TryRecvError::Empty) => false,
+            Err(TryRecvError::Disconnected) => {
+                self.system = System::Failed;
+                false
+            }
+        }
     }
 
     /// Runs `f` with the thread's font system, creating it on first use.
@@ -177,42 +208,44 @@ impl Fonts {
         })
     }
 
-    /// The paragraph font collection.
-    pub fn collection(&self) -> &FontCollection {
-        &self.collection
-    }
-
     /// A bundled face of `family` closest to `weight`.
-    pub fn bundled(&self, family: &str, weight: u16) -> Option<Typeface> {
+    pub fn bundled(&self, family: &str, weight: u16) -> Option<FontData> {
         self.bundled
             .iter()
             .filter(|(f, _, _)| f == family)
             .min_by_key(|(_, w, _)| (i32::from(*w) - i32::from(weight)).abs())
-            .map(|(_, _, tf)| tf.clone())
+            .map(|(_, _, d)| d.clone())
     }
 
-    /// The typeface for `family` at `weight`: bundled, else from fontconfig, else Inter.
-    pub fn typeface(&mut self, family: &str, weight: u16, italic: bool) -> Option<Typeface> {
-        if let Some(tf) = self.bundled(family, weight) {
-            return Some(tf);
+    /// The glyph of a symbol and its advance per em, from the bundled Silica Symbols face
+    /// closest to `weight`.
+    pub fn symbol_glyph(&mut self, ch: char, weight: u16) -> Option<(FontData, u32, f32)> {
+        let font = self.bundled(SYMBOLS_FAMILY, weight)?;
+        if let Some(hit) = self.symbols.get(&(ch, weight)) {
+            return hit.map(|(id, adv)| (font, id, adv));
         }
-        let slant = if italic {
-            font_style::Slant::Italic
-        } else {
-            font_style::Slant::Upright
-        };
-        let style = FontStyle::new(
-            font_style::Weight::from(i32::from(weight)),
-            font_style::Width::NORMAL,
-            slant,
-        );
-        if let Some(tf) = self
-            .system(true)
-            .and_then(|m| m.match_family_style(family, style))
-        {
-            return Some(tf);
-        }
-        self.bundled(UI_FAMILY, weight)
+        let mut buf = [0u8; 4];
+        let s: &str = ch.encode_utf8(&mut buf);
+        let mut b = self.lcx.ranged_builder(&mut self.fcx, s, 1.0, false);
+        b.push_default(parley::StyleProperty::FontFamily(
+            parley::FontFamily::named(SYMBOLS_FAMILY),
+        ));
+        b.push_default(parley::StyleProperty::FontSize(100.0));
+        b.push_default(parley::StyleProperty::FontWeight(parley::FontWeight::new(
+            f32::from(weight),
+        )));
+        let mut layout: parley::Layout<Color> = b.build(s);
+        layout.break_all_lines(None);
+        let found = layout.lines().next().and_then(|line| {
+            line.items().find_map(|item| match item {
+                parley::PositionedLayoutItem::GlyphRun(run) => {
+                    run.glyphs().next().map(|g| (g.id, g.advance / 100.0))
+                }
+                parley::PositionedLayoutItem::InlineBox(_) => None,
+            })
+        });
+        self.symbols.insert((ch, weight), found);
+        found.map(|(id, adv)| (font, id, adv))
     }
 }
 
@@ -234,6 +267,26 @@ pub mod symbols {
             .and_then(|i| SYMBOLS.get(i))
             .and_then(|(_, cp)| char::from_u32(*cp))
     }
+
+    /// Paints one symbol: font size `size`, centred horizontally in `rect`, its em box
+    /// (ascender = em, descender 0) filling the box vertically.
+    pub fn paint(
+        canvas: &mut crate::render::canvas::Canvas,
+        rect: crate::geom::Rect,
+        ch: char,
+        size: f32,
+        weight: u16,
+        color: crate::color::Color,
+    ) {
+        let Some((font, id, adv)) = super::Fonts::with(|f| f.symbol_glyph(ch, weight)) else {
+            return;
+        };
+        let x = rect.x + (rect.width - adv * size) / 2.0;
+        // Ascender = em: the baseline is the box's bottom when the box is the font size.
+        let y = rect.y + (rect.height + size) / 2.0;
+        let glyphs = std::iter::once(vello_cpu::Glyph { id, x, y });
+        canvas.fill_glyphs(&font, size, &[], glyphs, color);
+    }
 }
 
 #[cfg(test)]
@@ -246,7 +299,11 @@ mod tests {
             assert!(f.bundled("Inter", 400).is_some());
             assert!(f.bundled("Inter", 650).is_some());
             assert!(f.bundled("Silica Symbols", 400).is_some());
-            assert!(f.typeface("No Such Family", 400, false).is_some());
+            let ch = symbols::codepoint("chevron-down").unwrap();
+            assert!(
+                f.symbol_glyph(ch, 400)
+                    .is_some_and(|(_, id, adv)| id > 0 && adv > 0.0)
+            );
         });
         assert!(symbols::codepoint("chevron-down").is_some());
         assert!(symbols::codepoint("no-such-symbol").is_none());

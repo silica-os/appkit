@@ -110,10 +110,7 @@ pub extern "C" fn ak_alert_new(
 
 /// Adds an accessory view (a suppression checkbox, a field) to an alert, above its buttons.
 #[unsafe(no_mangle)]
-pub extern "C" fn ak_alert_add_accessory(
-    alert: *mut AKView,
-    view: *mut AKView,
-) -> AKStatus {
+pub extern "C" fn ak_alert_add_accessory(alert: *mut AKView, view: *mut AKView) -> AKStatus {
     guard(AK_ERROR_PLATFORM, || {
         let r = (|| {
             let a = view_id(alert)?;
@@ -337,10 +334,7 @@ pub extern "C" fn ak_menu_view_new(
 /// widths, sort, expanded nodes, split positions, selected tabs) are restored now and kept
 /// when it closes or the app quits.
 #[unsafe(no_mangle)]
-pub extern "C" fn ak_window_set_autosave(
-    window: *mut AKWindow,
-    name: *const c_char,
-) -> AKStatus {
+pub extern "C" fn ak_window_set_autosave(window: *mut AKWindow, name: *const c_char) -> AKStatus {
     guard(AK_ERROR_PLATFORM, || {
         let r = (|| {
             let w = window_id(window)?;

@@ -12,11 +12,15 @@ repository = "https://github.com/silica-os/appkit"
 rust-version = "1.99"
 
 [workspace.dependencies]
-skia-safe = { version = "0.153", default-features = false, features = ["binary-cache", "embed-icudtl", "gl", "egl", "vulkan", "wayland", "x11", "textlayout", "svg", "webp", "jpeg", "pdf", "skottie"] }
+vello_cpu = { version = "0.3", default-features = false, features = ["std", "text", "png", "u8_pipeline"] }
+parley = { version = "0.12", default-features = false, features = ["std", "system"] }
+fontique = { version = "0.12", default-features = false, features = ["std", "system", "fontconfig-dlopen", "bytemuck"] }
+wgpu = { version = "30", default-features = false, features = ["vulkan", "gles", "wgsl", "std"] }
+png = "0.18"
 
 [workspace.lints.rust]
-# "deny" and not "forbid": the FFI surface, the Vulkan and EGL backends re-enable it, only
-# there, each block with a SAFETY comment.
+# "deny" and not "forbid": the FFI surface and the GPU surface re-enable it, only there, each
+# block with a SAFETY comment.
 unsafe_code = "deny"
 
 # Never crash. They are allowed in tests (clippy.toml).

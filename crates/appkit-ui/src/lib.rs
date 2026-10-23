@@ -39,13 +39,13 @@ use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
+pub use appkit_rs as kit;
+pub use appkit_rs::Column;
 pub use element::{
     AlertSpec, Animation, Component, Element, Handler, IntoChildren, Key, MenuEntry, PValue,
     Transition, button, collection, column, component, custom, for_each, grid, group, host, label,
     list, outline, overlay, row, spacer, symbol, table, tabs, text_view, view,
 };
-pub use appkit_rs as kit;
-pub use appkit_rs::Column;
 
 /// Everything an app needs.
 pub mod prelude {

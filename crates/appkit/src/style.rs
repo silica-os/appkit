@@ -1,4 +1,4 @@
-//! Layer styles as the Amalfi kit defines them, and their painting on a Skia canvas.
+//! Layer styles as the Amalfi kit defines them, and their painting on a canvas.
 //!
 //! A style is what a kit layer carries: fills, borders, drop shadows, inner shadows and
 //! background or glass blurs. Painting follows the kit (and silica_ui's foundation):
@@ -10,17 +10,11 @@
 //! - then inner shadows, clipped to the shape;
 //! - then borders: inside borders are stroked within the outline, outside ones beyond it.
 
-use skia_safe::{
-    BlurStyle, Canvas, ClipOp, ColorMatrix, MaskFilter, Paint as SkPaint, PaintStyle, Path,
-    PathEffect, PathOp, TileMode,
-    canvas::SaveLayerRec,
-    color_filters,
-    gradient::{Colors, Gradient, Interpolation, shaders},
-    image_filters,
-};
-
 use crate::color::Color;
 use crate::geom::{Point, Rect};
+use crate::render::backdrop::Backdrop;
+use crate::render::canvas::{Brush, Canvas, StrokeStyle};
+use crate::render::path::{Path, PathBuilder};
 use crate::shape::Shape;
 
 /// A gradient stop: position 0–1 and colour.
@@ -75,65 +69,31 @@ impl Paint {
         }
     }
 
-    fn apply(&self, paint: &mut SkPaint, rect: Rect, opacity: f32) {
-        let unit =
-            |p: Point| skia_safe::Point::new(rect.x + p.x * rect.width, rect.y + p.y * rect.height);
-        let stops_of = |stops: &[Stop]| -> (Vec<skia_safe::Color4f>, Vec<f32>) {
-            (
-                stops
-                    .iter()
-                    .map(|(_, c)| c.with_opacity(opacity).to_sk4f())
-                    .collect(),
-                stops.iter().map(|(p, _)| p.clamp(0.0, 1.0)).collect(),
-            )
-        };
-        let (colors, positions) = match self {
-            Paint::Solid(c) => {
-                paint.set_color(c.with_opacity(opacity).to_sk());
-                return;
-            }
-            Paint::Linear { stops, .. }
-            | Paint::Radial { stops, .. }
-            | Paint::Angular { stops } => stops_of(stops),
-        };
-        if colors.len() < 2 || colors.len() != positions.len() {
-            let c = colors
-                .first()
-                .copied()
-                .unwrap_or(skia_safe::Color4f::new(0.0, 0.0, 0.0, 0.0));
-            paint.set_color4f(c, None);
-            return;
-        }
-        let gradient = Gradient::new(
-            Colors::new(&colors, Some(&positions), TileMode::Clamp, None),
-            Interpolation::default(),
-        );
-        let shader = match self {
-            Paint::Solid(_) => None,
-            Paint::Linear { from, to, .. } => {
-                shaders::linear_gradient((unit(*from), unit(*to)), &gradient, None)
-            }
-            Paint::Radial { from, to, .. } => {
+    /// The brush of this paint on a layer in `rect`.
+    pub fn brush(&self, rect: Rect) -> Brush {
+        let unit = |p: Point| Point::new(rect.x + p.x * rect.width, rect.y + p.y * rect.height);
+        match self {
+            Paint::Solid(c) => Brush::Solid(*c),
+            Paint::Linear { from, to, stops } => Brush::Linear {
+                from: unit(*from),
+                to: unit(*to),
+                stops: stops.clone(),
+            },
+            Paint::Radial { from, to, stops } => {
                 let center = unit(*from);
-                let radius = (unit(*to) - center).length().max(0.001);
-                shaders::radial_gradient((center, radius), &gradient, None)
-            }
-            Paint::Angular { .. } => {
-                let center = rect.center();
-                // Skia sweeps from 3 o'clock; the kit from 12.
-                let m = skia_safe::Matrix::rotate_deg_pivot(-90.0, (center.x, center.y));
-                shaders::sweep_gradient((center.x, center.y), (0.0, 360.0), &gradient, Some(&m))
-            }
-        };
-        match shader {
-            Some(s) => {
-                paint.set_shader(s);
-            }
-            None => {
-                if let Some(c) = colors.first() {
-                    paint.set_color4f(*c, None);
+                let edge = unit(*to);
+                Brush::Radial {
+                    center,
+                    radius: (edge.x - center.x).hypot(edge.y - center.y).max(0.001),
+                    stops: stops.clone(),
                 }
             }
+            // The kit sweeps from 12 o'clock.
+            Paint::Angular { stops } => Brush::Sweep {
+                center: rect.center(),
+                start: -90.0,
+                stops: stops.clone(),
+            },
         }
     }
 }
@@ -398,7 +358,13 @@ impl Default for PaintOptions {
 }
 
 /// Paints `style` for `shape` in `rect`.
-pub fn paint_style(canvas: &Canvas, rect: Rect, shape: &Shape, style: &Style, opts: PaintOptions) {
+pub fn paint_style(
+    canvas: &mut Canvas,
+    rect: Rect,
+    shape: &Shape,
+    style: &Style,
+    opts: PaintOptions,
+) {
     if rect.is_empty() || style.opacity <= 0.0 {
         return;
     }
@@ -413,10 +379,7 @@ pub fn paint_style(canvas: &Canvas, rect: Rect, shape: &Shape, style: &Style, op
         paint_backdrop(canvas, rect, &outline, blur, opts);
     }
     for fill in &style.fills {
-        let mut p = SkPaint::default();
-        p.set_anti_alias(true);
-        fill.apply(&mut p, rect, opacity);
-        canvas.draw_path(&outline, &p);
+        canvas.fill_path(&outline, &fill.brush(rect), opacity);
     }
     paint_inner_shadows(canvas, rect, shape, &outline, &style.inner_shadows, opacity);
     for border in &style.borders {
@@ -429,88 +392,114 @@ pub fn shadow_sigma(blur: f32) -> f32 {
     blur / 2.0
 }
 
-fn blur_filter(blur: f32) -> Option<MaskFilter> {
-    if blur > 0.0 && blur.is_finite() {
-        MaskFilter::blur(BlurStyle::Normal, shadow_sigma(blur), false)
-    } else {
-        None
+/// The radius a blurred rounded rect stands in for `shape` with: shadows of rectangles,
+/// capsules and rounded rects are drawn analytically, others through a blur layer.
+fn analytic_radius(shape: &Shape, rect: Rect) -> Option<f32> {
+    let limit = rect.width.min(rect.height) / 2.0;
+    match shape {
+        // Continuous corners are not circular: their shadows blur the outline itself.
+        Shape::Rect { corners, smoothing } => {
+            let a = corners.to_array();
+            let r = a[0];
+            ((*smoothing <= 1e-3 || r <= 1e-3) && a.iter().all(|v| (v - r).abs() < 1e-3))
+                .then_some(r.clamp(0.0, limit.max(0.0)))
+        }
+        Shape::Capsule => Some(limit.max(0.0)),
+        Shape::Ellipse if (rect.width - rect.height).abs() < 1e-3 => Some(limit.max(0.0)),
+        _ => None,
     }
 }
 
 /// Drop shadows, outside the shape only.
 pub fn paint_shadows(
-    canvas: &Canvas,
+    canvas: &mut Canvas,
     rect: Rect,
     shape: &Shape,
     outline: &Path,
     shadows: &[Shadow],
     opacity: f32,
 ) {
-    if shadows.is_empty() {
+    if shadows.iter().all(|s| s.color.a == 0) {
         return;
     }
     canvas.save();
-    canvas.clip_path(outline, ClipOp::Difference, true);
+    canvas.clip_out_path(outline);
     for s in shadows {
         if s.color.a == 0 {
             continue;
         }
-        let mut p = SkPaint::default();
-        p.set_anti_alias(true);
-        p.set_color(s.color.with_opacity(opacity).to_sk());
-        if let Some(f) = blur_filter(s.blur) {
-            p.set_mask_filter(f);
-        }
         let r = rect
             .translate(Point::new(s.x, s.y))
             .inflate(s.spread, s.spread);
-        canvas.draw_path(&shape.grown(s.spread).path(r), &p);
+        if r.is_empty() {
+            continue;
+        }
+        let grown = shape.grown(s.spread);
+        let color = s.color.with_opacity(opacity);
+        let sigma = shadow_sigma(s.blur);
+        match analytic_radius(&grown, r) {
+            Some(radius) if sigma > 0.0 => {
+                canvas.fill_blurred_rounded_rect(r, radius, sigma, color, false);
+            }
+            _ if sigma > 0.0 && sigma.is_finite() => {
+                canvas.save();
+                canvas.push_blur(sigma);
+                canvas.fill_path(&grown.path(r), &Brush::Solid(color), 1.0);
+                canvas.restore();
+            }
+            _ => canvas.fill_path(&grown.path(r), &Brush::Solid(color), 1.0),
+        }
     }
     canvas.restore();
 }
 
 /// Inner shadows: the outside of the shape, offset and blurred, seen through the shape.
 pub fn paint_inner_shadows(
-    canvas: &Canvas,
+    canvas: &mut Canvas,
     rect: Rect,
     shape: &Shape,
     outline: &Path,
     shadows: &[Shadow],
     opacity: f32,
 ) {
-    if shadows.is_empty() {
+    if shadows.iter().all(|s| s.color.a == 0) {
         return;
     }
     canvas.save();
-    canvas.clip_path(outline, ClipOp::Intersect, true);
+    canvas.clip_path(outline);
     for s in shadows {
         if s.color.a == 0 {
             continue;
         }
-        let reach = s.blur * 2.0 + s.spread.abs() + s.x.abs() + s.y.abs() + 2.0;
         let hole_rect = rect
             .translate(Point::new(s.x, s.y))
             .inflate(-s.spread, -s.spread);
-        let hole = shape.grown(-s.spread).path(hole_rect);
-        let mut outer = skia_safe::PathBuilder::new();
-        outer.add_rect(rect.inflate(reach, reach).to_sk(), None, None);
-        let outer = outer.detach();
-        let Some(ring) = outer.op(&hole, PathOp::Difference) else {
+        let hole_shape = shape.grown(-s.spread);
+        let color = s.color.with_opacity(opacity);
+        let sigma = shadow_sigma(s.blur);
+        if let Some(radius) = analytic_radius(&hole_shape, hole_rect)
+            && sigma > 0.0
+            && !hole_rect.is_empty()
+        {
+            canvas.fill_blurred_rounded_rect(hole_rect, radius, sigma, color, true);
             continue;
-        };
-        let mut p = SkPaint::default();
-        p.set_anti_alias(true);
-        p.set_color(s.color.with_opacity(opacity).to_sk());
-        if let Some(f) = blur_filter(s.blur) {
-            p.set_mask_filter(f);
         }
-        canvas.draw_path(&ring, &p);
+        let reach = s.blur * 2.0 + s.spread.abs() + s.x.abs() + s.y.abs() + 2.0;
+        let mut outer = PathBuilder::new();
+        outer.add_rect(rect.inflate(reach, reach));
+        let ring = outer.detach().with(&hole_shape.path(hole_rect), true);
+        canvas.save();
+        if sigma > 0.0 && sigma.is_finite() {
+            canvas.push_blur(sigma);
+        }
+        canvas.fill_path(&ring, &Brush::Solid(color), 1.0);
+        canvas.restore();
     }
     canvas.restore();
 }
 
 fn paint_border(
-    canvas: &Canvas,
+    canvas: &mut Canvas,
     rect: Rect,
     shape: &Shape,
     outline: &Path,
@@ -521,33 +510,28 @@ fn paint_border(
     if t <= 0.0 || !t.is_finite() || border.paint.is_invisible() {
         return;
     }
-    let mut p = SkPaint::default();
-    p.set_anti_alias(true);
-    p.set_style(PaintStyle::Stroke);
-    border.paint.apply(&mut p, rect, opacity);
-    if border.round_ends {
-        p.set_stroke_cap(skia_safe::paint::Cap::Round);
-    }
-    if border.dash.len() >= 2
-        && let Some(e) = PathEffect::dash(&border.dash, 0.0)
-    {
-        p.set_path_effect(e);
+    let brush = border.paint.brush(rect);
+    let mut stroke = StrokeStyle::new(t);
+    stroke.round = border.round_ends;
+    if border.dash.len() >= 2 {
+        stroke.dash = border.dash.clone();
     }
     match border.position {
         BorderPosition::Inside if border.dash.is_empty() => {
-            // A stroke of twice the width, clipped to the inside: exact on every outline.
-            p.set_stroke_width(t * 2.0);
-            canvas.save();
-            canvas.clip_path(outline, ClipOp::Intersect, true);
-            canvas.draw_path(outline, &p);
-            canvas.restore();
+            // The ring between the outline and the outline shrunk by the thickness: exact on
+            // every rounded outline, as the kit's inside borders.
+            let inner_rect = rect.inflate(-t, -t);
+            if inner_rect.is_empty() {
+                canvas.fill_path(outline, &brush, opacity);
+                return;
+            }
+            let ring = outline.with(&shape.grown(-t).path(inner_rect), true);
+            canvas.fill_path(&ring, &brush, opacity);
         }
         BorderPosition::Outside if border.dash.is_empty() => {
-            p.set_stroke_width(t * 2.0);
-            canvas.save();
-            canvas.clip_path(outline, ClipOp::Difference, true);
-            canvas.draw_path(outline, &p);
-            canvas.restore();
+            let outer = shape.grown(t).path(rect.inflate(t, t));
+            let ring = outer.with(outline, true);
+            canvas.fill_path(&ring, &brush, opacity);
         }
         position => {
             // Centred, or dashed: stroke a path offset by half the width so that dashes keep
@@ -557,50 +541,24 @@ fn paint_border(
                 BorderPosition::Center => 0.0,
                 BorderPosition::Outside => t / 2.0,
             };
-            p.set_stroke_width(t);
             let path = shape.grown(offset).path(rect.inflate(offset, offset));
-            canvas.draw_path(&path, &p);
+            canvas.stroke_path(&path, &brush, opacity, &stroke);
         }
     }
 }
 
-/// The colour matrix of a backdrop's saturation and brightness.
-pub fn saturation_brightness_matrix(saturation: f32, brightness: f32) -> ColorMatrix {
-    // Rec. 709 luma weights, as Ossido's glass pass.
-    let s = saturation;
-    let (lr, lg, lb) = (0.2126 * (1.0 - s), 0.7152 * (1.0 - s), 0.0722 * (1.0 - s));
-    let k = brightness;
-    ColorMatrix::new(
-        (lr + s) * k,
-        lg * k,
-        lb * k,
-        0.0,
-        0.0,
-        lr * k,
-        (lg + s) * k,
-        lb * k,
-        0.0,
-        0.0,
-        lr * k,
-        lg * k,
-        (lb + s) * k,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        1.0,
-        0.0,
-    )
-}
+pub use crate::render::backdrop::saturation_brightness_matrix;
 
-fn paint_backdrop(canvas: &Canvas, rect: Rect, outline: &Path, blur: &Blur, opts: PaintOptions) {
+fn paint_backdrop(
+    canvas: &mut Canvas,
+    rect: Rect,
+    outline: &Path,
+    blur: &Blur,
+    opts: PaintOptions,
+) {
     if !opts.backdrop {
         if let Some(c) = opts.blur_fallback {
-            let mut p = SkPaint::default();
-            p.set_anti_alias(true);
-            p.set_color(c.to_sk());
-            canvas.draw_path(outline, &p);
+            canvas.fill_path(outline, &Brush::Solid(c), 1.0);
         }
         return;
     }
@@ -612,101 +570,116 @@ fn paint_backdrop(canvas: &Canvas, rect: Rect, outline: &Path, blur: &Blur, opts
         } => (radius, saturation, brightness, None),
         Blur::Glass(g) => (g.radius, g.saturation, g.brightness, Some(g)),
     };
-    let cf = color_filters::matrix(&saturation_brightness_matrix(saturation, brightness), None);
-    let blur_f = if sigma > 0.0 {
-        image_filters::blur((sigma, sigma), TileMode::Clamp, None, None)
-    } else {
-        None
-    };
-    let filter = match (blur_f, glass) {
-        (Some(b), Some(g)) => crate::render::glass::refraction_filter(rect, &g, Some(b))
-            .and_then(|f| image_filters::color_filter(cf.clone(), Some(f), None)),
-        (None, Some(g)) => crate::render::glass::refraction_filter(rect, &g, None)
-            .and_then(|f| image_filters::color_filter(cf.clone(), Some(f), None)),
-        (Some(b), None) => image_filters::color_filter(cf.clone(), Some(b), None),
-        (None, None) => image_filters::color_filter(cf.clone(), None, None),
-    };
-    let Some(filter) = filter else {
-        return;
-    };
-    canvas.save();
-    canvas.clip_path(outline, ClipOp::Intersect, true);
-    let bounds = rect.to_sk();
-    let rec = SaveLayerRec::default().bounds(&bounds).backdrop(&filter);
-    canvas.save_layer(&rec);
-    canvas.restore();
+    let t = canvas.transform();
+    // σ is in points: in device pixels it scales with the canvas.
+    let scale = (t.m[0] * t.m[3] - t.m[1] * t.m[2]).abs().sqrt();
+    canvas.backdrop(
+        outline,
+        Backdrop {
+            sigma: sigma.max(0.0) * scale,
+            saturation,
+            brightness,
+            glass: glass.map(|g| (rect, g)),
+            to_device: t,
+        },
+    );
     if let Some(g) = glass
         && g.specular
     {
-        crate::render::glass::paint_specular(canvas, rect, outline);
+        paint_specular(canvas, rect, outline);
     }
+}
+
+/// The specular highlight on a glass rim: a thin light along the top edge fading down the
+/// sides (1.5 pt, added to what is below), clipped to the outline.
+pub fn paint_specular(canvas: &mut Canvas, rect: Rect, outline: &Path) {
+    let brush = Brush::Linear {
+        from: Point::new(rect.x, rect.y),
+        to: Point::new(rect.x, rect.y + rect.height.min(24.0)),
+        stops: vec![
+            (0.0, Color::rgba(255, 255, 255, 46)),
+            (1.0, Color::TRANSPARENT),
+        ],
+    };
+    canvas.save();
+    canvas.clip_path(outline);
+    canvas.push_additive();
+    canvas.stroke_path(outline, &brush, 1.0, &StrokeStyle::new(1.5));
     canvas.restore();
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use skia_safe::{AlphaType, ColorType, ImageInfo, surfaces};
 
-    fn pixel(surface: &mut skia_safe::Surface, x: i32, y: i32) -> [u8; 4] {
-        let info = ImageInfo::new((1, 1), ColorType::RGBA8888, AlphaType::Unpremul, None);
-        let mut px = [0u8; 4];
-        assert!(surface.read_pixels(&info, &mut px, 4, (x, y)));
-        px
+    fn render(w: u32, h: u32, f: impl FnOnce(&mut Canvas)) -> crate::render::image::Image {
+        let mut c = Canvas::new(w, h);
+        f(&mut c);
+        c.finish()
+    }
+
+    fn pixel(img: &crate::render::image::Image, x: u32, y: u32) -> [u8; 4] {
+        img.pixel(x, y)
     }
 
     #[test]
     fn fill_border_shadow() {
-        let mut s = surfaces::raster_n32_premul((60, 60)).unwrap();
+        let (w, h) = (60, 60);
         let style = Style::fill(Color::rgb(255, 0, 0))
             .with_border(Border::inside(Color::rgb(0, 0, 255), 2.0))
             .with_shadow(Shadow::new(Color::rgba(0, 0, 0, 128), 0.0, 4.0, 4.0));
-        paint_style(
-            s.canvas(),
-            Rect::new(10.0, 10.0, 40.0, 30.0),
-            &Shape::rounded(6.0),
-            &style,
-            PaintOptions::default(),
-        );
-        assert_eq!(pixel(&mut s, 30, 25), [255, 0, 0, 255]);
-        assert_eq!(pixel(&mut s, 30, 10), [0, 0, 255, 255]);
+        let s = render(w, h, |c| {
+            paint_style(
+                c,
+                Rect::new(10.0, 10.0, 40.0, 30.0),
+                &Shape::rounded(6.0),
+                &style,
+                PaintOptions::default(),
+            )
+        });
+        assert_eq!(pixel(&s, 30, 25), [255, 0, 0, 255]);
+        assert_eq!(pixel(&s, 30, 10), [0, 0, 255, 255]);
         // Shadow below the shape, nothing above it.
-        assert!(pixel(&mut s, 30, 42)[3] > 0);
-        assert_eq!(pixel(&mut s, 30, 5)[3], 0);
+        assert!(pixel(&s, 30, 42)[3] > 0);
+        assert_eq!(pixel(&s, 30, 5)[3], 0);
     }
 
     #[test]
     fn inner_shadow_stays_inside() {
-        let mut s = surfaces::raster_n32_premul((40, 40)).unwrap();
+        let (w, h) = (40, 40);
         let style = Style::default().with_inner_shadow(Shadow::new(Color::WHITE, 0.0, 1.0, 1.0));
-        paint_style(
-            s.canvas(),
-            Rect::new(10.0, 10.0, 20.0, 20.0),
-            &Shape::rounded(4.0),
-            &style,
-            PaintOptions::default(),
-        );
-        assert!(pixel(&mut s, 20, 10)[3] > 0);
-        assert_eq!(pixel(&mut s, 20, 8)[3], 0);
-        assert_eq!(pixel(&mut s, 20, 20)[3], 0);
+        let s = render(w, h, |c| {
+            paint_style(
+                c,
+                Rect::new(10.0, 10.0, 20.0, 20.0),
+                &Shape::rounded(4.0),
+                &style,
+                PaintOptions::default(),
+            )
+        });
+        assert!(pixel(&s, 20, 10)[3] > 0);
+        assert_eq!(pixel(&s, 20, 8)[3], 0);
+        assert_eq!(pixel(&s, 20, 20)[3], 0);
     }
 
     #[test]
     fn linear_gradient() {
-        let mut s = surfaces::raster_n32_premul((10, 10)).unwrap();
+        let (w, h) = (10, 10);
         let style = Style::default().with_fill(Paint::Linear {
             from: Point::new(0.5, 0.0),
             to: Point::new(0.5, 1.0),
             stops: vec![(0.0, Color::BLACK), (1.0, Color::WHITE)],
         });
-        paint_style(
-            s.canvas(),
-            Rect::new(0.0, 0.0, 10.0, 10.0),
-            &Shape::RECT,
-            &style,
-            PaintOptions::default(),
-        );
-        assert!(pixel(&mut s, 5, 0)[0] < 30);
-        assert!(pixel(&mut s, 5, 9)[0] > 220);
+        let s = render(w, h, |c| {
+            paint_style(
+                c,
+                Rect::new(0.0, 0.0, 10.0, 10.0),
+                &Shape::RECT,
+                &style,
+                PaintOptions::default(),
+            )
+        });
+        assert!(pixel(&s, 5, 0)[0] < 30);
+        assert!(pixel(&s, 5, 9)[0] > 220);
     }
 }

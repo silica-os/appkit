@@ -3,13 +3,13 @@
 
 mod common;
 
-use common::{Fixed, menu_view};
 use appkit::amalfi::buttons::{
     GradientButtons, HelpButton, IconButton, LinkButton, MenuButton, ToolbarButton,
 };
 use appkit::amalfi::foundation::ControlSize;
 use appkit::core::{Prop, Value};
 use appkit_test::{KitMaster, Scene, Tolerance, center_of};
+use common::{Fixed, menu_view};
 
 /// Small controls: Sketch antialiases the edges of small controls a little wider than Skia.
 const CONTROLS: Tolerance = Tolerance {

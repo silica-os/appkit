@@ -2,10 +2,10 @@
 
 mod common;
 
-use common::text_at;
 use appkit::amalfi::statusbar::{ItemContent, StatusBar, StatusItem, status_bar};
 use appkit::core::{Prop, Ui, Value, ViewId};
 use appkit_test::{KitLayer, KitMaster, Scene, Tolerance};
+use common::text_at;
 
 /// Glass plates and thin glyphs.
 const STATUS: Tolerance = Tolerance {

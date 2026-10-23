@@ -15,9 +15,9 @@ use crate::core::value::{Prop, Value};
 use crate::core::widget::{LayoutCx, PaintCx, PropChange, Widget};
 use crate::core::window::{WindowId, WindowKind};
 use crate::geom::{Corners, Insets, Point, Rect, Size};
+use crate::render::path::{Path, PathBuilder};
 use crate::shape::{AMALFI_SMOOTHING, Shape, smooth_rect_path};
 use crate::style::Style;
-use skia_safe::{Matrix, Path, PathBuilder, PathOp};
 
 /// Fixed measures of the kit.
 pub mod metrics {
@@ -160,10 +160,10 @@ impl PopoverShape {
         };
         let d = metrics::ARROW_DEPTH;
         let base = Point::new(tip.x + angle.sin() * d, tip.y - angle.cos() * d);
-        let mut m = Matrix::translate((base.x, base.y));
-        m.pre_rotate(angle.to_degrees(), None);
-        let arrow = arrow_path().make_transform(&m);
-        body.op(&arrow, PathOp::Union).unwrap_or(body)
+        let m = crate::geom::Transform::rotate(angle)
+            .then(crate::geom::Transform::translate(base.x, base.y));
+        let arrow = arrow_path().transformed(m);
+        body.union(&arrow)
     }
 }
 

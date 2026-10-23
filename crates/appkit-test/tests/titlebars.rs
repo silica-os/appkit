@@ -2,10 +2,10 @@
 
 mod common;
 
-use common::titlebar_view as build;
 use appkit::amalfi::titlebars::Spacer;
 use appkit::geom::Point;
 use appkit_test::{KitMaster, Scene, Tolerance};
+use common::titlebar_view as build;
 
 /// Glass, gradients and rounded corners.
 const TITLEBAR: Tolerance = Tolerance {

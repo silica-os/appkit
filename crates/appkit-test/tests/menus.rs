@@ -2,10 +2,10 @@
 
 mod common;
 
-use common::{Fixed, menu_view, row_view};
 use appkit::amalfi::menus::{Menu, Row};
 use appkit::core::{Prop, Value};
 use appkit_test::{KitMaster, Scene, Tolerance};
+use common::{Fixed, menu_view, row_view};
 
 /// Glass panels and highlighted rows.
 const MENU: Tolerance = Tolerance {

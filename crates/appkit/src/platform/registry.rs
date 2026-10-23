@@ -9,7 +9,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use silica_control::apps;
+use super::apps;
 
 use crate::core::app::AppEvent;
 

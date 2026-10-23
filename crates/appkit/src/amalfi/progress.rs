@@ -1,7 +1,7 @@
 //! Progress indicators (kit `Progress`): the bar (determinate or indeterminate), the
 //! circular indicator and the spinner.
 
-use skia_safe::PathBuilder;
+use crate::render::path::PathBuilder;
 
 use crate::amalfi::foundation::ControlSize;
 use crate::amalfi::tokens;
@@ -234,7 +234,7 @@ impl Widget for ProgressBar {
                 let phase = match self.phase {
                     Some(p) => p,
                     None if self.animates(disabled, reduce_motion(cx)) => {
-                        tokens::motion::EASE_IN_OUT.transform(self.t / metrics::SWEEP)
+                        tokens::motion::FADE_STANDARD_CURVE.transform(self.t / metrics::SWEEP)
                     }
                     None => 0.5,
                 };
@@ -432,10 +432,9 @@ impl Widget for CircularProgress {
             return;
         }
         let mut pb = PathBuilder::new();
-        pb.add_arc(ring.to_sk(), -90.0, v * 360.0);
+        pb.add_arc(ring, -90.0, v * 360.0);
         let path = pb.detach();
-        let t = path.compute_tight_bounds();
-        let r = Rect::new(t.left, t.top, t.width(), t.height());
+        let r = path.bounds();
         cx.rec.layer(
             "Progress",
             r.translate(o),

@@ -153,14 +153,20 @@ impl Color {
         0.2126 * lin(self.r) + 0.7152 * lin(self.g) + 0.0722 * lin(self.b)
     }
 
-    /// The Skia colour.
-    pub fn to_sk(self) -> skia_safe::Color {
-        skia_safe::Color::from_argb(self.a, self.r, self.g, self.b)
+    /// The colour for the rasterizer.
+    pub fn to_peniko(self) -> vello_cpu::peniko::Color {
+        vello_cpu::peniko::Color::from_rgba8(self.r, self.g, self.b, self.a)
     }
 
-    /// The Skia colour as floats.
-    pub fn to_sk4f(self) -> skia_safe::Color4f {
-        skia_safe::Color4f::from(self.to_sk())
+    /// Premultiplied RGBA, 0–1.
+    pub fn premul_f32(self) -> [f32; 4] {
+        let a = f32::from(self.a) / 255.0;
+        [
+            f32::from(self.r) / 255.0 * a,
+            f32::from(self.g) / 255.0 * a,
+            f32::from(self.b) / 255.0 * a,
+            a,
+        ]
     }
 }
 

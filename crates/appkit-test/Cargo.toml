@@ -10,7 +10,6 @@ publish = false
 [dependencies]
 appkit = { path = "../appkit" }
 serde_json = "1"
-skia-safe.workspace = true
 
 [lints]
 workspace = true

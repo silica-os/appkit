@@ -3,13 +3,13 @@
 
 mod common;
 
-use common::{Fixed, menu_view};
 use appkit::amalfi::button::PushButton;
 use appkit::amalfi::fields::{ClearButton, ComboButton, TextField, Token};
 use appkit::amalfi::foundation::ControlSize;
 use appkit::core::event::{Key, KeyEvent, Mods};
 use appkit::core::{Prop, Value};
 use appkit_test::{KitMaster, Scene, Tolerance, center_of};
+use common::{Fixed, menu_view};
 
 /// Fields: a 1 pt border and the soft corner of 7-10 pt radii; the glass of search fields
 /// adds its rim.

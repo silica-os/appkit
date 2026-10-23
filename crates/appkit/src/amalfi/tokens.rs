@@ -92,7 +92,7 @@ mod tests {
         assert_eq!(app_color(false, "App/Calculator/Window"), None);
         assert_eq!(typography::BODY.size, 13.0);
         assert_eq!(typography::BODY.line_height, Some(18.0));
-        assert_eq!(typography::LOCK_CLOCK.features, &["tnum"]);
+        assert_eq!(typography::MONO.family, "JetBrains Mono");
         assert_eq!(control_heights::REGULAR, 28.0);
         assert_eq!(radii::MENU, 12.0);
         assert_eq!(shadows::LIGHT[2].blur, 32.0);

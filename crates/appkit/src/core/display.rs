@@ -1,23 +1,22 @@
 //! Display lists: what a view paints, as named kit-like layers.
 //!
 //! A view records its drawing as a list of items (shapes with a kit style, text, symbol
-//! glyphs, images, clips and transforms). The list is replayed on a Skia canvas to render,
+//! glyphs, images, clips and transforms). The list is replayed on a canvas to render,
 //! and read back as named layers by the kit-parity tests and the inspector: a component's
 //! "Surface", "Label" and "Focus Halo" are the same names as the kit master's layers.
 
 use std::rc::Rc;
 
-use skia_safe::{Canvas, ClipOp, Font, Paint as SkPaint, SamplingOptions};
-
 use crate::color::Color;
 use crate::geom::{Point, Rect, Transform};
+use crate::render::canvas::Canvas;
+use crate::render::image::Image;
 use crate::shape::Shape;
 use crate::style::{PaintOptions, Style, paint_style};
 use crate::text::TextLayout;
-use crate::text::fonts::{Fonts, SYMBOLS_FAMILY};
 
 /// A custom drawing callback (terminal grids, canvases): draws in the view's coordinates.
-pub type CustomDraw = Rc<dyn Fn(&Canvas, Rect)>;
+pub type CustomDraw = Rc<dyn Fn(&mut Canvas, Rect)>;
 
 /// One item of a display list. Rectangles are in the view's own coordinates.
 #[derive(Clone)]
@@ -87,7 +86,7 @@ pub enum DisplayItem {
         /// Destination.
         rect: Rect,
         /// The image.
-        image: skia_safe::Image,
+        image: Image,
         /// Opacity.
         opacity: f32,
     },
@@ -208,8 +207,8 @@ impl DisplayList {
     }
 
     /// Replays the list on `canvas` (in the view's coordinates).
-    pub fn paint(&self, canvas: &Canvas, opts: PaintOptions) {
-        let mut depth = 0usize;
+    pub fn paint(&self, canvas: &mut Canvas, opts: PaintOptions) {
+        let base = canvas.save_count();
         for item in &self.items {
             match item {
                 DisplayItem::Layer {
@@ -236,47 +235,25 @@ impl DisplayList {
                     image,
                     opacity,
                     ..
-                } => {
-                    let mut p = SkPaint::default();
-                    p.set_anti_alias(true);
-                    p.set_alpha_f(opacity.clamp(0.0, 1.0));
-                    canvas.draw_image_rect_with_sampling_options(
-                        image,
-                        None,
-                        rect.to_sk(),
-                        SamplingOptions::new(
-                            skia_safe::FilterMode::Linear,
-                            skia_safe::MipmapMode::Linear,
-                        ),
-                        &p,
-                    );
-                }
+                } => canvas.draw_image(image, *rect, *opacity),
                 DisplayItem::PushClip { rect, shape } => {
                     canvas.save();
                     match shape {
-                        Shape::Rect { corners, .. } if corners.is_zero() => {
-                            canvas.clip_rect(rect.to_sk(), ClipOp::Intersect, true);
-                        }
-                        _ => {
-                            canvas.clip_path(&shape.path(*rect), ClipOp::Intersect, true);
-                        }
+                        Shape::Rect { corners, .. } if corners.is_zero() => canvas.clip_rect(*rect),
+                        _ => canvas.clip_path(&shape.path(*rect)),
                     }
-                    depth += 1;
                 }
                 DisplayItem::PushTransform(t) => {
                     canvas.save();
-                    canvas.concat(&t.to_sk());
-                    depth += 1;
+                    canvas.concat(*t);
                 }
                 DisplayItem::PushOpacity(o) => {
-                    let alpha = (o.clamp(0.0, 1.0) * 255.0).round() as u32;
-                    canvas.save_layer_alpha(None, alpha);
-                    depth += 1;
+                    canvas.save();
+                    canvas.push_opacity(*o);
                 }
                 DisplayItem::Pop => {
-                    if depth > 0 {
+                    if canvas.save_count() > base {
                         canvas.restore();
-                        depth -= 1;
                     }
                 }
                 DisplayItem::Custom { rect, draw, .. } => {
@@ -286,32 +263,21 @@ impl DisplayList {
                 }
             }
         }
-        while depth > 0 {
-            canvas.restore();
-            depth -= 1;
-        }
+        canvas.restore_to(base);
     }
 }
 
 /// Paints one symbol glyph: font size = icon box, the glyph centred in the box
 /// horizontally, its em box (ascender = em, descender 0) filling it vertically.
-pub fn paint_glyph(canvas: &Canvas, rect: Rect, ch: char, size: f32, weight: u16, color: Color) {
-    let Some(tf) = Fonts::with(|f| f.bundled(SYMBOLS_FAMILY, weight)) else {
-        return;
-    };
-    let mut font = Font::from_typeface(tf, size);
-    font.set_subpixel(true);
-    font.set_edging(skia_safe::font::Edging::AntiAlias);
-    let mut buf = [0u8; 4];
-    let s = ch.encode_utf8(&mut buf);
-    let (advance, _) = font.measure_str(&*s, None);
-    let mut p = SkPaint::default();
-    p.set_anti_alias(true);
-    p.set_color(color.to_sk());
-    let x = rect.x + (rect.width - advance) / 2.0;
-    // Ascender = em: the baseline is the box's bottom when the box is the font size.
-    let y = rect.y + (rect.height + size) / 2.0;
-    canvas.draw_str(&*s, (x, y), &font, &p);
+pub fn paint_glyph(
+    canvas: &mut Canvas,
+    rect: Rect,
+    ch: char,
+    size: f32,
+    weight: u16,
+    color: Color,
+) {
+    crate::text::fonts::symbols::paint(canvas, rect, ch, size, weight, color);
 }
 
 /// Records a display list.
@@ -410,7 +376,7 @@ impl Recorder {
     }
 
     /// An image.
-    pub fn image(&mut self, name: &str, rect: Rect, image: skia_safe::Image, opacity: f32) {
+    pub fn image(&mut self, name: &str, rect: Rect, image: Image, opacity: f32) {
         self.list.items.push(DisplayItem::Image {
             name: Rc::from(name),
             rect,
@@ -638,7 +604,8 @@ mod tests {
         assert_eq!(layers.len(), 2);
         assert_eq!(layers[0].path, "Button/Surface");
         assert_eq!(layers[0].frame, Rect::new(5.0, 5.0, 40.0, 20.0));
-        let mut s = skia_safe::surfaces::raster_n32_premul((50, 30)).unwrap();
-        list.paint(s.canvas(), PaintOptions::default());
+        let mut c = Canvas::new(50, 30);
+        list.paint(&mut c, PaintOptions::default());
+        assert_eq!(c.finish().pixel(20, 15), [10, 20, 30, 255]);
     }
 }

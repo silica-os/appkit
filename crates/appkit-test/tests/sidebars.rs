@@ -2,10 +2,10 @@
 
 mod common;
 
-use common::sidebar_view as build;
 use appkit::amalfi::sidebars::{Panel, metrics};
 use appkit::geom::Point;
 use appkit_test::{KitMaster, Scene, Tolerance};
+use common::sidebar_view as build;
 
 /// Pills, rounded selections and thin glyphs.
 const SIDEBAR: Tolerance = Tolerance {

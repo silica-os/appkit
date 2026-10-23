@@ -2,7 +2,7 @@
 //! or with glyphs), the circular dial, and the round thumb that turns into a `Glass/Clear`
 //! lens while it is dragged (`materials.md`, lens rule).
 
-use skia_safe::PathBuilder;
+use crate::render::path::PathBuilder;
 
 use crate::amalfi::foundation::{control_shadow, focus_halo_named};
 use crate::amalfi::theme::Theme;
@@ -905,10 +905,9 @@ impl Widget for Dial {
                 );
             } else {
                 let mut pb = PathBuilder::new();
-                pb.add_arc(ring.to_sk(), -90.0, f * 360.0);
+                pb.add_arc(ring, -90.0, f * 360.0);
                 let path = pb.detach();
-                let tight = path.compute_tight_bounds();
-                let r = Rect::new(tight.left, tight.top, tight.width(), tight.height());
+                let r = path.bounds();
                 let local = path.make_offset((-r.x, -r.y));
                 cx.rec.layer(
                     "Progress",

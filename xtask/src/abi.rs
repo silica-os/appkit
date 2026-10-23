@@ -531,10 +531,7 @@ mod tests {
     fn rust_types_to_c() {
         assert_eq!(c_type("* mut $crate :: AKView"), "AKView *");
         assert_eq!(c_type("* const :: std :: ffi :: c_char"), "const char *");
-        assert_eq!(
-            c_type("* const * mut $crate :: AKMenu"),
-            "AKMenu *const *"
-        );
+        assert_eq!(c_type("* const * mut $crate :: AKMenu"), "AKMenu *const *");
         assert_eq!(
             c_type("* const * const :: std :: ffi :: c_char"),
             "const char *const *"

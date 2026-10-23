@@ -2,10 +2,10 @@
 
 use std::path::PathBuf;
 
-use serde_json::Value;
 use appkit::color::Color;
 use appkit::geom::{Point, Rect};
 use appkit::style::{BorderPosition, Paint, Shadow};
+use serde_json::Value;
 
 /// The fixtures' directory.
 pub fn kit_dir() -> PathBuf {

@@ -20,10 +20,7 @@ fn finish(r: Result<(), AKStatus>) -> AKStatus {
     s
 }
 
-fn with_table<R>(
-    view: *mut AKView,
-    f: impl FnOnce(&mut TableView) -> R,
-) -> Result<R, AKStatus> {
+fn with_table<R>(view: *mut AKView, f: impl FnOnce(&mut TableView) -> R) -> Result<R, AKStatus> {
     let v = view_id(view)?;
     with_ui(move |ui| {
         ui.with_widget::<TableView, _>(v, f)

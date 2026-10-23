@@ -24,9 +24,8 @@
 //! clamped to half the shorter side, so a large radius gives a capsule. This is the same
 //! geometry as silica_ui's `AmalfiSmoothBorder` (ported), so both draw identical outlines.
 
-use skia_safe::{Path, PathBuilder, PathDirection, path_builder::ArcSize};
-
 use crate::geom::{Corners, Point, Rect};
+use crate::render::path::{Path, PathBuilder};
 
 /// Amalfi's smoothing on every rounded surface (tokens: radii.cornerStyle).
 pub const AMALFI_SMOOTHING: f32 = 0.6;
@@ -82,7 +81,7 @@ impl Shape {
             }
             Shape::Ellipse => {
                 let mut b = PathBuilder::new();
-                b.add_oval(rect.to_sk(), None, None);
+                b.add_oval(rect);
                 b.detach()
             }
             Shape::Path(p) => p.make_offset((rect.x, rect.y)),
@@ -133,7 +132,7 @@ pub fn smooth_rect_path(rect: Rect, corners: Corners, smoothing: f32) -> Path {
     let bl = SmoothCorner::new(corners.bottom_left, s, limit, half_w, half_h);
     let tl = SmoothCorner::new(corners.top_left, s, limit, half_h, half_w);
     if tl.is_square() && tr.is_square() && br.is_square() && bl.is_square() {
-        path.add_rect(rect.to_sk(), None, None);
+        path.add_rect(rect);
         return path.detach();
     }
     let (left, top, right, bottom) = (rect.x, rect.y, rect.right(), rect.bottom());
@@ -234,7 +233,7 @@ impl SmoothCorner {
         let arc_end = self.on_circle(90.0 - alpha_out);
         if 90.0 - alpha_out - alpha_in > 1e-6 {
             let e = at(arc_end);
-            path.arc_to_radius((r, r), 0.0, ArcSize::Small, PathDirection::CW, (e.x, e.y));
+            path.arc_to_radius((r, r), true, (e.x, e.y));
         }
         if alpha_out > 0.0 {
             let end = self.end();
@@ -254,14 +253,14 @@ impl SmoothCorner {
 mod tests {
     use super::*;
 
-    fn bounds(p: &Path) -> skia_safe::Rect {
-        *p.bounds()
+    fn bounds(p: &Path) -> Rect {
+        p.bounds()
     }
 
     #[test]
     fn square_and_empty() {
         let p = smooth_rect_path(Rect::new(0.0, 0.0, 10.0, 5.0), Corners::ZERO, 0.6);
-        assert_eq!(bounds(&p), skia_safe::Rect::from_xywh(0.0, 0.0, 10.0, 5.0));
+        assert_eq!(bounds(&p), Rect::new(0.0, 0.0, 10.0, 5.0));
         assert!(smooth_rect_path(Rect::ZERO, Corners::all(4.0), 0.6).is_empty());
     }
 
@@ -270,23 +269,23 @@ mod tests {
         let r = Rect::new(2.0, 3.0, 116.0, 24.0);
         let p = smooth_rect_path(r, Corners::all(8.0), AMALFI_SMOOTHING);
         let b = bounds(&p);
-        assert!((b.left - 2.0).abs() < 1e-3 && (b.top - 3.0).abs() < 1e-3);
-        assert!((b.right - 118.0).abs() < 1e-3 && (b.bottom - 27.0).abs() < 1e-3);
+        assert!((b.x - 2.0).abs() < 1e-3 && (b.y - 3.0).abs() < 1e-3);
+        assert!((b.right() - 118.0).abs() < 1e-3 && (b.bottom() - 27.0).abs() < 1e-3);
         // The vertex is outside; a point near the middle of an edge is inside.
-        assert!(!p.contains((2.2, 3.2)));
-        assert!(p.contains((60.0, 3.5)));
+        assert!(!p.contains(Point::new(2.2, 3.2)));
+        assert!(p.contains(Point::new(60.0, 3.5)));
         // The corner starts (1 + s) r from the vertex along the top edge: 12.8 like the kit.
         // The top edge is straight from 12.8 to 103.2, as the kit's own path.
-        assert!(p.contains((2.0 + 13.0, 3.02)));
-        assert!(p.contains((2.0 + 103.0, 3.02)));
-        assert!(!p.contains((2.0 + 3.0, 3.3)));
+        assert!(p.contains(Point::new(2.0 + 13.0, 3.02)));
+        assert!(p.contains(Point::new(2.0 + 103.0, 3.02)));
+        assert!(!p.contains(Point::new(2.0 + 3.0, 3.3)));
     }
 
     #[test]
     fn capsule_clamps() {
         let p = Shape::Capsule.path(Rect::new(0.0, 0.0, 40.0, 20.0));
-        assert!(p.contains((20.0, 10.0)));
-        assert!(!p.contains((0.5, 0.5)));
+        assert!(p.contains(Point::new(20.0, 10.0)));
+        assert!(!p.contains(Point::new(0.5, 0.5)));
         assert_eq!(
             Shape::rounded(50.0).corner_radii(Rect::new(0.0, 0.0, 40.0, 20.0)),
             [10.0; 4]

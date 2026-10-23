@@ -4,13 +4,13 @@
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
-use skia_safe::{AlphaType, ColorType, Data, Image, ImageInfo};
 use appkit::color::Color;
 use appkit::core::{
     Appearance, Button, InspectedContent, InspectedLayer, LayoutCx, Mods, Prop, Proposal, Ui,
     Value, ViewId, Widget, WindowId, WindowKind,
 };
 use appkit::geom::{Point, Rect, Size};
+use appkit::render::image::Image;
 use appkit::style::{Blur, BorderPosition, Paint};
 
 use crate::kit::{KitLayer, KitMaster};
@@ -392,9 +392,9 @@ impl Scene {
             .ok_or("snapshot failed")?;
         let bytes = std::fs::read(&self.master.png)
             .map_err(|e| format!("{}: {e}", self.master.png.display()))?;
-        let kit = Image::from_encoded(Data::new_copy(&bytes)).ok_or("cannot decode the PNG")?;
-        let (kw, kh) = (kit.width(), kit.height());
-        let (ow, oh) = (ours.width(), ours.height());
+        let kit = Image::from_png(&bytes).ok_or("cannot decode the PNG")?;
+        let (kw, kh) = (kit.width() as i32, kit.height() as i32);
+        let (ow, oh) = (ours.width() as i32, ours.height() as i32);
         // A kit PNG may differ from what the master paints by an empty margin the export
         // adds (or a rounding): `png_margin` compares the top left corner they share.
         if (kw, kh) != (ow, oh) && !self.png_margin {
@@ -596,40 +596,28 @@ impl Widget for Pin {
 }
 
 fn rgba(img: &Image) -> Option<Vec<u8>> {
-    let info = ImageInfo::new(
-        (img.width(), img.height()),
-        ColorType::RGBA8888,
-        AlphaType::Premul,
-        None,
-    );
-    let row = img.width() as usize * 4;
-    let mut px = vec![0u8; row * img.height() as usize];
-    img.read_pixels(
-        &info,
-        &mut px,
-        row,
-        (0, 0),
-        skia_safe::image::CachingHint::Allow,
-    )
-    .then_some(px)
+    Some(img.bytes().to_vec())
 }
 
 fn write_diff(name: &str, w: i32, h: i32, a: &[u8], b: &[u8], d: &[u8]) -> Option<()> {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/kit-diff");
     std::fs::create_dir_all(&dir).ok()?;
-    let mut surface = skia_safe::surfaces::raster_n32_premul((w * 3, h))?;
-    let info = ImageInfo::new((w, h), ColorType::RGBA8888, AlphaType::Premul, None);
+    let (w, h) = (usize::try_from(w).ok()?, usize::try_from(h).ok()?);
+    let mut sheet = vec![0u8; w * 3 * h * 4];
     for (i, px) in [a, b, d].iter().enumerate() {
-        let img = skia_safe::images::raster_from_data(&info, Data::new_copy(px), w as usize * 4)?;
-        surface
-            .canvas()
-            .draw_image(&img, ((i as i32 * w) as f32, 0.0), None);
+        for y in 0..h {
+            let (Some(src), Some(dst)) = (
+                px.get(y * w * 4..(y + 1) * w * 4),
+                sheet.get_mut((y * w * 3 + i * w) * 4..(y * w * 3 + (i + 1) * w) * 4),
+            ) else {
+                continue;
+            };
+            dst.copy_from_slice(src);
+        }
     }
-    let png = surface
-        .image_snapshot()
-        .encode(None, skia_safe::EncodedImageFormat::PNG, None)?;
+    let png = Image::from_premul_rgba((w * 3) as u32, h as u32, &sheet)?.encode_png()?;
     let file = dir.join(format!("{}.png", name.replace('/', "_")));
-    std::fs::write(file, png.as_bytes()).ok()
+    std::fs::write(file, png).ok()
 }
 
 /// Whether a kit layer paints nothing.

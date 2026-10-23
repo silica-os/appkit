@@ -10,7 +10,8 @@
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 
-use skia_safe::{Canvas, Image, ImageInfo, SamplingOptions};
+use crate::render::canvas::Canvas;
+use crate::render::image::Image;
 
 use crate::core::display::{DisplayItem, DisplayList};
 use crate::geom::Rect;
@@ -42,7 +43,7 @@ pub struct Cached {
 impl Cached {
     /// Bytes the image takes.
     pub fn bytes(&self) -> usize {
-        (self.image.width().max(0) as usize) * (self.image.height().max(0) as usize) * 4
+        self.image.width() as usize * self.image.height() as usize * 4
     }
 }
 
@@ -94,57 +95,43 @@ pub fn list_cacheable(list: &DisplayList) -> bool {
 /// translation that puts `bounds` on whole device pixels (an image then draws exactly
 /// what the subtree would); `None` otherwise.
 pub fn aligned_scale(canvas: &Canvas, bounds: Rect) -> Option<f32> {
-    let m = canvas.local_to_device_as_3x3();
-    if m.has_perspective() || m.skew_x().abs() > 1e-6 || m.skew_y().abs() > 1e-6 {
+    let m = canvas.transform().m;
+    if m[1].abs() > 1e-6 || m[2].abs() > 1e-6 {
         return None;
     }
-    let (sx, sy) = (m.scale_x(), m.scale_y());
+    let (sx, sy) = (m[0], m[3]);
     if sx <= 0.0 || (sx - sy).abs() > 1e-5 {
         return None;
     }
-    let x = m.translate_x() + bounds.x * sx;
-    let y = m.translate_y() + bounds.y * sy;
+    let x = m[4] + bounds.x * sx;
+    let y = m[5] + bounds.y * sy;
     let whole = |v: f32| (v - v.round()).abs() < 1e-3;
     (whole(x) && whole(y)).then_some(sx)
 }
 
-/// Draws `subtree` (in view coordinates) into a new image of `bounds` at `scale`, in a
-/// surface compatible with `canvas` (a GPU canvas makes a GPU image).
-pub fn draw_image(
-    canvas: &Canvas,
-    bounds: Rect,
-    scale: f32,
-    subtree: impl FnOnce(&Canvas),
-) -> Option<Image> {
+/// Draws `subtree` (in view coordinates) into a new image of `bounds` at `scale`.
+pub fn draw_image(bounds: Rect, scale: f32, subtree: impl FnOnce(&mut Canvas)) -> Option<Image> {
     let w = (bounds.width * scale).ceil() as i64;
     let h = (bounds.height * scale).ceil() as i64;
-    if w <= 0 || h <= 0 || w * h > MAX_PIXELS {
+    if w <= 0 || h <= 0 || w * h > MAX_PIXELS || w > 65535 || h > 65535 {
         return None;
     }
-    let info = ImageInfo::new_n32_premul((w as i32, h as i32), None);
-    let mut surface = canvas
-        .new_surface(&info, None)
-        .or_else(|| skia_safe::surfaces::raster(&info, None, None))?;
-    let c = surface.canvas();
-    c.clear(skia_safe::Color::TRANSPARENT);
+    let mut c = Canvas::new(w as u32, h as u32);
     c.scale((scale, scale));
     c.translate((-bounds.x, -bounds.y));
-    subtree(c);
-    Some(surface.image_snapshot())
+    subtree(&mut c);
+    Some(c.finish())
 }
 
 /// Draws a cached image at its bounds (the canvas is in view coordinates).
-pub fn blit(canvas: &Canvas, cached: &Cached) {
-    canvas.save();
-    canvas.translate((cached.bounds.x, cached.bounds.y));
-    canvas.scale((1.0 / cached.scale, 1.0 / cached.scale));
-    canvas.draw_image_with_sampling_options(
+pub fn blit(canvas: &mut Canvas, cached: &Cached) {
+    let w = cached.image.width() as f32 / cached.scale;
+    let h = cached.image.height() as f32 / cached.scale;
+    canvas.draw_image(
         &cached.image,
-        (0.0, 0.0),
-        SamplingOptions::default(),
-        None,
+        Rect::new(cached.bounds.x, cached.bounds.y, w, h),
+        1.0,
     );
-    canvas.restore();
 }
 
 #[cfg(test)]
@@ -179,17 +166,8 @@ mod tests {
         (ui, w)
     }
 
-    fn pixels(img: &skia_safe::Image) -> Vec<u8> {
-        let info = img.image_info();
-        let mut out = vec![0u8; (info.width() * info.height() * 4) as usize];
-        let _ = img.read_pixels(
-            info,
-            &mut out,
-            (info.width() * 4) as usize,
-            (0, 0),
-            skia_safe::image::CachingHint::Allow,
-        );
-        out
+    fn pixels(img: &crate::render::image::Image) -> Vec<u8> {
+        img.bytes().to_vec()
     }
 
     #[test]
@@ -214,7 +192,7 @@ mod tests {
             .iter()
             .zip(&last.1)
             .map(|(a, b)| a.abs_diff(*b))
-            .filter(|d| *d > 2)
+            .filter(|d| *d > 3)
             .collect();
         let max = diffs.iter().copied().max().unwrap_or(0);
         assert!(

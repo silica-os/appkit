@@ -2,7 +2,6 @@
 
 mod common;
 
-use common::{row_view, text_at};
 use appkit::amalfi::button::{PushButton, PushVariant};
 use appkit::amalfi::buttons::LinkButton;
 use appkit::amalfi::fields::TextField;
@@ -12,6 +11,7 @@ use appkit::amalfi::popovers::{
 };
 use appkit::core::{Alignment, Prop, Spacer, Stack, Ui, Value, ViewId};
 use appkit_test::{KitLayer, KitMaster, Scene, Tolerance};
+use common::{row_view, text_at};
 
 /// Glass, rounded corners and the arrow's antialiasing.
 const POPOVER: Tolerance = Tolerance {

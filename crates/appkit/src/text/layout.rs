@@ -1,21 +1,19 @@
-//! Text styles, attributed strings and laid-out paragraphs (SkParagraph: HarfBuzz shaping,
-//! ICU bidi and line breaking).
+//! Text styles, attributed strings and laid-out paragraphs (parley: HarfRust shaping, ICU4X
+//! bidi and line breaking; fontique families and fallback).
 //!
-//! Every offset in this API is a UTF-8 byte offset into the paragraph's text; SkParagraph's
-//! UTF-16 positions are converted here and never leak out.
+//! Every offset in this API is a UTF-8 byte offset into the paragraph's text, as parley's.
 
 use std::ops::Range;
 
-use skia_safe::textlayout::{
-    Affinity, ParagraphBuilder, ParagraphStyle, PlaceholderAlignment, PlaceholderStyle,
-    RectHeightStyle, RectWidthStyle, TextAlign, TextBaseline, TextDecoration, TextDirection,
-    TextStyle as SkTextStyle,
+use parley::{
+    Affinity, Alignment, AlignmentOptions, Cursor, FontFamily, FontFeatures, FontStyle, FontWeight,
+    InlineBox, InlineBoxKind, Layout, LineHeight, PositionedLayoutItem, Selection, StyleProperty,
 };
-use skia_safe::{Canvas, FontStyle, font_style};
 
 use crate::amalfi::tokens::TypeStyle;
 use crate::color::Color;
 use crate::geom::{Point, Rect, Size};
+use crate::render::canvas::Canvas;
 use crate::text::fonts::{Fonts, UI_FAMILY};
 
 /// Horizontal alignment of lines.
@@ -108,52 +106,64 @@ impl TextStyle {
         self
     }
 
-    fn to_sk(&self) -> SkTextStyle {
-        let mut s = SkTextStyle::new();
-        s.set_font_families(&[self.family.as_str(), UI_FAMILY]);
-        s.set_font_size(self.size.max(0.0));
-        let slant = if self.italic {
-            font_style::Slant::Italic
-        } else {
-            font_style::Slant::Upright
-        };
-        s.set_font_style(FontStyle::new(
-            font_style::Weight::from(i32::from(self.weight)),
-            font_style::Width::NORMAL,
-            slant,
-        ));
-        s.set_color(self.color.to_sk());
+    /// The parley properties of this style.
+    fn properties(&self) -> Vec<StyleProperty<'static, Color>> {
+        let mut out = Vec::with_capacity(10);
+        let families = format!("\"{}\", \"{}\"", self.family, UI_FAMILY);
+        out.push(StyleProperty::FontFamily(FontFamily::Source(
+            families.into(),
+        )));
+        out.push(StyleProperty::FontSize(self.size.max(0.0)));
+        out.push(StyleProperty::FontWeight(FontWeight::new(f32::from(
+            self.weight,
+        ))));
+        if self.italic {
+            out.push(StyleProperty::FontStyle(FontStyle::Italic));
+        }
+        out.push(StyleProperty::Brush(self.color));
         if let Some(lh) = self.line_height
             && self.size > 0.0
             && lh > 0.0
         {
-            s.set_height_override(true);
-            s.set_height(lh / self.size);
-            s.set_half_leading(true);
+            out.push(StyleProperty::LineHeight(LineHeight::Absolute(lh)));
+        } else {
+            out.push(StyleProperty::LineHeight(LineHeight::MetricsRelative(1.0)));
         }
         if self.tracking != 0.0 {
-            s.set_letter_spacing(self.tracking);
+            out.push(StyleProperty::LetterSpacing(self.tracking));
         }
-        for f in &self.features {
-            s.add_font_feature(f.as_str(), 1);
+        if !self.features.is_empty() {
+            let css = self
+                .features
+                .iter()
+                .map(|f| format!("\"{f}\" 1"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            out.push(StyleProperty::FontFeatures(FontFeatures::Source(
+                css.into(),
+            )));
         }
-        let mut deco = TextDecoration::NO_DECORATION;
         if self.underline {
-            deco |= TextDecoration::UNDERLINE;
+            out.push(StyleProperty::Underline(true));
         }
         if self.strikethrough {
-            deco |= TextDecoration::LINE_THROUGH;
+            out.push(StyleProperty::Strikethrough(true));
         }
-        s.set_decoration_type(deco);
-        if self.underline || self.strikethrough {
-            s.set_decoration_color(self.color.to_sk());
+        out
+    }
+
+    /// Sets this style over `range`.
+    fn push(&self, b: &mut parley::RangedBuilder<'_, Color>, range: Range<usize>) {
+        for p in self.properties() {
+            b.push(p, range.clone());
         }
-        if let Some(bg) = self.background {
-            let mut p = skia_safe::Paint::default();
-            p.set_color(bg.to_sk());
-            s.set_background_paint(&p);
+    }
+
+    /// Makes this style the default of the whole layout (the line strut included).
+    fn push_default(&self, b: &mut parley::RangedBuilder<'_, Color>) {
+        for p in self.properties() {
+            b.push_default(p);
         }
-        s
     }
 }
 
@@ -265,11 +275,16 @@ pub struct LineInfo {
 
 /// A laid-out paragraph.
 pub struct TextLayout {
-    paragraph: skia_safe::textlayout::Paragraph,
+    /// The layout of what is shown: the text, or its cut with an ellipsis.
+    layout: Layout<Color>,
     text: String,
-    /// UTF-16 index of each UTF-8 byte boundary we care about: `utf16_of[i]` for byte i at a
-    /// char boundary.
-    utf16_starts: Vec<(usize, usize)>,
+    source: AttributedString,
+    base: TextStyle,
+    options: ParagraphOptions,
+    /// Byte ranges with a background colour.
+    backgrounds: Vec<(Range<usize>, Color)>,
+    /// Whether the shown text was cut by `max_lines`.
+    cut: bool,
     width: f32,
 }
 
@@ -282,6 +297,69 @@ impl std::fmt::Debug for TextLayout {
     }
 }
 
+/// The zero-width space that stands in for U+FFFC (both three bytes in UTF-8, so offsets do
+/// not move) where an attachment's inline box sits.
+const ATTACHMENT_STAND_IN: char = '\u{200B}';
+
+fn build(
+    text: &AttributedString,
+    shown: &str,
+    base: &TextStyle,
+    options: &ParagraphOptions,
+) -> Layout<Color> {
+    let s: String = shown
+        .chars()
+        .map(|c| {
+            if c == '\u{FFFC}' {
+                ATTACHMENT_STAND_IN
+            } else {
+                c
+            }
+        })
+        .collect();
+    Fonts::with(|fonts| {
+        let mut b = fonts.lcx.ranged_builder(&mut fonts.fcx, &s, 1.0, false);
+        base.push_default(&mut b);
+        for r in &text.runs {
+            let end = r.range.end.min(s.len());
+            let start = r.range.start.min(end);
+            if start < end {
+                r.style.push(&mut b, start..end);
+            }
+        }
+        for (i, (at, att)) in text.attachments.iter().enumerate() {
+            if *at > s.len() {
+                continue;
+            }
+            b.push_inline_box(InlineBox {
+                id: i as u64,
+                kind: InlineBoxKind::InFlow,
+                index: *at,
+                width: att.size.width.max(0.0),
+                height: att.size.height.max(0.0),
+                baseline: Some(att.baseline),
+                vertical_align: parley::VerticalAlign::BASELINE,
+            });
+        }
+        if options.rtl {
+            b.set_base_direction(parley::BaseDirection::Rtl);
+        }
+        b.build(&s)
+    })
+}
+
+fn break_and_align(layout: &mut Layout<Color>, width: f32, align: Align) {
+    let max = (width.is_finite() && width >= 0.0).then_some(width);
+    layout.break_all_lines(max);
+    let alignment = match align {
+        Align::Start => Alignment::Start,
+        Align::Center => Alignment::Center,
+        Align::End => Alignment::End,
+        Align::Justify => Alignment::Justify,
+    };
+    layout.align(alignment, AlignmentOptions::default());
+}
+
 impl TextLayout {
     /// Lays out `text` in `base` style (and its runs) for `width` (infinite: one line per
     /// paragraph).
@@ -291,94 +369,23 @@ impl TextLayout {
         options: &ParagraphOptions,
         width: f32,
     ) -> TextLayout {
-        let mut ps = ParagraphStyle::new();
-        ps.set_text_style(&base.to_sk());
-        ps.set_text_align(match options.align {
-            Align::Start => TextAlign::Start,
-            Align::Center => TextAlign::Center,
-            Align::End => TextAlign::End,
-            Align::Justify => TextAlign::Justify,
-        });
-        ps.set_text_direction(if options.rtl {
-            TextDirection::RTL
-        } else {
-            TextDirection::LTR
-        });
-        if let Some(n) = options.max_lines {
-            ps.set_max_lines(n.max(1));
-            if options.ellipsis {
-                ps.set_ellipsis("…");
+        let mut backgrounds = Vec::new();
+        if let Some(bg) = base.background {
+            backgrounds.push((0..text.text.len(), bg));
+        }
+        for r in &text.runs {
+            if let Some(bg) = r.style.background {
+                backgrounds.push((r.range.clone(), bg));
             }
         }
-        ps.set_apply_rounding_hack(false);
-        let paragraph = Fonts::with(|fonts| {
-            let mut b = ParagraphBuilder::new(&ps, fonts.collection().clone());
-            let s = &text.text;
-            // Boundaries where the style changes.
-            let mut cuts: Vec<usize> = vec![0, s.len()];
-            for r in &text.runs {
-                cuts.push(r.range.start.min(s.len()));
-                cuts.push(r.range.end.min(s.len()));
-            }
-            for (at, _) in &text.attachments {
-                cuts.push((*at).min(s.len()));
-                cuts.push(next_char(s, *at));
-            }
-            cuts.retain(|c| s.is_char_boundary(*c));
-            cuts.sort_unstable();
-            cuts.dedup();
-            for w in cuts.windows(2) {
-                let (Some(&a), Some(&z)) = (w.first(), w.get(1)) else {
-                    continue;
-                };
-                if a >= z {
-                    continue;
-                }
-                let style = text
-                    .runs
-                    .iter()
-                    .rev()
-                    .find(|r| r.range.start <= a && r.range.end >= z)
-                    .map(|r| &r.style)
-                    .unwrap_or(base);
-                if let Some((_, att)) = text.attachments.iter().find(|(at, _)| *at == a) {
-                    b.push_style(&style.to_sk());
-                    b.add_placeholder(&PlaceholderStyle::new(
-                        att.size.width,
-                        att.size.height,
-                        PlaceholderAlignment::Baseline,
-                        TextBaseline::Alphabetic,
-                        att.baseline,
-                    ));
-                    b.pop();
-                    if let Some(rest) = s.get(next_char(s, a)..z)
-                        && !rest.is_empty()
-                    {
-                        b.push_style(&style.to_sk());
-                        b.add_text(rest);
-                        b.pop();
-                    }
-                    continue;
-                }
-                if let Some(slice) = s.get(a..z) {
-                    b.push_style(&style.to_sk());
-                    b.add_text(slice);
-                    b.pop();
-                }
-            }
-            b.build()
-        });
-        let mut utf16_starts = Vec::with_capacity(text.text.len() + 1);
-        let mut u16i = 0usize;
-        for (i, ch) in text.text.char_indices() {
-            utf16_starts.push((i, u16i));
-            u16i += ch.len_utf16();
-        }
-        utf16_starts.push((text.text.len(), u16i));
         let mut layout = TextLayout {
-            paragraph,
+            layout: build(text, &text.text, base, options),
             text: text.text.clone(),
-            utf16_starts,
+            source: text.clone(),
+            base: base.clone(),
+            options: options.clone(),
+            backgrounds,
+            cut: false,
             width: f32::INFINITY,
         };
         layout.relayout(width);
@@ -397,15 +404,44 @@ impl TextLayout {
 
     /// Lays out again for another width.
     pub fn relayout(&mut self, width: f32) {
-        let w = if width.is_finite() && width > 0.0 {
-            width
-        } else if width.is_finite() {
-            0.0
-        } else {
-            1.0e7
-        };
-        self.paragraph.layout(w);
         self.width = width;
+        if self.cut {
+            self.layout = build(&self.source, &self.text, &self.base, &self.options);
+            self.cut = false;
+        }
+        break_and_align(&mut self.layout, width, self.options.align);
+        let Some(max) = self.options.max_lines.map(|n| n.max(1)) else {
+            return;
+        };
+        if self.layout.len() <= max {
+            return;
+        }
+        // Cut after the last line that fits; with an ellipsis, shorten that line until the
+        // ellipsis fits too.
+        let Some(last) = self.layout.get(max - 1) else {
+            return;
+        };
+        let mut end = last.text_range().end.min(self.text.len());
+        while end > 0 && self.text[..end].ends_with(['\n', '\r', ' ']) {
+            end = prev_char(&self.text, end);
+        }
+        self.cut = true;
+        if !self.options.ellipsis {
+            let shown = self.text[..end].to_string();
+            self.layout = build(&self.source, &shown, &self.base, &self.options);
+            break_and_align(&mut self.layout, width, self.options.align);
+            return;
+        }
+        loop {
+            let mut shown = self.text[..end].trim_end().to_string();
+            shown.push('…');
+            self.layout = build(&self.source, &shown, &self.base, &self.options);
+            break_and_align(&mut self.layout, width, self.options.align);
+            if self.layout.len() <= max || end == 0 {
+                return;
+            }
+            end = prev_char(&self.text, end);
+        }
     }
 
     /// The text.
@@ -420,108 +456,133 @@ impl TextLayout {
 
     /// The size of the text: the longest line's width and the total height.
     pub fn size(&self) -> Size {
-        Size::new(self.paragraph.longest_line(), self.paragraph.height())
+        Size::new(self.layout.width(), self.layout.height())
     }
 
     /// The width with no wrapping.
     pub fn max_intrinsic_width(&self) -> f32 {
-        self.paragraph.max_intrinsic_width()
+        self.layout.calculate_content_widths().max
     }
 
     /// The narrowest width without breaking words.
     pub fn min_intrinsic_width(&self) -> f32 {
-        self.paragraph.min_intrinsic_width()
+        self.layout.calculate_content_widths().min
     }
 
     /// The first line's baseline from the top.
     pub fn first_baseline(&self) -> f32 {
-        self.paragraph.alphabetic_baseline()
+        self.layout.get(0).map_or(0.0, |l| l.metrics().baseline)
     }
 
     /// Whether lines were cut by `max_lines`.
     pub fn did_exceed_max_lines(&self) -> bool {
-        self.paragraph.did_exceed_max_lines()
+        self.cut
     }
 
     /// Paints the text with its top-left at `origin`.
-    pub fn paint(&self, canvas: &Canvas, origin: Point) {
-        self.paragraph.paint(canvas, (origin.x, origin.y));
-    }
-
-    fn to_utf16(&self, byte: usize) -> usize {
-        match self.utf16_starts.binary_search_by(|(b, _)| b.cmp(&byte)) {
-            Ok(i) => self.utf16_starts.get(i).map(|(_, u)| *u).unwrap_or(0),
-            Err(i) => self
-                .utf16_starts
-                .get(i.saturating_sub(1))
-                .map(|(_, u)| *u)
-                .unwrap_or(0),
+    pub fn paint(&self, canvas: &mut Canvas, origin: Point) {
+        for (range, color) in &self.backgrounds {
+            for r in self.selection_rects(range.clone()) {
+                canvas.fill_rect(r.translate(origin), *color);
+            }
+        }
+        for line in self.layout.lines() {
+            for item in line.items() {
+                let PositionedLayoutItem::GlyphRun(glyph_run) = item else {
+                    continue;
+                };
+                let run = glyph_run.run();
+                let style = glyph_run.style();
+                let color = style.brush;
+                let glyphs = glyph_run.positioned_glyphs().map(|g| vello_cpu::Glyph {
+                    id: g.id,
+                    x: origin.x + g.x,
+                    y: origin.y + g.y,
+                });
+                let coords: Vec<i16> = run
+                    .normalized_coords()
+                    .iter()
+                    .map(|c| c.to_bits())
+                    .collect();
+                canvas.fill_glyphs(run.font(), run.font_size(), &coords, glyphs, color);
+                let metrics = run.font_metrics();
+                let x = origin.x + glyph_run.offset();
+                let w = glyph_run.advance();
+                let base = origin.y + glyph_run.baseline();
+                if let Some(d) = &style.underline {
+                    let size = d.size.unwrap_or(metrics.underline_size).max(0.5);
+                    let off = d.offset.unwrap_or(metrics.underline_offset);
+                    let r = Rect::new(x, base - off, w, size);
+                    canvas.fill_rect(r, d.brush);
+                }
+                if let Some(d) = &style.strikethrough {
+                    let size = d.size.unwrap_or(metrics.strikethrough_size).max(0.5);
+                    let off = d.offset.unwrap_or(metrics.strikethrough_offset);
+                    let r = Rect::new(x, base - off, w, size);
+                    canvas.fill_rect(r, d.brush);
+                }
+            }
         }
     }
 
-    fn to_utf8(&self, u16i: usize) -> usize {
-        match self.utf16_starts.binary_search_by(|(_, u)| u.cmp(&u16i)) {
-            Ok(i) => self.utf16_starts.get(i).map(|(b, _)| *b).unwrap_or(0),
-            Err(i) => self
-                .utf16_starts
-                .get(i.saturating_sub(1))
-                .map(|(b, _)| *b)
-                .unwrap_or(0),
-        }
+    fn shown_len(&self) -> usize {
+        self.layout.text_len()
     }
 
     /// The byte offset nearest to `p` (paragraph coordinates), and whether the caret sits
     /// at the end of the previous line (upstream affinity).
     pub fn offset_at(&self, p: Point) -> (usize, bool) {
-        let pos = self.paragraph.get_glyph_position_at_coordinate((p.x, p.y));
-        let off = usize::try_from(pos.position.max(0)).unwrap_or(0);
-        (self.to_utf8(off), pos.affinity == Affinity::Upstream)
+        let c = Cursor::from_point(&self.layout, p.x, p.y);
+        (
+            c.index().min(self.text.len()),
+            c.affinity() == Affinity::Upstream,
+        )
     }
 
     /// The rectangles covering the byte range (selection highlight), tight to the line boxes.
     pub fn selection_rects(&self, range: Range<usize>) -> Vec<Rect> {
-        if range.start >= range.end {
+        let end = range.end.min(self.shown_len());
+        if range.start >= end {
             return Vec::new();
         }
-        let a = self.to_utf16(range.start);
-        let z = self.to_utf16(range.end);
-        self.paragraph
-            .get_rects_for_range(a..z, RectHeightStyle::Max, RectWidthStyle::Tight)
-            .iter()
-            .map(|b| Rect::new(b.rect.left, b.rect.top, b.rect.width(), b.rect.height()))
+        let sel = Selection::new(
+            Cursor::from_byte_index(&self.layout, range.start, Affinity::Downstream),
+            Cursor::from_byte_index(&self.layout, end, Affinity::Upstream),
+        );
+        sel.geometry(&self.layout)
+            .into_iter()
+            .map(|(b, _)| {
+                Rect::new(
+                    b.x0 as f32,
+                    b.y0 as f32,
+                    (b.x1 - b.x0) as f32,
+                    (b.y1 - b.y0) as f32,
+                )
+            })
             .collect()
     }
 
     /// The caret rectangle (1 pt wide) at byte offset `at`; `upstream` puts a caret at a
     /// line break at the end of the first line.
     pub fn caret_rect(&self, at: usize, upstream: bool) -> Rect {
-        let lines = self.lines();
-        let at = at.min(self.text.len());
-        let line = self.line_index(at, upstream);
-        let Some(info) = lines.get(line) else {
-            let h = self.paragraph.height().max(1.0);
-            return Rect::new(0.0, 0.0, 1.0, h);
-        };
-        // The x of the caret: the leading edge of the character at `at`, or the trailing edge
-        // of the previous one at the end of a line.
-        let x = if at < info.end {
-            let next = next_char(&self.text, at);
-            let rects = self.selection_rects(at..next);
-            match rects.first() {
-                Some(r) => r.x,
-                None => info.left,
-            }
-        } else if at > info.start {
-            let prev = prev_char(&self.text, at);
-            let rects = self.selection_rects(prev..at);
-            match rects.last() {
-                Some(r) => r.right(),
-                None => info.left + info.width,
-            }
+        let at = at.min(self.shown_len());
+        let affinity = if upstream {
+            Affinity::Upstream
         } else {
-            info.left
+            Affinity::Downstream
         };
-        Rect::new(x, info.top, 1.0, info.height)
+        let b = Cursor::from_byte_index(&self.layout, at, affinity).geometry(&self.layout, 1.0);
+        let r = Rect::new(
+            b.x0 as f32,
+            b.y0 as f32,
+            (b.x1 - b.x0) as f32,
+            (b.y1 - b.y0) as f32,
+        );
+        if r.height <= 0.0 {
+            let h = self.layout.height().max(1.0);
+            return Rect::new(r.x, 0.0, 1.0, h);
+        }
+        r
     }
 
     /// The index of the line containing byte `at`.
@@ -542,28 +603,44 @@ impl TextLayout {
 
     /// The lines.
     pub fn lines(&self) -> Vec<LineInfo> {
-        self.paragraph
-            .get_line_metrics()
-            .iter()
-            .map(|m| LineInfo {
-                start: self.to_utf8(m.start_index),
-                end: self.to_utf8(m.end_index.max(m.start_index)),
-                top: (m.baseline - m.ascent) as f32,
-                height: m.height as f32,
-                baseline: m.baseline as f32,
-                left: m.left as f32,
-                width: m.width as f32,
+        let shown = self.layout.text_len();
+        self.layout
+            .lines()
+            .map(|l| {
+                let m = l.metrics();
+                let r = l.text_range();
+                let start = r.start.min(shown);
+                let mut end = r.end.min(shown).max(start);
+                // Without the trailing newline.
+                if let Some(t) = self.text.get(start..end) {
+                    if t.ends_with("\r\n") {
+                        end -= 2;
+                    } else if t.ends_with(['\n', '\r', '\u{2028}', '\u{2029}']) {
+                        end = prev_char(&self.text, end);
+                    }
+                }
+                LineInfo {
+                    start,
+                    end,
+                    top: m.block_min_coord,
+                    height: m.block_max_coord - m.block_min_coord,
+                    baseline: m.baseline,
+                    left: m.offset,
+                    width: m.advance - m.hanging_advance,
+                }
             })
             .collect()
     }
 
     /// The byte range of the word at `at` (double-click selection).
     pub fn word_at(&self, at: usize) -> Range<usize> {
-        let u = self.to_utf16(at);
-        let r = self
-            .paragraph
-            .get_word_boundary(u32::try_from(u).unwrap_or(0));
-        self.to_utf8(r.start)..self.to_utf8(r.end)
+        let at = at.min(self.shown_len());
+        let next = next_char(&self.text, at);
+        let Some(r) = self.selection_rects(at..next).into_iter().next() else {
+            return at..at;
+        };
+        let c = r.center();
+        Selection::word_from_point(&self.layout, c.x, c.y).text_range()
     }
 }
 

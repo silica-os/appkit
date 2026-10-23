@@ -2,10 +2,10 @@
 
 mod common;
 
-use common::{build_footer, build_row, build_section};
 use appkit::amalfi::forms::form_layout;
 use appkit::core::{Prop, Value, ViewId};
 use appkit_test::{KitLayer, KitMaster, Scene, Tolerance};
+use common::{build_footer, build_row, build_section};
 
 /// Raised surfaces with controls inside: edges of small controls and fields.
 const FORM: Tolerance = Tolerance {

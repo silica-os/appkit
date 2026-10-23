@@ -111,10 +111,7 @@ pub extern "C" fn ak_menu_add_separator(menu: *mut AKMenu) -> AKStatus {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn ak_menu_add_submenu(
-    menu: *mut AKMenu,
-    submenu: *mut AKMenu,
-) -> AKStatus {
+pub extern "C" fn ak_menu_add_submenu(menu: *mut AKMenu, submenu: *mut AKMenu) -> AKStatus {
     guard(AK_ERROR_PLATFORM, || {
         if menu == submenu {
             return set_last(AK_ERROR_INVALID_ARGUMENT);

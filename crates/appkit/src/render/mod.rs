@@ -1,6 +1,8 @@
-//! Rendering: Skia GPU and raster backends, the retained layer tree, damage, glass.
+//! Rendering: paths, images, the canvas (vello_cpu), backdrop filters, and the frame's
+//! compositors.
 
-pub mod gl;
-pub mod glass;
-pub mod vulkan;
-pub mod vulkan_drivers;
+pub mod backdrop;
+pub mod canvas;
+mod glyphs;
+pub mod image;
+pub mod path;

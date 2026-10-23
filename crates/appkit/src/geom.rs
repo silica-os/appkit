@@ -253,9 +253,14 @@ impl Rect {
         Rect::new(x0, y0, x1 - x0, y1 - y0)
     }
 
-    /// The Skia rectangle.
-    pub fn to_sk(self) -> skia_safe::Rect {
-        skia_safe::Rect::from_xywh(self.x, self.y, self.width, self.height)
+    /// The kurbo rectangle.
+    pub fn to_kurbo(self) -> vello_cpu::kurbo::Rect {
+        vello_cpu::kurbo::Rect::new(
+            f64::from(self.x),
+            f64::from(self.y),
+            f64::from(self.x + self.width),
+            f64::from(self.y + self.height),
+        )
     }
 }
 
@@ -504,10 +509,9 @@ impl Transform {
         Rect::new(x0, y0, x1 - x0, y1 - y0)
     }
 
-    /// The Skia matrix.
-    pub fn to_sk(self) -> skia_safe::Matrix {
-        let [a, b, c, d, e, f] = self.m;
-        skia_safe::Matrix::new_all(a, c, e, b, d, f, 0.0, 0.0, 1.0)
+    /// The kurbo affine.
+    pub fn to_affine(self) -> vello_cpu::kurbo::Affine {
+        vello_cpu::kurbo::Affine::new(self.m.map(f64::from))
     }
 }
 

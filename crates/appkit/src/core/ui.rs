@@ -8,7 +8,7 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use skia_safe::{Canvas, ClipOp};
+use crate::render::canvas::Canvas;
 
 use crate::amalfi::theme::Theme;
 use crate::core::display::{DisplayList, Recorder};
@@ -2251,7 +2251,9 @@ impl Ui {
         let mut items = own_items;
         let mut cacheable = own_cacheable;
         let mut bounds = local;
-        for c in self.tree.children(id).to_vec() {
+        let mut i = 0;
+        while let Some(c) = self.tree.children(id).get(i).copied() {
+            i += 1;
             if self.record_subtree(c, origin, theme, damage) {
                 content_changed = true;
             }
@@ -2319,7 +2321,7 @@ impl Ui {
 
     /// Paints a prepared window on `canvas` (window coordinates, already scaled to device
     /// pixels by the caller), clipped to `clip` if given.
-    pub fn paint_window(&self, window: WindowId, canvas: &Canvas, clip: Option<Rect>) {
+    pub fn paint_window(&self, window: WindowId, canvas: &mut Canvas, clip: Option<Rect>) {
         let Some(root) = self.window(window).map(|w| w.root) else {
             return;
         };
@@ -2332,19 +2334,19 @@ impl Ui {
         };
         canvas.save();
         if let Some(c) = clip {
-            canvas.clip_rect(c.to_sk(), ClipOp::Intersect, false);
+            canvas.clip_rect(c);
         }
-        if self.window(window).is_some_and(|w| w.opaque) {
-            canvas.draw_color(
-                theme.colors.surface_window.to_sk(),
-                skia_safe::BlendMode::Src,
-            );
+        if let Some(w) = self.window(window)
+            && w.opaque
+        {
+            let bounds = clip.unwrap_or(Rect::from_size(w.size));
+            canvas.fill_rect(bounds, theme.colors.surface_window);
         }
         self.paint_view(root, canvas, opts, false);
         canvas.restore();
     }
 
-    fn paint_view(&self, id: ViewId, canvas: &Canvas, opts: PaintOptions, dimmed: bool) {
+    fn paint_view(&self, id: ViewId, canvas: &mut Canvas, opts: PaintOptions, dimmed: bool) {
         let Some(n) = self.tree.get(id) else { return };
         if n.flags.contains(NodeFlags::HIDDEN) || n.modifiers.opacity <= 0.0 {
             return;
@@ -2375,7 +2377,8 @@ impl Ui {
         }
         let layered = alpha < 1.0;
         if layered {
-            canvas.save_layer_alpha(None, (alpha.clamp(0.0, 1.0) * 255.0).round() as u32);
+            canvas.save();
+            canvas.push_opacity(alpha);
         }
         let size = n.frame.size();
         if self.raster_cache && self.draw_cached(id, canvas, opts, dimmed || dim_here) {
@@ -2397,7 +2400,7 @@ impl Ui {
     fn paint_content(
         &self,
         id: ViewId,
-        canvas: &Canvas,
+        canvas: &mut Canvas,
         opts: PaintOptions,
         dimmed: bool,
         size: Size,
@@ -2424,13 +2427,9 @@ impl Ui {
         if clips {
             canvas.save();
             if m.corner_radius > 0.0 {
-                canvas.clip_path(
-                    &Shape::rounded(m.corner_radius).path(Rect::from_size(size)),
-                    ClipOp::Intersect,
-                    true,
-                );
+                canvas.clip_path(&Shape::rounded(m.corner_radius).path(Rect::from_size(size)));
             } else {
-                canvas.clip_rect(Rect::from_size(size).to_sk(), ClipOp::Intersect, false);
+                canvas.clip_rect(Rect::from_size(size));
             }
         }
         for c in &n.children {
@@ -2444,7 +2443,13 @@ impl Ui {
 
     /// Draws a view's content from its raster cache, making the image when the subtree
     /// has been still long enough; returns whether it drew.
-    fn draw_cached(&self, id: ViewId, canvas: &Canvas, opts: PaintOptions, dimmed: bool) -> bool {
+    fn draw_cached(
+        &self,
+        id: ViewId,
+        canvas: &mut Canvas,
+        opts: PaintOptions,
+        dimmed: bool,
+    ) -> bool {
         use crate::core::raster;
         let Some(n) = self.tree.get(id) else {
             return false;
@@ -2481,7 +2486,7 @@ impl Ui {
             return false;
         }
         let size = n.frame.size();
-        let Some(image) = raster::draw_image(canvas, st.bounds, scale, |c| {
+        let Some(image) = raster::draw_image(st.bounds, scale, |c| {
             self.paint_content(id, c, opts, dimmed, size)
         }) else {
             return false;
@@ -2522,7 +2527,11 @@ impl Ui {
 
     /// Renders a window into a raster image at `scale` device pixels per point (tests,
     /// screenshots, the inspector).
-    pub fn snapshot(&mut self, window: WindowId, scale: f32) -> Option<skia_safe::Image> {
+    pub fn snapshot(
+        &mut self,
+        window: WindowId,
+        scale: f32,
+    ) -> Option<crate::render::image::Image> {
         let _ = self.prepare_frame(window);
         let size = self.window(window)?.size;
         let scale = if scale > 0.0 && scale.is_finite() {
@@ -2530,14 +2539,12 @@ impl Ui {
         } else {
             1.0
         };
-        let w = (size.width * scale).ceil().max(1.0) as i32;
-        let h = (size.height * scale).ceil().max(1.0) as i32;
-        let mut surface = skia_safe::surfaces::raster_n32_premul((w, h))?;
-        let canvas = surface.canvas();
-        canvas.clear(skia_safe::Color::TRANSPARENT);
+        let w = (size.width * scale).ceil().clamp(1.0, 65535.0) as u32;
+        let h = (size.height * scale).ceil().clamp(1.0, 65535.0) as u32;
+        let mut canvas = Canvas::new(w, h);
         canvas.scale((scale, scale));
-        self.paint_window(window, canvas, None);
-        Some(surface.image_snapshot())
+        self.paint_window(window, &mut canvas, None);
+        Some(canvas.finish())
     }
 
     fn damage_subtree(&mut self, id: ViewId) {
