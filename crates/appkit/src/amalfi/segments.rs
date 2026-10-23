@@ -22,7 +22,7 @@ use crate::text::Align;
 
 /// How much a segmented control grows while held down (ui-kit `--press-scale-segmented`).
 const PRESS_SCALE_SEGMENTED: f32 = 1.035;
-/// The lens is `Glass/Regular`, with corners 1.1 × the item's height.
+/// The lens is `Glass/Clear`, with corners 1.1 × the item's height.
 const LENS_RADIUS: f32 = 1.1;
 
 /// Fixed measures.
@@ -246,8 +246,8 @@ impl ItemLook {
 
 /// The thumb at `t` = 0 and the glass lens at `t` = 1: one element whose every property moves
 /// together (ui-kit `.s-segmented__thumb` and `.is-lens`). At rest: `Surface/Control`, a 1 pt
-/// `Line/Border` ring and `0 1 2` shadow, corners `item / 2`. As the lens: `Glass/Regular`
-/// (its tint, rims, glow and `shadows.glass`), corners `item * 1.1`. Always under the labels.
+/// `Line/Border` ring and `0 1 2` shadow, corners `item / 2`. As the lens: `Glass/Clear`
+/// (rims and glow only: no tint, no shadow), corners `item * 1.1`. Always under the labels.
 fn paint_thumb(cx: &mut PaintCx<'_>, theme: &Theme, rect: Rect, item_h: f32, t: f32) {
     let c = &theme.colors;
     let rest = ThumbRest {
@@ -255,7 +255,7 @@ fn paint_thumb(cx: &mut PaintCx<'_>, theme: &Theme, rect: Rect, item_h: f32, t: 
         border: Some(c.line_border),
         shadow: control_shadow(theme),
     };
-    let style = morph_style(theme, t, rest, Tier::Regular);
+    let style = morph_style(theme, t, rest, Tier::Clear);
     let radius = item_h / 2.0 + (item_h * LENS_RADIUS - item_h / 2.0) * t;
     cx.rec.layer("Thumb", rect, Shape::rounded(radius), style);
 }
@@ -2391,7 +2391,7 @@ mod tests {
     }
 
     #[test]
-    fn the_held_thumb_is_the_regular_glass_lens_under_the_labels() {
+    fn the_held_thumb_is_the_clear_glass_lens_under_the_labels() {
         let (mut ui, win, id, _log) =
             scene(SegmentedControl::texts(&["One", "Two", "Three"]).selected(&[0]));
         let (i, n, rest, _) = thumb_layer(&mut ui, id);
@@ -2404,17 +2404,18 @@ mod tests {
         ui.prepare_frame(win);
         let (i, n, lens, radii) = thumb_layer(&mut ui, id);
         let item_h = 20.0;
-        // Settled: Regular glass (its tint, the rims inside, the glass shadow, its blur
-        // behind), corners 1.1 x the item's height, and below the items' labels.
-        let theme = Theme::light();
-        let tint = theme.material("Glass/Regular").and_then(|m| m.tint);
-        assert_eq!(lens.fills.last(), tint.map(Into::into).as_ref());
+        // Settled: Clear glass (the rims inside, no tint, no shadow, `blur(1px)` behind),
+        // corners 1.1 x the item's height, and below the items' labels.
+        assert!(
+            lens.fills
+                .iter()
+                .all(|f| f.solid().is_some_and(|c| c.a == 0))
+        );
         assert_eq!(lens.inner_shadows.len(), 2);
-        assert_eq!(lens.shadows.last().copied(), theme.shadow(4));
+        assert!(lens.shadows.iter().all(|s| s.color.a == 0));
         assert!(matches!(
             lens.blurs.first(),
-            Some(crate::style::Blur::Glass(g))
-                if theme.material("Glass/Regular").is_some_and(|m| (g.radius - m.blur).abs() < 1e-3)
+            Some(crate::style::Blur::Glass(g)) if (g.radius - 1.0).abs() < 1e-3
         ));
         assert!((radii[0] - item_h * 1.1).abs() < 0.01, "{radii:?}");
         assert!(i + 2 < n, "the lens is drawn before the items ({i} of {n})");

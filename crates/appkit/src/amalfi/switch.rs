@@ -1,5 +1,5 @@
 //! The switch (kit `Toggles/Switch`): Mini, Small and Regular, alone or in a labelled row.
-//! The thumb stretches while pressed; dragging turns it into a `Glass/Regular` lens that
+//! The thumb stretches while pressed; dragging turns it into a `Glass/Clear` lens that
 //! follows the pointer (`materials.md` lens rule).
 
 use crate::amalfi::foundation::{
@@ -340,7 +340,7 @@ impl Widget for Switch {
             border: None,
             shadow: control_shadow(&theme),
         };
-        let mut style = morph_style(&theme, morph, thumb_rest, Tier::Regular);
+        let mut style = morph_style(&theme, morph, thumb_rest, Tier::Clear);
         if morph <= 0.0 {
             style.borders.clear();
         }

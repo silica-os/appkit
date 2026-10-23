@@ -120,19 +120,18 @@ pub fn paint_morph(cx: &mut PaintCx<'_>, prefix: &str, rect: Rect, t: f32, press
         &format!("{prefix}Thumb"),
         rect,
         Shape::rounded(rect.width.min(rect.height) / 2.0),
-        morph_style(&theme, t, rest, Tier::Regular),
+        morph_style(&theme, t, rest, Tier::Clear),
     );
 }
 
 /// The glass of a lens at morph `t` (0: none, 1: full), growing with the morph.
 ///
-/// - [`Tier::Regular`] (slider, switch and segmented control, ui-kit `--s-fx-regular` on
-///   `.is-lens`): the
-///   `Glass/Regular` blur, saturation, brightness and refraction, the same glass as every
-///   control.
-/// - [`Tier::Clear`] (`--s-fx-lens`, no control uses it now): the `Glass/Clear` refraction at the
-///   rim and its slight magnification, `saturate(1.2)` and no frosting (σ 0), so the labels
-///   under the lens stay sharp, only bent and magnified.
+/// - [`Tier::Regular`] (`--s-fx-regular`): the `Glass/Regular` blur, saturation, brightness
+///   and refraction, the glass of every control at rest.
+/// - [`Tier::Clear`] (slider, switch and segmented control, ui-kit `--s-fx-lens` on
+///   `.is-lens`): the `Glass/Clear` refraction at the rim and its slight magnification,
+///   `blur(1px) saturate(1.2)`, so the labels under the lens stay sharp, only bent and
+///   magnified.
 pub fn lens_glass(theme: &Theme, t: f32, tier: Tier) -> Blur {
     let t = t.clamp(0.0, 1.0);
     let k = |v: f32| 1.0 + (v - 1.0) * t;
@@ -154,7 +153,7 @@ pub fn lens_glass(theme: &Theme, t: f32, tier: Tier) -> Blur {
         Tier::Clear => {
             let m = theme.material("Glass/Clear");
             Glass {
-                radius: 0.0,
+                radius: t,
                 saturation: k(1.2),
                 brightness: 1.0,
                 distortion: m.map_or(0.3, |m| m.distortion) * t,
@@ -1243,7 +1242,7 @@ impl Widget for LensThumb {
             "Lens",
             b,
             Shape::rounded(b.width.min(b.height) / 2.0),
-            morph_style(&theme, 1.0, rest, Tier::Regular),
+            morph_style(&theme, 1.0, rest, Tier::Clear),
         );
     }
 
@@ -1265,21 +1264,23 @@ mod tests {
     }
 
     #[test]
-    fn the_lens_is_regular_glass_with_the_css_rims() {
+    fn the_lens_is_clear_glass_with_the_css_rims() {
         let t = Theme::light();
-        let lens = morph_style(&t, 1.0, rest(&t), Tier::Regular);
-        // The thumb's fill is gone, the Regular tint is on, the rims inside, the glass drop
-        // shadow under it, and Regular glass behind.
-        let tint = t.material("Glass/Regular").and_then(|m| m.tint);
-        assert_eq!(lens.fills.last(), tint.map(Into::into).as_ref());
-        assert_eq!(lens.shadows.last().copied(), t.shadow(4));
+        let lens = morph_style(&t, 1.0, rest(&t), Tier::Clear);
+        // The thumb's fill is gone, no tint and no glass drop shadow, only the rims inside,
+        // and Clear glass behind (`blur(1px) saturate(1.2)`, bent at the rim).
+        assert!(
+            lens.fills
+                .iter()
+                .all(|f| f.solid().is_some_and(|c| c.a == 0))
+        );
+        assert!(lens.shadows.iter().all(|s| s.color.a == 0));
         assert_eq!(lens.borders.len(), 1);
         assert_eq!(lens.inner_shadows.len(), 2);
         let Some(Blur::Glass(g)) = lens.blurs.first().copied() else {
             panic!("no glass");
         };
-        let m = t.material("Glass/Regular").map(|m| (m.blur, m.saturation));
-        assert_eq!(Some((g.radius, g.saturation)), m);
+        assert!((g.radius - 1.0).abs() < 1e-6 && (g.saturation - 1.2).abs() < 1e-6);
         assert!(g.distortion > 0.0);
     }
 
@@ -1365,12 +1366,12 @@ mod tests {
         };
         let full = t.material("Glass/Regular").map_or(0.0, |m| m.blur);
         assert!(g.radius > 0.0 && g.radius < full);
-        // A Clear lens (the segmented control's) does not frost and magnifies a little.
+        // A Clear lens (every control's) barely frosts and magnifies a little.
         let clear = morph_style(&t, 0.5, rest(&t), Tier::Clear);
         let Some(Blur::Glass(g)) = clear.blurs.first().copied() else {
             panic!("no glass");
         };
-        assert!(g.radius.abs() < 1e-6);
+        assert!((g.radius - 0.5).abs() < 1e-6);
         assert!(g.magnification > 1.0 && g.magnification < 1.1 + 1e-3);
         assert!(
             half.fills
