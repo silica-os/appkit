@@ -19,31 +19,31 @@ use crate::text::Align;
 /// Fixed measures (silica_ui's `AmalfiMenuMetrics`).
 pub mod metrics {
     /// An item's height.
-    pub const ITEM_HEIGHT: f32 = 24.0;
+    pub const ITEM_HEIGHT: f32 = crate::amalfi::tokens::control_heights::SMALL;
     /// A separator's height.
     pub const SEPARATOR_HEIGHT: f32 = 8.0;
     /// The panel's padding.
-    pub const PADDING: f32 = 4.0;
+    pub const PADDING: f32 = crate::amalfi::tokens::spacing::XS;
     /// The panel's corner radius.
-    pub const RADIUS: f32 = 12.0;
+    pub const RADIUS: f32 = crate::amalfi::tokens::radii::MENU;
     /// The highlight's corner radius.
-    pub const HIGHLIGHT_RADIUS: f32 = 7.0;
+    pub const HIGHLIGHT_RADIUS: f32 = crate::amalfi::tokens::radii::SMALL_CONTROL;
     /// The item's padding at its sides.
-    pub const ITEM_PADDING: f32 = 8.0;
+    pub const ITEM_PADDING: f32 = crate::amalfi::tokens::spacing::S;
     /// The check's slot.
     pub const CHECK_SLOT: f32 = 12.0;
     /// An icon's slot.
-    pub const ICON_SLOT: f32 = 20.0;
+    pub const ICON_SLOT: f32 = crate::amalfi::tokens::control_icons::LIST;
     /// Gap between an item's parts.
-    pub const GAP: f32 = 4.0;
+    pub const GAP: f32 = crate::amalfi::tokens::spacing::XS;
     /// The chevron's size.
-    pub const CHEVRON: f32 = 16.0;
+    pub const CHEVRON: f32 = crate::amalfi::tokens::control_icons::ACCESSORY;
     /// A header's padding at its start.
-    pub const HEADER_LEFT: f32 = 12.0;
+    pub const HEADER_LEFT: f32 = crate::amalfi::tokens::spacing::M;
     /// A header's padding at its end.
-    pub const HEADER_RIGHT: f32 = 8.0;
+    pub const HEADER_RIGHT: f32 = crate::amalfi::tokens::spacing::S;
     /// A separator's inset at its sides.
-    pub const SEPARATOR_INSET: f32 = 12.0;
+    pub const SEPARATOR_INSET: f32 = crate::amalfi::tokens::spacing::M;
     /// The narrowest menu.
     pub const MIN_WIDTH: f32 = 160.0;
     /// Space between a pull-down button and its menu (`docs/spec/menus.md`).
