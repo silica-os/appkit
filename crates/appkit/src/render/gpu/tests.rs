@@ -431,3 +431,14 @@ fn a_static_subtree_of_a_window_is_kept_as_a_texture_with_the_same_pixels() {
     eprintln!("cached layers: mean {mean:.4}, max {max}");
     assert!(mean < 0.1, "mean {mean}");
 }
+
+#[test]
+fn venus_is_told_from_the_other_adapters() {
+    assert!(is_venus(
+        "Virtio-GPU Venus (AMD Radeon RX 7800 XT)",
+        "venus"
+    ));
+    assert!(is_venus("", "Venus"));
+    assert!(!is_venus("virgl (AMD Radeon RX 7800 XT)", ""));
+    assert!(!is_venus("AMD Radeon RX 7800 XT (RADV NAVI32)", "radv"));
+}

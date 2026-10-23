@@ -361,14 +361,17 @@ struct FrameStats {
     since: Instant,
     frames: u32,
     /// Timers and posted work (the declarative layer's re-renders), advance, layout, paint,
-    /// present, and the time between frames.
-    sum: [f64; 6],
-    max: [f64; 6],
+    /// present, the time between frames, the accessibility sync, and the reply: from the frame
+    /// callback to the commit of the next frame.
+    sum: [f64; 8],
+    max: [f64; 8],
+    /// When the last frame callback came.
+    callback: Option<Instant>,
 }
 
 impl FrameStats {
-    const NAMES: [&str; 6] = [
-        "update", "animate", "layout", "paint", "present", "interval",
+    const NAMES: [&str; 8] = [
+        "update", "animate", "layout", "paint", "present", "interval", "a11y", "reply",
     ];
 
     fn new() -> FrameStats {
@@ -376,8 +379,9 @@ impl FrameStats {
             on: std::env::var_os("APPKIT_FRAME_STATS").is_some(),
             since: Instant::now(),
             frames: 0,
-            sum: [0.0; 6],
-            max: [0.0; 6],
+            sum: [0.0; 8],
+            max: [0.0; 8],
+            callback: None,
         }
     }
 
@@ -785,9 +789,11 @@ impl Platform {
                 self.handle_request(r);
             }
         }
+        let t = Instant::now();
         if let Some(a) = self.a11y.as_mut() {
             a.sync(&mut self.ui);
         }
+        self.stats.add(6, t);
         let ids: Vec<WindowId> = self.surfaces.iter().map(|s| s.id).collect();
         for id in ids {
             let ready = self
@@ -1387,6 +1393,9 @@ impl Platform {
                     wl.frame(&qh, wl.clone());
                 });
                 self.stats.add(4, t);
+                if let Some(cb) = self.stats.callback.take() {
+                    self.stats.add(7, cb);
+                }
                 self.stats.frame();
                 let keep = match outcome {
                     Presented::Done => {
@@ -1961,6 +1970,9 @@ impl CompositorHandler for Platform {
             return;
         };
         let animating = self.ui.is_animating();
+        if self.stats.on {
+            self.stats.callback = Some(Instant::now());
+        }
         if let Some(s) = self.surface_mut(id) {
             s.frame_pending = false;
             if animating {

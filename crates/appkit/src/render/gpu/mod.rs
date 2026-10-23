@@ -260,6 +260,15 @@ impl GpuContext {
             }
             candidates.push(a);
         }
+        // In a virtual machine, Vulkan through Venus hands frames to the compositor several
+        // milliseconds late (a third of them miss the vblank); GLES through virgl does not.
+        // Venus goes after the others unless the backend was chosen.
+        if !fixed && std::env::var_os("APPKIT_RENDERER").is_none() {
+            candidates.sort_by_key(|a| {
+                let info = a.get_info();
+                is_venus(&info.name, &info.driver)
+            });
+        }
         let (adapter, device, queue) = candidates.into_iter().find_map(|a| {
             let (device, queue) = pollster::block_on(a.request_device(&wgpu::DeviceDescriptor {
                 label: Some("appkit"),
@@ -552,6 +561,12 @@ impl GpuContext {
         self.images.borrow_mut().insert(id, view.clone());
         Some(view)
     }
+}
+
+/// Whether an adapter is Mesa's Venus (Vulkan forwarded from a virtual machine to the host).
+fn is_venus(name: &str, driver: &str) -> bool {
+    let venus = |s: &str| s.to_ascii_lowercase().contains("venus");
+    venus(name) || venus(driver)
 }
 
 /// A multisampled target and the texture it resolves into.
