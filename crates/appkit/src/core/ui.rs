@@ -2790,6 +2790,19 @@ impl Ui {
         self.request_frame(w);
     }
 
+    /// Runs the animations a held or forced state started (a pressed control's lens) to their
+    /// end, for a snapshot that shows the settled state; endless ones (a spinner) stop the
+    /// loop at four seconds.
+    pub fn settle_animations(&mut self, window: WindowId) {
+        for _ in 0..240 {
+            if !self.is_animating() {
+                break;
+            }
+            self.advance(1.0 / 60.0);
+            let _ = self.prepare_frame(window);
+        }
+    }
+
     /// The compositor glass regions of a window (window coordinates), in painting order:
     /// rectangle, corner radius, smoothing, material, profile.
     pub fn glass_regions(&self, window: WindowId) -> Vec<GlassRegion> {

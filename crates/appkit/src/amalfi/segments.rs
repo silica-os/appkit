@@ -15,11 +15,15 @@ use crate::core::widget::{EventCx, FocusKind, Interaction, LayoutCx, PaintCx, Pr
 use crate::geom::{Point, Rect, Size};
 use crate::motion::{Animated, Timing};
 use crate::shape::Shape;
-use crate::style::{Border, Style};
+use crate::style::{Blur, Border, Shadow, Style};
 use crate::text::Align;
 
 /// How much a segmented control grows while held down (ui-kit `--press-scale-segmented`).
 const PRESS_SCALE_SEGMENTED: f32 = 1.035;
+/// The lens blurs what is behind it by 1 pt, saturated 1.2, with corners 1.1 × the item's height.
+const LENS_BLUR: f32 = 1.0;
+const LENS_SATURATION: f32 = 1.2;
+const LENS_RADIUS: f32 = 1.1;
 
 /// Fixed measures.
 pub mod metrics {
@@ -238,6 +242,39 @@ impl ItemLook {
             }
         }
     }
+}
+
+/// The thumb at `t` = 0 and the glass lens at `t` = 1: one element whose every property moves
+/// together (ui-kit `.s-segmented__thumb` and `.is-lens`). At rest: `Surface/Control`, a 1 pt
+/// `Line/Border` ring and `0 1 2` shadow, corners `item / 2`. As the lens: no fill, a 1 pt
+/// `Glass/Rim Dark` ring, `Glass/Rim Light` (0 1 1) and a white 25 % glow (0 0 3) inside,
+/// `blur(1px) saturate(1.2)` behind, corners `item * 1.1`.
+fn paint_thumb(cx: &mut PaintCx<'_>, theme: &Theme, rect: Rect, item_h: f32, t: f32) {
+    let c = &theme.colors;
+    let fade =
+        |col: Color, k: f32| Color::rgba(col.r, col.g, col.b, (f32::from(col.a) * k).round() as u8);
+    let mut style = Style::fill(fade(c.surface_control, 1.0 - t))
+        .with_border(Border::inside(c.line_border.lerp(c.glass_rim_dark, t), 1.0));
+    let mut drop = control_shadow(theme);
+    drop.color = fade(drop.color, 1.0 - t);
+    style = style.with_shadow(drop);
+    if t > 0.0 {
+        style = style
+            .with_inner_shadow(Shadow::new(fade(c.glass_rim_light, t), 0.0, 1.0, 1.0))
+            .with_inner_shadow(Shadow::new(
+                fade(Color::rgba(255, 255, 255, 0x40), t),
+                0.0,
+                0.0,
+                3.0,
+            ))
+            .with_blur(Blur::Background {
+                radius: LENS_BLUR * t,
+                saturation: 1.0 + (LENS_SATURATION - 1.0) * t,
+                brightness: 1.0,
+            });
+    }
+    let radius = item_h / 2.0 + (item_h * LENS_RADIUS - item_h / 2.0) * t;
+    cx.rec.layer("Thumb", rect, Shape::rounded(radius), style);
 }
 
 /// Text laid out for a segment, one cache per segment.
@@ -521,7 +558,8 @@ impl SegmentedControl {
 
     fn spring(cx: &EventCx<'_>) -> Timing {
         if cx.theme().appearance.reduce_motion {
-            Timing::None
+            // The short fade, no overshoot (ui-kit: 150 ms `cubic-bezier(0.2, 0, 0, 1)`).
+            Timing::curve(tokens::motion::FADE_QUICK_CURVE, tokens::motion::FADE_QUICK)
         } else {
             Timing::Spring(tokens::motion::SPRING_SNAPPY)
         }
@@ -634,27 +672,15 @@ impl Widget for SegmentedControl {
         let item_radius = m.item_height() / 2.0;
         // The selection of select one: a slide, or the chosen item's own background. While an
         // item is held the thumb is the lens: one element, morphing (ui-kit `.s-segmented__thumb`
-        // and `.is-lens`).
+        // and `.is-lens`), drawn above the items while it is the lens and below them otherwise.
         let lens_t = self.lens.get().clamp(0.0, 1.0);
         let morphing = one && (self.hot.is_some() || lens_t > 0.0);
         let sliding = one && (self.thumb.is_animating() || morphing);
-        if sliding && self.thumb.get() != Rect::ZERO {
-            let rect = shift(self.thumb.get());
-            let mut thumb = ItemLook::Selected.style(&theme);
-            thumb.opacity = 1.0 - lens_t;
-            let lens_radius = (rect.height.min(rect.width) / 2.0 - 1.0).max(0.0);
-            cx.rec.layer(
-                "Thumb",
-                rect,
-                Shape::rounded(item_radius + (lens_radius - item_radius) * lens_t),
-                thumb,
-            );
-            if lens_t > 0.0 {
-                let mut style = theme.material_style("Glass/Clear");
-                style.opacity = lens_t;
-                cx.rec
-                    .layer("Lens", rect, Shape::rounded(lens_radius), style);
-            }
+        let thumb_over = self.hot.is_some();
+        let thumb_rect =
+            (sliding && self.thumb.get() != Rect::ZERO).then(|| shift(self.thumb.get()));
+        if !thumb_over && let Some(rect) = thumb_rect {
+            paint_thumb(cx, &theme, rect, m.item_height(), lens_t);
         }
         for (i, seg) in self.segments.iter().enumerate() {
             let Some(item) = self.items.get(i).copied() else {
@@ -720,6 +746,9 @@ impl Widget for SegmentedControl {
             if dimmed {
                 cx.rec.pop();
             }
+        }
+        if thumb_over && let Some(rect) = thumb_rect {
+            paint_thumb(cx, &theme, rect, m.item_height(), lens_t);
         }
         if cx.focus_visible()
             && !cx.is_disabled()
@@ -2237,6 +2266,84 @@ mod tests {
         settle(&mut ui);
         assert!(log.borrow().is_empty());
         assert_eq!(ui.get(id, Prop::SelectedIndex), Some(Value::Int(0)));
+        assert_eq!(scale_of(&ui, id), 1.0);
+    }
+
+    fn thumb_layer(
+        ui: &mut Ui,
+        id: crate::core::ViewId,
+    ) -> (usize, usize, crate::style::Style, [f32; 4]) {
+        use crate::core::InspectedContent;
+        let layers = ui.inspect_layers(id);
+        let n = layers.len();
+        let i = layers.iter().position(|l| l.name == "Thumb").unwrap_or(n);
+        match layers.get(i).map(|l| &l.content) {
+            Some(InspectedContent::Shape { style, radii, .. }) => (i, n, style.clone(), *radii),
+            _ => (i, n, crate::style::Style::default(), [0.0; 4]),
+        }
+    }
+
+    #[test]
+    fn the_held_thumb_is_the_glass_lens_of_the_css_above_the_items() {
+        let (mut ui, win, id, _log) =
+            scene(SegmentedControl::texts(&["One", "Two", "Three"]).selected(&[0]));
+        let (i, n, rest, _) = thumb_layer(&mut ui, id);
+        // At rest the selected item carries the thumb look itself: no moving thumb.
+        assert_eq!(i, n);
+        assert!(rest.blurs.is_empty());
+        let _ = ui.set(id, Prop::Pressed, Value::Bool(true));
+        ui.prepare_frame(win);
+        settle(&mut ui);
+        ui.prepare_frame(win);
+        let (i, n, lens, radii) = thumb_layer(&mut ui, id);
+        let item_h = 20.0;
+        // Settled: transparent, the rims inside, `blur(1px) saturate(1.2)` behind, corners
+        // 1.1 x the item's height, and above the items' labels (the last layers).
+        assert_eq!(
+            lens.fills.first().and_then(|f| f.solid()).map(|c| c.a),
+            Some(0)
+        );
+        assert_eq!(lens.inner_shadows.len(), 2);
+        assert_eq!(lens.shadows[0].color.a, 0);
+        assert!(matches!(
+            lens.blurs.first(),
+            Some(crate::style::Blur::Background { radius, saturation, .. })
+                if (*radius - 1.0).abs() < 1e-3 && (*saturation - 1.2).abs() < 1e-3
+        ));
+        assert!((radii[0] - item_h * 1.1).abs() < 0.01, "{radii:?}");
+        assert!(i + 2 >= n, "the lens is drawn after the items ({i} of {n})");
+        // Let go: it is the thumb again, below the items.
+        let _ = ui.set(id, Prop::Pressed, Value::Bool(false));
+        ui.prepare_frame(win);
+        settle(&mut ui);
+        ui.prepare_frame(win);
+        let (i, n, back, _) = thumb_layer(&mut ui, id);
+        assert!(i == n || (back.blurs.is_empty() && i + 2 < n));
+    }
+
+    #[test]
+    fn reduced_motion_morphs_the_lens_with_the_short_fade_and_no_scale() {
+        let (mut ui, win, id, _log) =
+            scene(SegmentedControl::texts(&["One", "Two", "Three"]).selected(&[0]));
+        let mut a = ui.appearance;
+        a.reduce_motion = true;
+        ui.set_appearance(a);
+        let _ = ui.set(id, Prop::Pressed, Value::Bool(true));
+        ui.prepare_frame(win);
+        // 150 ms in: a fade, not a spring: the lens is between the two looks (settles by
+        // 160 ms) and the control does not scale.
+        ui.advance(0.075);
+        let mid = ui
+            .widget::<SegmentedControl>(id)
+            .map(|c| c.lens.get())
+            .unwrap_or(-1.0);
+        assert!(mid > 0.0 && mid < 1.0, "{mid}");
+        ui.advance(0.1);
+        let end = ui
+            .widget::<SegmentedControl>(id)
+            .map(|c| c.lens.get())
+            .unwrap_or(-1.0);
+        assert_eq!(end, 1.0);
         assert_eq!(scale_of(&ui, id), 1.0);
     }
 

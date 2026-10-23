@@ -321,7 +321,7 @@ fn segmented_controls_match_the_kit() {
             Vec::new()
         };
         let mut skip: Vec<&str> = held_backgrounds.iter().map(String::as_str).collect();
-        let mut devs: Vec<&str> = thr.iter().map(String::as_str).collect();
+        let devs: Vec<&str> = thr.iter().map(String::as_str).collect();
         if pressed {
             // Room for the lens: 8 beside the item, 12 above and below it.
             scene.mount(|ui| {
@@ -339,16 +339,16 @@ fn segmented_controls_match_the_kit() {
             // Kit quirk: the Pressed masters of One 6 Text have their Track and Lens
             // scaled by 437/440 (Track 9.5 + 437 wide in a 456 frame); the items keep their
             // places. Those two layers are not compared there.
+            // The kit's Lens (`Glass/Clear`, radius half its height) is stale: the live ui-kit
+            // `SSegmented.vue` is the reference, so the Lens layer is not compared and our
+            // `Thumb` (the element that swells into the lens) is checked by the lib tests.
+            skip.extend(["Lens", "Thumb"]);
             if count == 6 {
-                skip.extend(["Track", "Lens"]);
+                skip.push("Track");
                 scene.png_margin = true;
                 if let Some(r) = scene.master.rect_in_master("Track") {
                     scene.extra_mask.push(r.inflate(2.0, 2.0));
                 }
-            } else {
-                // The lens rule takes a radius of half the height minus 1 (user decision
-                // 2026-10-16), the kit's lens half its height.
-                devs.push("Lens#radii");
             }
             // The kit's lens refracts the items beneath it; the region is masked (the
             // geometry is compared).

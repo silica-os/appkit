@@ -1406,7 +1406,12 @@ pub extern "C" fn ak_window_snapshot_png(
         let Some(f) = callback else {
             return set_last(AK_ERROR_INVALID_ARGUMENT);
         };
-        let png = match window_id(window).and_then(|w| with_ui(|ui| ui.snapshot(w, scale))) {
+        let png = match window_id(window).and_then(|w| {
+            with_ui(|ui| {
+                ui.settle_animations(w);
+                ui.snapshot(w, scale)
+            })
+        }) {
             Ok(Some(img)) => img.encode_png(),
             Ok(None) => return set_last(AK_ERROR_NO_SUCH_OBJECT),
             Err(e) => return set_last(e),
