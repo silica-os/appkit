@@ -14,7 +14,7 @@ use appkit_ui::kit::{self, AppearanceOption};
 use appkit_ui::prelude::*;
 use pages::PAGES;
 
-const SIZE: (f32, f32) = (1100.0, 800.0);
+const SIZE: (f32, f32) = (1240.0, 1000.0);
 
 /// Accent choices of the toolbar: the name and the colour (`None`: Amalfi's).
 const ACCENTS: &[(&str, Option<u32>)] = &[
