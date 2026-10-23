@@ -574,9 +574,9 @@ impl SegmentedControl {
     fn step(&mut self, cx: &mut EventCx<'_>, step: isize) {
         let n = self.segments.len() as isize;
         let enabled = !is_disabled(cx);
-        let mut i = self.focus_index as isize + step;
-        while i >= 0 && i < n {
-            let idx = i as usize;
+        // The focus wraps round the ends (ui-kit `onKey`), skipping disabled items.
+        for k in 1..=n {
+            let idx = (self.focus_index as isize + step * k).rem_euclid(n.max(1)) as usize;
             if self.can_choose(idx, enabled) {
                 self.focus_index = idx;
                 if self.mode == Selection::One {
@@ -585,7 +585,6 @@ impl SegmentedControl {
                 cx.request_paint();
                 return;
             }
-            i += step;
         }
     }
 }
@@ -868,8 +867,8 @@ impl Widget for SegmentedControl {
             }
             Event::Key(k) if k.pressed => {
                 let step = match k.key {
-                    Key::Left => -1,
-                    Key::Right => 1,
+                    Key::Left | Key::Up => -1,
+                    Key::Right | Key::Down => 1,
                     Key::Space | Key::Enter => {
                         let i = self.focus_index;
                         self.choose(cx, i);
@@ -1457,8 +1456,8 @@ impl Widget for ActionSegments {
             }
             Event::Key(k) if k.pressed => {
                 let step: isize = match k.key {
-                    Key::Left => -1,
-                    Key::Right => 1,
+                    Key::Left | Key::Up => -1,
+                    Key::Right | Key::Down => 1,
                     Key::Space | Key::Enter => {
                         let i = self.focus_index;
                         self.fire(cx, i);
@@ -1467,14 +1466,13 @@ impl Widget for ActionSegments {
                     _ => return Handled::No,
                 };
                 let n = self.segments.len() as isize;
-                let mut i = self.focus_index as isize + step;
-                while i >= 0 && i < n {
-                    if self.can_press(i as usize, enabled) {
-                        self.focus_index = i as usize;
+                for k in 1..=n {
+                    let idx = (self.focus_index as isize + step * k).rem_euclid(n.max(1)) as usize;
+                    if self.can_press(idx, enabled) {
+                        self.focus_index = idx;
                         cx.request_paint();
                         break;
                     }
-                    i += step;
                 }
                 Handled::Yes
             }
@@ -1838,8 +1836,8 @@ impl Widget for PaneControl {
             }
             Event::Key(k) if k.pressed => {
                 let step: isize = match k.key {
-                    Key::Left => -1,
-                    Key::Right => 1,
+                    Key::Left | Key::Up => -1,
+                    Key::Right | Key::Down => 1,
                     _ => return Handled::No,
                 };
                 let n = self.panes.len() as isize;
@@ -2201,6 +2199,34 @@ mod tests {
         assert_eq!(ui.get(id, Prop::SelectedIndex), Some(Value::Int(2)));
         ui.key(win, KeyEvent::press(Key::Left, Mods::empty()));
         assert_eq!(ui.get(id, Prop::SelectedIndex), Some(Value::Int(0)));
+    }
+
+    #[test]
+    fn up_and_down_arrows_move_the_choice_and_wrap_round_the_ends() {
+        let (mut ui, win, id, _log) = scene(
+            SegmentedControl::new(vec![
+                Segment::text("A"),
+                Segment::text("B"),
+                Segment::text("C"),
+            ])
+            .selected(&[0]),
+        );
+        ui.set_focus(id, true);
+        ui.key(win, KeyEvent::press(Key::Down, Mods::empty()));
+        assert_eq!(ui.get(id, Prop::SelectedIndex), Some(Value::Int(1)));
+        ui.key(win, KeyEvent::press(Key::Up, Mods::empty()));
+        ui.key(win, KeyEvent::press(Key::Up, Mods::empty()));
+        assert_eq!(
+            ui.get(id, Prop::SelectedIndex),
+            Some(Value::Int(2)),
+            "wraps to the end"
+        );
+        ui.key(win, KeyEvent::press(Key::Right, Mods::empty()));
+        assert_eq!(
+            ui.get(id, Prop::SelectedIndex),
+            Some(Value::Int(0)),
+            "and back"
+        );
     }
 
     #[test]
