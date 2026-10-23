@@ -142,7 +142,12 @@ impl Component for Colors {
             search_field("Filter tokens", &filter.binding()).width(220.0),
         ))
         .spacing(12.0);
-        let mut sections = vec![bar];
+        let mut sections = vec![
+            bar,
+            note(
+                "Copy on click needs a clipboard service, which the declarative layer does not have: not offered.",
+            ),
+        ];
         for (g, items) in groups {
             let n = items.len();
             let chips: Vec<Element> = items
@@ -231,6 +236,25 @@ impl Component for Typography {
 // Glass
 // ---------------------------------------------------------------------------------------------
 
+/// The blur, saturation and shadow of a glass tier, from `tokens.json` (`glass.<tier>`).
+fn glass_numbers(tier: &str, dark: bool) -> Option<String> {
+    let json: serde_json::Value =
+        serde_json::from_str(include_str!("../../../crates/appkit/data/tokens.json")).ok()?;
+    let g = json
+        .get("glass")?
+        .get(tier)?
+        .get(if dark { "dark" } else { "light" })?;
+    let blur = g.get("blurs")?.get(0)?;
+    let shadow = g.get("shadows")?.get(0)?;
+    Some(format!(
+        "blur {} · saturation {} · shadow 0, {}, blur {}",
+        blur.get("radius")?,
+        blur.get("saturation")?,
+        shadow.get("y")?,
+        shadow.get("blur")?
+    ))
+}
+
 /// TokenGlass.vue: the glass materials over a colourful backdrop, with their numbers.
 pub struct Glass;
 
@@ -280,13 +304,9 @@ impl Component for Glass {
         .into_iter()
         .enumerate()
         {
-            let detail = match if dark { dk } else { light } {
-                Some(m) => format!(
-                    "blur {} · saturation {} · shadow {}",
-                    m.blur, m.saturation, m.shadow_level
-                ),
-                None => "tier of Glass/Regular".to_string(),
-            };
+            let _ = (light, dk);
+            let detail = glass_numbers(name.trim_start_matches("Glass/"), dark)
+                .unwrap_or_else(|| "from tokens.json".to_string());
             cards.push(stripes(i as i64, name, detail));
         }
         let m = if dark {
@@ -424,22 +444,50 @@ struct Token {
     line: String,
     used: &'static str,
     animation: Animation,
+    /// Progress 0 → 1 sampled over the token's duration (the curve graph).
+    curve: Vec<f32>,
+}
+
+/// The curve graph: the progress of a token over its duration as columns, the target at the
+/// top (a spring's overshoot rises above it).
+fn curve_graph(samples: &[f32]) -> Element {
+    let top = 56.0f32;
+    let cols: Vec<Element> = samples
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            view(Kind::VIEW)
+                .frame(4.0, (v.clamp(0.0, 1.3) * top).max(1.0))
+                .background(rgba(0x0E77E6FF))
+                .corner_radius(1.0)
+                .key(i as i64)
+        })
+        .collect();
+    row(cols)
+        .spacing(1.0)
+        .alignment(6)
+        .height(top * 1.3)
+        .padding_xy(6.0, 4.0)
+        .background(rgba(0x80808014))
+        .corner_radius(8.0)
+}
+
+/// A spring's progress (0 → 1, released from rest) after `t` seconds.
+fn spring_progress(response: f32, zeta: f32, t: f32) -> f32 {
+    let w = std::f32::consts::TAU / response.max(0.001);
+    if zeta < 1.0 {
+        let wd = w * (1.0 - zeta * zeta).sqrt();
+        1.0 - (-zeta * w * t).exp() * ((wd * t).cos() + (zeta * w / wd) * (wd * t).sin())
+    } else {
+        1.0 - (-w * t).exp() * (1.0 + w * t)
+    }
 }
 
 /// Time for a spring released from rest to stay within 0.5 % of its target, and its overshoot.
 fn spring_metrics(response: f32, zeta: f32) -> (u32, f32) {
-    let w = std::f32::consts::TAU / response;
-    let progress = |t: f32| -> f32 {
-        if zeta < 1.0 {
-            let wd = w * (1.0 - zeta * zeta).sqrt();
-            1.0 - (-zeta * w * t).exp() * ((wd * t).cos() + (zeta * w / wd) * (wd * t).sin())
-        } else {
-            1.0 - (-w * t).exp() * (1.0 + w * t)
-        }
-    };
     let (mut settle, mut peak) = (0u32, 1.0f32);
     for ms in (0..4000).step_by(2) {
-        let p = progress(ms as f32 / 1000.0);
+        let p = spring_progress(response, zeta, ms as f32 / 1000.0);
         peak = peak.max(p);
         if (p - 1.0).abs() > 0.005 {
             settle = ms + 2;
@@ -452,6 +500,15 @@ fn tokens_list() -> Vec<Token> {
     use tokens::motion as m;
     let spring = |name: &'static str, s: tokens::SpringToken, used, animation| {
         let (ms, over) = spring_metrics(s.response, s.damping_ratio);
+        let curve = (0..48)
+            .map(|i| {
+                spring_progress(
+                    s.response,
+                    s.damping_ratio,
+                    ms as f32 / 1000.0 * i as f32 / 47.0,
+                )
+            })
+            .collect();
         Token {
             name,
             line: format!(
@@ -460,6 +517,7 @@ fn tokens_list() -> Vec<Token> {
             ),
             used,
             animation,
+            curve,
         }
     };
     let fade = |name: &'static str, secs: f32, c: tokens::Cubic, used, animation| Token {
@@ -474,6 +532,7 @@ fn tokens_list() -> Vec<Token> {
         ),
         used,
         animation,
+        curve: (0..48).map(|i| c.transform(i as f32 / 47.0)).collect(),
     };
     vec![
         spring(
@@ -558,7 +617,8 @@ impl Component for Sample {
             ))
             .spacing(2.0)
             .alignment(0)
-            .width(420.0),
+            .width(330.0),
+            curve_graph(&t.curve),
             button("Replay")
                 .style(1)
                 .id(t.name)
@@ -665,6 +725,7 @@ impl Component for Lab {
             .spacing(12.0)
             .alignment(1),
             section("Stage", stage),
+            section("Curve", curve_graph(&t.curve)),
             section("Rust", mono(&rust)),
             label(t.line.as_str())
                 .text_style("Callout")
