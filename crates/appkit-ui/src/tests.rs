@@ -595,3 +595,58 @@ fn multiple_icon_and_pane_segments_hold_their_selection() {
     assert_eq!(panes.get_int(Prop::SELECTED_INDEX).unwrap(), 1);
     assert!(root.host().find("icons").is_some());
 }
+
+struct Folding;
+
+impl Component for Folding {
+    fn body(&self, cx: &mut Cx) -> Element {
+        let open = cx.state(|| true);
+        let o2 = open.clone();
+        column((
+            button("Toggle")
+                .id("toggle")
+                .on_activate(move || o2.update(|o| *o = !*o)),
+            sidebar(vec![
+                sidebar_group(
+                    "Favourites",
+                    &open.binding(),
+                    vec![
+                        sidebar_row("clock", "Recents", false, || {})
+                            .id("row")
+                            .children(sidebar_badge("3")),
+                    ],
+                )
+                .id("group"),
+                sidebar_footer(|| {}, || {}).id("footer"),
+            ]),
+        ))
+    }
+}
+
+#[test]
+fn a_sidebar_group_folds_and_unfolds_its_rows() {
+    let rt = Headless::new().unwrap();
+    let root = mount(host(), || Folding);
+    let group = root.host().find("group").unwrap();
+    let row = root.host().find("row").unwrap();
+    assert!(root.host().find("footer").is_some());
+    assert!(group.get_bool(Prop::EXPANDED).unwrap());
+    let toggle = root.host().find("toggle").unwrap();
+    toggle.click().unwrap();
+    for _ in 0..60 {
+        rt.advance(0.02);
+    }
+    assert!(!group.get_bool(Prop::EXPANDED).unwrap());
+    assert!(
+        row.get_bool(Prop::HIDDEN).unwrap(),
+        "folded rows leave the layout"
+    );
+    toggle.click().unwrap();
+    for _ in 0..60 {
+        rt.advance(0.02);
+    }
+    assert!(
+        !row.get_bool(Prop::HIDDEN).unwrap(),
+        "unfolded rows come back"
+    );
+}

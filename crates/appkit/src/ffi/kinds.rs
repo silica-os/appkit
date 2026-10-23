@@ -99,6 +99,9 @@ pub fn make(kind: u32) -> Option<Box<dyn Widget>> {
         AK_KIND_TOOLBAR_GROUP => Box::new(crate::amalfi::segments::ActionSegments::new(Vec::new())),
         AK_KIND_FORM_VALUE => Box::new(crate::amalfi::forms::FormValue { expand: false }),
         AK_KIND_FORM_FOOTER => Box::new(crate::amalfi::forms::FormFooter::default()),
+        AK_KIND_SIDEBAR_BADGE => Box::new(sidebars::Badge::new("")),
+        AK_KIND_SIDEBAR_EJECT => Box::new(sidebars::EjectButton::default()),
+        AK_KIND_SIDEBAR_FOOTER => Box::new(sidebars::Footer),
         AK_KIND_PANE_CONTROL => Box::new(crate::amalfi::segments::PaneControl::new(Vec::new())),
         AK_KIND_BOX_SURFACE => Box::new(crate::amalfi::group_box::BoxSurface::default()),
         AK_KIND_GLASS_PANEL => Box::new(crate::amalfi::materials::GlassPanel::new(

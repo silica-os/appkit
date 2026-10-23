@@ -487,3 +487,49 @@ pub fn sidebar_row(
 pub fn sidebar(rows: impl crate::IntoChildren) -> Element {
     Element::of(Kind::SIDEBAR_PANEL).children(rows)
 }
+
+/// A count badge at the end of a sidebar row (a child of [`sidebar_row`]).
+pub fn sidebar_badge(count: &str) -> Element {
+    Element::of(Kind::SIDEBAR_BADGE).prop(Prop::TEXT, s(count))
+}
+
+/// The eject button of a volume row (a child of [`sidebar_row`]); `eject` runs on a click.
+pub fn sidebar_eject(eject: impl Fn() + 'static) -> Element {
+    Element::of(Kind::SIDEBAR_EJECT).on(Signal::ACTIVATED, move |_| eject())
+}
+
+/// A sidebar group: a header with a disclosure chevron over `rows`, which fold away when
+/// the header is clicked. `open` holds whether the group is unfolded.
+pub fn sidebar_group(title: &str, open: &Binding<bool>, rows: impl crate::IntoChildren) -> Element {
+    let b = open.clone();
+    let header = Element::of(Kind::SIDEBAR_HEADER)
+        .prop(Prop::TITLE, s(title))
+        .prop(Prop::STYLE, PValue::Int(1))
+        .prop(Prop::EXPANDED, PValue::Bool(open.get()))
+        .on(Signal::EXPANDED_CHANGED, move |v| {
+            if let Some(o) = v.as_bool() {
+                b.set(o);
+            }
+        });
+    let mut kids = vec![header];
+    kids.extend(rows.into_children());
+    Element::of(Kind::SIDEBAR_GROUP)
+        .prop(Prop::EXPANDED, PValue::Bool(open.get()))
+        .children(kids)
+}
+
+/// The bar at the bottom of a sidebar with an add and a settings button.
+pub fn sidebar_footer(add: impl Fn() + 'static, settings: impl Fn() + 'static) -> Element {
+    let button = |symbol: &str, title: &str, f: Box<dyn Fn()>| {
+        Element::of(Kind::ICON_BUTTON)
+            .symbol(symbol)
+            .prop(Prop::TITLE, s(title))
+            .prop(Prop::STYLE, PValue::Int(1))
+            .prop(Prop::CONTROL_SIZE, PValue::Int(1))
+            .on(Signal::ACTIVATED, move |_| f())
+    };
+    Element::of(Kind::SIDEBAR_FOOTER).children(vec![
+        button("plus", "Add", Box::new(add)),
+        button("gear", "Settings", Box::new(settings)),
+    ])
+}
