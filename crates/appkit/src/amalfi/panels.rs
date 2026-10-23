@@ -37,13 +37,13 @@ pub mod metrics {
     /// The pad's knob.
     pub const KNOB: f32 = 14.0;
     /// The side margin of the pad, the hue slider and the hex row.
-    pub const MARGIN: f32 = 4.0;
+    pub const MARGIN: f32 = crate::amalfi::tokens::spacing::XS;
     /// The hex row's colour chip.
-    pub const CHIP: f32 = 28.0;
+    pub const CHIP: f32 = crate::amalfi::tokens::control_heights::REGULAR;
     /// A file row's height.
-    pub const ROW: f32 = 32.0;
+    pub const ROW: f32 = crate::amalfi::tokens::control_heights::LARGE;
     /// The file list's column header height.
-    pub const HEADER: f32 = 28.0;
+    pub const HEADER: f32 = crate::amalfi::tokens::control_heights::REGULAR;
     /// The file list's default height.
     pub const LIST_HEIGHT: f32 = 220.0;
     /// Where the Name, Kind and Date Modified columns start.
@@ -53,7 +53,7 @@ pub mod metrics {
     /// A file panel's width, expanded and compact.
     pub const PANEL_WIDTH: (f32, f32) = (720.0, 440.0);
     /// The file panel's corner radius.
-    pub const PANEL_RADIUS: f32 = 20.0;
+    pub const PANEL_RADIUS: f32 = crate::amalfi::tokens::radii::SHEET_ALERT;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -359,7 +359,7 @@ impl Widget for ColorChip {
         cx.rec.layer(
             "Chip",
             cx.bounds(),
-            Shape::rounded(9.0),
+            Shape::rounded(crate::amalfi::tokens::radii::REGULAR_CONTROL),
             Style::fill(self.color).with_border(Border::inside(c.line_border, 1.0)),
         );
     }
