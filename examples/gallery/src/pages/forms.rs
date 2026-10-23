@@ -60,8 +60,12 @@ impl Component for Page {
                 "form(Some(\"Account details\"), (form_section(Some(\"Profile\"), rows), form_footer(buttons)))",
             ),
             h3("Sections and rows"),
-            label("The fields of this Doc are on the Text Fields page; the form is above.")
-                .color("Text/Secondary"),
+            super::wrapped(
+                "The fields of this Doc are on the Text Fields page; the form is above.",
+                "Callout",
+                "Text/Secondary",
+                680.0,
+            ),
         ])
     }
 }

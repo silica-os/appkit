@@ -99,17 +99,25 @@ impl Component for Page {
         )
         .spacing(12.0);
         page(vec![
-            lead("A collapsible section with an animated height, and a circular dial you turn by dragging around the ring."),
+            lead(
+                "A collapsible section with an animated height, and a circular dial you turn by dragging around the ring.",
+            ),
             h2("Disclosure button"),
             button_states,
             h2("Playground"),
-            row((stage(live), card(controls))).spacing(16.0).alignment(0),
+            row((stage(live), card(controls)))
+                .spacing(16.0)
+                .alignment(0),
             code("disclosure_group(\"Advanced options\", &open, content)"),
             h2("Disclosure group"),
             groups,
             h2("Triangle"),
-            label("The triangle is the chevron of the group headers above: it turns as the group opens.")
-                .color("Text/Secondary"),
+            super::wrapped(
+                "The triangle is the chevron of the group headers above: it turns as the group opens.",
+                "Callout",
+                "Text/Secondary",
+                680.0,
+            ),
         ])
     }
 }

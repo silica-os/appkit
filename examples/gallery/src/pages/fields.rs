@@ -109,8 +109,12 @@ impl Component for Page {
             .alignment(0),
             column((
                 h2("Inline button"),
-                label("The text field with a Browse button inside is not in AppKit: not shown.")
-                    .color("Text/Tertiary"),
+                super::wrapped(
+                    "The text field with a Browse button inside is not in AppKit: not shown.",
+                    "Callout",
+                    "Text/Tertiary",
+                    680.0,
+                ),
             ))
             .spacing(10.0)
             .alignment(0),
@@ -155,8 +159,7 @@ impl Component for Page {
                     h3("Open"),
                     label("Click the arrow of a combo box to open its list.").color("Text/Secondary"),
                     h2("Combo button"),
-                    label("The combo button (a push button joined to a menu) is not in AppKit: not shown.")
-                        .color("Text/Tertiary"),
+                    super::wrapped("The combo button (a push button joined to a menu) is not in AppKit: not shown.", "Callout", "Text/Tertiary", 680.0),
                 ))
                 .spacing(14.0)
                 .alignment(0),

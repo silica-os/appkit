@@ -93,8 +93,7 @@ impl Component for Home {
                 ),
             ],
         )
-        .spacing(16.0)
-        .alignment(0);
+        .spacing(16.0);
         let steps = column((
             note("1. Open a page under Library: every state of the control is live."),
             note("2. Press, type, drag: hover, press, focus and the transitions behave as in the kit."),
@@ -254,7 +253,11 @@ impl Component for Glass {
             column((
                 overlay((
                     backdrop,
-                    glass_panel(tier, 16.0, label(name).padding_xy(16.0, 12.0)),
+                    if tier <= 2 {
+                        glass_panel(tier, 16.0, label(name).padding_xy(16.0, 12.0))
+                    } else {
+                        label(name).padding_xy(16.0, 12.0)
+                    },
                 ))
                 .corner_radius(16.0)
                 .clipped(),

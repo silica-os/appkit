@@ -88,11 +88,9 @@ impl Component for Page {
                     wells,
                     h2("Color panel"),
                     h3("Full panel"),
-                    label("Click a color well: its panel holds the swatches, the pad, the hue slider and the hex field.")
-                        .color("Text/Secondary"),
+                    super::wrapped("Click a color well: its panel holds the swatches, the pad, the hue slider and the hex field.", "Callout", "Text/Secondary", 680.0),
                     h2("Swatch chip and row"),
-                    label("The swatch chips and rows are the panel's own pieces: open a color well to see them.")
-                        .color("Text/Secondary"),
+                    super::wrapped("The swatch chips and rows are the panel's own pieces: open a color well to see them.", "Callout", "Text/Secondary", 680.0),
                 ))
                 .spacing(14.0)
                 .alignment(0),
