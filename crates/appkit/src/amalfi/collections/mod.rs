@@ -43,35 +43,35 @@ pub type RowProvider = Box<dyn FnMut(&mut Ui, usize) -> Option<ViewId>>;
 /// the kit's `Apps/Mustache/List Row`, `List Header`, `Column Row` and `Tile` masters).
 pub mod metrics {
     /// Regular row.
-    pub const ROW_HEIGHT: f32 = 28.0;
+    pub const ROW_HEIGHT: f32 = crate::amalfi::tokens::control_heights::REGULAR;
     /// Compact row.
-    pub const COMPACT_ROW_HEIGHT: f32 = 24.0;
+    pub const COMPACT_ROW_HEIGHT: f32 = crate::amalfi::tokens::control_heights::SMALL;
     /// Two-line row.
     pub const TWO_LINE_ROW_HEIGHT: f32 = 44.0;
     /// The selection's inset from the row's sides.
-    pub const SELECTION_INSET: f32 = 8.0;
+    pub const SELECTION_INSET: f32 = crate::amalfi::tokens::spacing::S;
     /// The selection's corner radius.
-    pub const SELECTION_RADIUS: f32 = 8.0;
+    pub const SELECTION_RADIUS: f32 = crate::amalfi::tokens::spacing::S;
     /// Table header height.
-    pub const HEADER_HEIGHT: f32 = 28.0;
+    pub const HEADER_HEIGHT: f32 = crate::amalfi::tokens::control_heights::REGULAR;
     /// Header titles' top.
     pub const HEADER_TITLE_Y: f32 = 6.0;
     /// The first column's left edge in a table.
-    pub const LEADING: f32 = 20.0;
+    pub const LEADING: f32 = crate::amalfi::tokens::spacing::XL;
     /// Space between columns.
-    pub const COLUMN_SPACING: f32 = 12.0;
+    pub const COLUMN_SPACING: f32 = crate::amalfi::tokens::spacing::M;
     /// Space after the last column.
-    pub const TRAILING: f32 = 12.0;
+    pub const TRAILING: f32 = crate::amalfi::tokens::spacing::M;
     /// The narrowest a column gets by resizing.
     pub const MIN_COLUMN: f32 = 32.0;
     /// Half the width of the zone where a column edge is grabbed.
     pub const RESIZE_SLOP: f32 = 4.0;
     /// A list box's corner radius (as a group box).
-    pub const BOX_RADIUS: f32 = 12.0;
+    pub const BOX_RADIUS: f32 = crate::amalfi::tokens::radii::MENU;
     /// A list box's padding around the rows.
-    pub const BOX_PADDING: f32 = 4.0;
+    pub const BOX_PADDING: f32 = crate::amalfi::tokens::spacing::XS;
     /// Indentation per outline level (token: nothing measured).
-    pub const INDENT: f32 = 16.0;
+    pub const INDENT: f32 = crate::amalfi::tokens::spacing::L;
     /// The disclosure chevron's slot in an outline row.
     pub const DISCLOSURE: f32 = 16.0;
     /// The disclosure chevron's glyph size.
@@ -81,7 +81,7 @@ pub mod metrics {
     /// The icon in a tile.
     pub const TILE_ICON: f32 = 64.0;
     /// Space between tiles.
-    pub const TILE_GAP: f32 = 16.0;
+    pub const TILE_GAP: f32 = crate::amalfi::tokens::spacing::L;
     /// The label capsule's height under a selected tile's icon.
     pub const TILE_LABEL_HEIGHT: f32 = 20.0;
 }

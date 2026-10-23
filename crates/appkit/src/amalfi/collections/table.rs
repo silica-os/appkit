@@ -854,7 +854,19 @@ impl Widget for TableView {
         cx.rec.push_clip(area, Shape::RECT);
         let range = self.rows.visible();
         if self.alternating {
-            for i in range.clone().filter(|i| i % 2 == 1) {
+            // The stripes carry on through the empty space under the last row
+            // (`SFileBrowser`).
+            let first = range.start;
+            let last = if self.rows.height > 0.0 {
+                range.end.max(
+                    ((area.height - self.rows.y(0)) / self.rows.height)
+                        .ceil()
+                        .max(0.0) as usize,
+                )
+            } else {
+                range.end
+            };
+            for i in (first..last).filter(|i| i % 2 == 1) {
                 let y = area.y + self.rows.y(i);
                 cx.rec.layer(
                     "Stripe",

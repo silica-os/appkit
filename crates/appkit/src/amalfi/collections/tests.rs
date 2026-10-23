@@ -475,3 +475,23 @@ fn a_grid_reflows_and_selects_in_two_dimensions() {
     ui.flush();
     assert_eq!(ui.get(g, Prop::SelectedRows), Some(Value::IntList(vec![])));
 }
+
+#[test]
+fn the_stripes_carry_on_under_the_last_row() {
+    let mut ui = Ui::new_headless();
+    let t = table(&mut ui, 2, false);
+    let _w = window(&mut ui, Size::new(500.0, 300.0), t);
+    let f = ui.tree.window_rect(t);
+    let stripes: Vec<_> = ui
+        .inspect_layers(t)
+        .into_iter()
+        .filter(|l| l.name == "Stripe")
+        .collect();
+    // Two rows leave one odd row, but the empty space holds more stripes.
+    assert!(stripes.len() > 3, "{}", stripes.len());
+    let lowest = stripes
+        .iter()
+        .map(|l| l.frame.bottom())
+        .fold(0.0_f32, f32::max);
+    assert!(lowest > f.height - 2.0 * metrics::ROW_HEIGHT, "{lowest}");
+}
