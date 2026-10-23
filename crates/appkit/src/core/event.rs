@@ -282,6 +282,32 @@ pub enum Event {
         /// Phase.
         phase: Phase,
     },
+    /// A multi-finger swipe on the touchpad (three fingers or more; two fingers scroll).
+    Swipe {
+        /// How many fingers.
+        fingers: u32,
+        /// Movement since the last event, in points.
+        dx: f32,
+        /// Movement since the last event, in points.
+        dy: f32,
+        /// Phase: `Began`, `Changed` or `Ended`.
+        phase: Phase,
+        /// The gesture was cancelled (a `Ended` phase that must not commit).
+        cancelled: bool,
+    },
+    /// Fingers rest on the touchpad (a hold): it stops kinetic scrolling.
+    Hold {
+        /// How many fingers.
+        fingers: u32,
+        /// `Began` or `Ended`.
+        phase: Phase,
+    },
+    /// A two-finger horizontal swipe that no view scrolled: go back (`forward` false) or
+    /// forward.
+    NavigateSwipe {
+        /// Forward (swiped left) or back (swiped right).
+        forward: bool,
+    },
     /// A key.
     Key(KeyEvent),
     /// Committed text from the input method or the keyboard.

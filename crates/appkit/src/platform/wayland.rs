@@ -64,8 +64,14 @@ use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_v1:
 };
 use wayland_protocols::wp::idle_inhibit::zv1::client::zwp_idle_inhibit_manager_v1::ZwpIdleInhibitManagerV1;
 use wayland_protocols::wp::idle_inhibit::zv1::client::zwp_idle_inhibitor_v1::ZwpIdleInhibitorV1;
+use wayland_protocols::wp::pointer_gestures::zv1::client::zwp_pointer_gesture_hold_v1::{
+    self, ZwpPointerGestureHoldV1,
+};
 use wayland_protocols::wp::pointer_gestures::zv1::client::zwp_pointer_gesture_pinch_v1::{
     self, ZwpPointerGesturePinchV1,
+};
+use wayland_protocols::wp::pointer_gestures::zv1::client::zwp_pointer_gesture_swipe_v1::{
+    self, ZwpPointerGestureSwipeV1,
 };
 use wayland_protocols::wp::pointer_gestures::zv1::client::zwp_pointer_gestures_v1::ZwpPointerGesturesV1;
 use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_manager_v3::ZwpTextInputManagerV3;
@@ -267,6 +273,10 @@ pub struct Platform {
     gestures: Option<ZwpPointerGesturesV1>,
     pinch: Option<ZwpPointerGesturePinchV1>,
     pinch_scale: f64,
+    swipe: Option<ZwpPointerGestureSwipeV1>,
+    hold: Option<ZwpPointerGestureHoldV1>,
+    swipe_fingers: u32,
+    hold_fingers: u32,
     idle_manager: Option<ZwpIdleInhibitManagerV1>,
     inhibitors: Vec<(WindowId, ZwpIdleInhibitorV1)>,
     /// The token the launcher gave (`XDG_ACTIVATION_TOKEN`), used by the first window.
@@ -546,6 +556,10 @@ impl Platform {
             gestures: globals.bind(&qh, 1..=3, ()).ok(),
             pinch: None,
             pinch_scale: 1.0,
+            swipe: None,
+            hold: None,
+            swipe_fingers: 0,
+            hold_fingers: 0,
             idle_manager: globals.bind(&qh, 1..=1, ()).ok(),
             inhibitors: Vec::new(),
             launch_token: std::env::var("XDG_ACTIVATION_TOKEN")
@@ -2041,6 +2055,16 @@ impl SeatHandler for Platform {
                             .gestures
                             .as_ref()
                             .map(|g| g.get_pinch_gesture(&p, qh, ()));
+                        self.swipe = self
+                            .gestures
+                            .as_ref()
+                            .map(|g| g.get_swipe_gesture(&p, qh, ()));
+                        // The hold gesture needs version 3 of the protocol.
+                        self.hold = self
+                            .gestures
+                            .as_ref()
+                            .filter(|g| g.version() >= 3)
+                            .map(|g| g.get_hold_gesture(&p, qh, ()));
                         self.pointer = Some(p);
                     }
                     Err(e) => tracing::warn!("pointer: {e}"),
@@ -2670,6 +2694,70 @@ impl Dispatch<ZwpPointerGesturePinchV1, ()> for Platform {
             _ => return,
         };
         state.ui.magnify(w, pos, scale, phase);
+    }
+}
+
+impl Dispatch<ZwpPointerGestureSwipeV1, ()> for Platform {
+    fn event(
+        state: &mut Self,
+        _: &ZwpPointerGestureSwipeV1,
+        event: zwp_pointer_gesture_swipe_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        use zwp_pointer_gesture_swipe_v1::Event as E;
+        let Some(w) = state.pointer_focus else { return };
+        let pos = state.pointer_pos;
+        state.ui.now = state.start.elapsed().as_secs_f64();
+        match event {
+            E::Begin { fingers, .. } => {
+                state.swipe_fingers = fingers;
+                state
+                    .ui
+                    .swipe(w, pos, fingers, 0.0, 0.0, Phase::Began, false);
+            }
+            E::Update { dx, dy, .. } => {
+                let f = state.swipe_fingers;
+                state
+                    .ui
+                    .swipe(w, pos, f, dx as f32, dy as f32, Phase::Changed, false);
+            }
+            E::End { cancelled, .. } => {
+                let f = state.swipe_fingers;
+                state
+                    .ui
+                    .swipe(w, pos, f, 0.0, 0.0, Phase::Ended, cancelled != 0);
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<ZwpPointerGestureHoldV1, ()> for Platform {
+    fn event(
+        state: &mut Self,
+        _: &ZwpPointerGestureHoldV1,
+        event: zwp_pointer_gesture_hold_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        use zwp_pointer_gesture_hold_v1::Event as E;
+        let Some(w) = state.pointer_focus else { return };
+        let pos = state.pointer_pos;
+        state.ui.now = state.start.elapsed().as_secs_f64();
+        match event {
+            E::Begin { fingers, .. } => {
+                state.hold_fingers = fingers;
+                state.ui.hold(w, pos, fingers, Phase::Began);
+            }
+            E::End { .. } => {
+                let f = state.hold_fingers;
+                state.ui.hold(w, pos, f, Phase::Ended);
+            }
+            _ => {}
+        }
     }
 }
 

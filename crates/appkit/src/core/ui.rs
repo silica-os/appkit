@@ -14,7 +14,7 @@ use crate::amalfi::theme::Theme;
 use crate::core::display::{DisplayList, Recorder};
 use crate::core::env::Appearance;
 use crate::core::event::{Button, Event, Handled, Key, KeyEvent, Mods, Phase};
-use crate::core::layout::{Alignment, Proposal};
+use crate::core::layout::{Alignment, Axis, Proposal};
 use crate::core::tree::{NodeFlags, Tree, ViewId};
 use crate::core::value::{Prop, Signal, Value};
 use crate::core::widget::{Empty, EventCx, FocusKind, Interaction, PaintCx, PropChange, Widget};
@@ -207,6 +207,17 @@ pub const DOUBLE_CLICK_INTERVAL: f64 = 0.5;
 /// Distance within which clicks count as one multi-click.
 pub const DOUBLE_CLICK_SLOP: f32 = 4.0;
 
+/// How far a horizontal two-finger gesture that nothing scrolled must go to navigate.
+const NAVIGATE_DISTANCE: f32 = 120.0;
+
+/// The precise scroll sequence in progress.
+#[derive(Debug, Default, Clone, Copy)]
+struct TouchScroll {
+    active: bool,
+    lock: Option<Axis>,
+    nav: f32,
+}
+
 /// The runtime.
 pub struct Ui {
     /// The views.
@@ -221,6 +232,7 @@ pub struct Ui {
     requests: Vec<Request>,
     /// Monotonic time in seconds (set by the platform, or by tests).
     pub now: f64,
+    touch_scroll: TouchScroll,
     /// The view under a drag of another app's data.
     drag_target: Option<ViewId>,
     animating: Vec<ViewId>,
@@ -273,6 +285,7 @@ impl Ui {
             next_handler: 1,
             requests: Vec::new(),
             now: 0.0,
+            touch_scroll: TouchScroll::default(),
             drag_target: None,
             animating: Vec::new(),
             node_anims: Vec::new(),
@@ -1757,7 +1770,10 @@ impl Ui {
         self.flush();
     }
 
-    /// Scroll at `pos`.
+    /// Scroll at `pos`. A precise (touchpad) sequence is tracked here: its first event is
+    /// `Began` whatever the platform says, a mostly-vertical (or horizontal) gesture keeps its
+    /// axis until it ends, and a horizontal gesture that no view scrolled becomes a
+    /// [`Event::NavigateSwipe`] when it ends far enough.
     pub fn scroll(
         &mut self,
         window: WindowId,
@@ -1767,7 +1783,32 @@ impl Ui {
         precise: bool,
         phase: Phase,
     ) {
-        if let Some((target, _)) = self.hit_test(window, pos) {
+        let (mut dx, mut dy, mut phase) = (dx, dy, phase);
+        if precise {
+            let g = &mut self.touch_scroll;
+            if phase != Phase::Ended && !g.active {
+                *g = TouchScroll {
+                    active: true,
+                    ..TouchScroll::default()
+                };
+                phase = Phase::Began;
+            }
+            if g.lock.is_none() && (dx != 0.0 || dy != 0.0) {
+                g.lock = Some(if dy.abs() >= dx.abs() {
+                    Axis::Vertical
+                } else {
+                    Axis::Horizontal
+                });
+            }
+            match g.lock {
+                Some(Axis::Vertical) => dx = 0.0,
+                Some(Axis::Horizontal) => dy = 0.0,
+                None => {}
+            }
+        }
+        let hit = self.hit_test(window, pos);
+        let mut handled = false;
+        if let Some((target, _)) = hit {
             let ev = Event::Scroll {
                 pos: pos - self.tree.window_origin(target),
                 dx,
@@ -1775,7 +1816,61 @@ impl Ui {
                 precise,
                 phase,
             };
-            self.send_bubbling(target, &ev);
+            handled = self.send_bubbling(target, &ev).is_some();
+        }
+        if precise {
+            let g = &mut self.touch_scroll;
+            if phase == Phase::Ended {
+                // The end of a gesture says nothing about whether it scrolled.
+            } else if handled {
+                g.nav = 0.0;
+            } else if g.lock == Some(Axis::Horizontal) {
+                g.nav += dx;
+            }
+            if phase == Phase::Ended {
+                let nav = std::mem::take(&mut g.nav);
+                *g = TouchScroll::default();
+                if nav.abs() >= NAVIGATE_DISTANCE
+                    && let Some((target, _)) = hit
+                {
+                    self.send_bubbling(target, &Event::NavigateSwipe { forward: nav < 0.0 });
+                }
+            }
+        }
+        self.flush();
+    }
+
+    /// A multi-finger swipe at `pos`, routed like a pinch.
+    #[allow(clippy::too_many_arguments)]
+    pub fn swipe(
+        &mut self,
+        window: WindowId,
+        pos: Point,
+        fingers: u32,
+        dx: f32,
+        dy: f32,
+        phase: Phase,
+        cancelled: bool,
+    ) {
+        if let Some((target, _)) = self.hit_test(window, pos) {
+            self.send_bubbling(
+                target,
+                &Event::Swipe {
+                    fingers,
+                    dx,
+                    dy,
+                    phase,
+                    cancelled,
+                },
+            );
+        }
+        self.flush();
+    }
+
+    /// Fingers rest (`Began`) or lift (`Ended`) on the touchpad at `pos`.
+    pub fn hold(&mut self, window: WindowId, pos: Point, fingers: u32, phase: Phase) {
+        if let Some((target, _)) = self.hit_test(window, pos) {
+            self.send_bubbling(target, &Event::Hold { fingers, phase });
         }
         self.flush();
     }
