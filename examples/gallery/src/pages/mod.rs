@@ -4,14 +4,12 @@ use appkit_ui::prelude::*;
 
 mod alerts;
 mod buttons;
-mod collections;
 mod dialogs;
 mod disclosure;
 mod fields;
 mod forms;
 mod group_boxes;
 mod menus;
-mod panels;
 mod popovers;
 mod popup;
 mod progress;
@@ -20,7 +18,6 @@ mod segments;
 mod settings;
 mod sidebars;
 mod sliders;
-mod statusbar;
 mod steppers;
 mod titlebars;
 mod toggles;
@@ -55,13 +52,12 @@ macro_rules! page {
     };
 }
 
-/// Every page, in the order and under the names of the ui-kit Library (`pages.js`). The
-/// families the Library has no page for (Collections, Panels, Status Bar) sit in their
-/// alphabetical place.
+/// Every page, in the order and under the names of the ui-kit Library (`pages.js`), without
+/// the shell-only ones (Control Center, Menu Bar and Dock, Notifications). Collections, Panels
+/// and the Status Bar have no Library page: they are in `examples/extras`.
 pub const PAGES: &[Entry] = &[
     page!("Alerts", "warning", alerts),
     page!("Buttons", "square", buttons),
-    page!("Collections", "list-bullet", collections),
     page!("Color Wells", "palette", wells, &[1]),
     page!("Combo Boxes", "chevron-down", fields, &[5]),
     page!("Dialogs", "compose", dialogs),
@@ -70,7 +66,6 @@ pub const PAGES: &[Entry] = &[
     page!("Group Boxes", "square", group_boxes),
     page!("Image Wells", "photo", wells, &[2]),
     page!("Menus", "list-bullet", menus),
-    page!("Panels", "palette", panels),
     page!("Pop-up and Pull-down Buttons", "chevron-down", popup),
     page!("Popovers", "message", popovers),
     page!("Progress Indicators", "gauge", progress),
@@ -79,7 +74,6 @@ pub const PAGES: &[Entry] = &[
     page!("Segmented Controls", "window-split", segments),
     page!("Sidebars", "sidebar", sidebars),
     page!("Sliders", "sliders", sliders),
-    page!("Status Bar", "minus", statusbar),
     page!("Steppers", "plus", steppers),
     page!("Text Fields", "text-size", fields, &[1, 2, 4]),
     page!("Titlebars and toolbars", "window", titlebars),

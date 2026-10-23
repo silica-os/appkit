@@ -117,9 +117,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "appkit-extras"
+version = "0.1.0"
+dependencies = [
+ "appkit-ui",
+]
+
+[[package]]
 name = "appkit-gallery"
 version = "0.1.0"
 dependencies = [
+ "appkit",
  "appkit-ui",
 ]
 
@@ -129,13 +137,6 @@ version = "0.1.0"
 
 [[package]]
 name = "appkit-materials"
-version = "0.1.0"
-dependencies = [
- "appkit-ui",
-]
-
-[[package]]
-name = "appkit-motion"
 version = "0.1.0"
 dependencies = [
  "appkit-ui",

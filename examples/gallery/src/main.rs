@@ -8,9 +8,13 @@
 //!   `DIR/<nn>-<page>.png` at 2× and exits.
 //! - `appkit-gallery --preview PATH [PAGE] [dark]`: renders one page.
 
+mod foundations;
 mod pages;
 
-use appkit_ui::kit::{self, AppearanceOption};
+use std::rc::Rc;
+
+use appkit_ui::PValue;
+use appkit_ui::kit::{self, AppearanceOption, Kind, Prop};
 use appkit_ui::prelude::*;
 use pages::PAGES;
 
@@ -25,7 +29,57 @@ const ACCENTS: &[(&str, Option<u32>)] = &[
     ("Purple", Some(0x8E4EC6FF)),
 ];
 
-/// The window's content; `start` is the page shown first.
+/// The Foundations pages: their names.
+const FOUNDATIONS: &[&str] = &[
+    "Colors",
+    "Typography",
+    "Glass",
+    "Spacing, radii, shadows",
+    "Motion",
+    "Animation Lab",
+];
+
+/// What the sidebar and the snapshots index: 0 is Home, then the Library pages, then the
+/// Foundations.
+fn count() -> usize {
+    1 + PAGES.len() + FOUNDATIONS.len()
+}
+
+fn name_of(index: usize) -> String {
+    match index {
+        0 => "Home".to_string(),
+        i if i <= PAGES.len() => PAGES
+            .get(i - 1)
+            .map_or(String::new(), |p| p.name.to_string()),
+        i => FOUNDATIONS
+            .get(i - 1 - PAGES.len())
+            .map_or(String::new(), |n| (*n).to_string()),
+    }
+}
+
+/// The content of page `index`.
+fn content_of(index: usize, go: Rc<dyn Fn(usize)>) -> Element {
+    match index {
+        0 => component(foundations::Home {
+            go,
+            library: PAGES.len(),
+        }),
+        i if i <= PAGES.len() => match PAGES.get(i - 1) {
+            Some(p) => (p.build)(),
+            None => label("No page."),
+        },
+        i => match i - 1 - PAGES.len() {
+            0 => component(foundations::Colors),
+            1 => component(foundations::Typography),
+            2 => component(foundations::Glass),
+            3 => component(foundations::Layout),
+            4 => component(foundations::Motion),
+            _ => component(foundations::Lab),
+        },
+    }
+}
+
+/// The window's content; `start` is the page shown first, `dark` the preview of a Library page.
 struct Gallery {
     start: usize,
 }
@@ -42,11 +96,21 @@ fn option(tick: &State<u32>, o: AppearanceOption) -> Binding<bool> {
     )
 }
 
+fn group_header(title: &str, subtitle: Option<&str>) -> Element {
+    let text = match subtitle {
+        Some(s) => format!("{title}  {s}"),
+        None => title.to_string(),
+    };
+    view(Kind::SIDEBAR_HEADER).prop(Prop::TITLE, PValue::Str(text.as_str().into()))
+}
+
 impl Component for Gallery {
     fn body(&self, cx: &mut Cx) -> Element {
-        let start = self.start.min(PAGES.len().saturating_sub(1));
+        let start = self.start.min(count().saturating_sub(1));
         let page = cx.state(move || start);
         let tick = cx.state(|| 0u32);
+        let query = cx.state(String::new);
+        let preview_dark = cx.state(|| 0usize);
         let t_dark = tick.clone();
         let dark = Binding::new(kit::is_dark, move |v| {
             let _ = kit::set_dark(v);
@@ -68,7 +132,7 @@ impl Component for Gallery {
         );
         let names: Vec<&str> = ACCENTS.iter().map(|(n, _)| *n).collect();
         let bar = toolbar((
-            toolbar_title("Kit Gallery"),
+            toolbar_title("Silica UI Kit"),
             spacer(),
             label("Accent").color("Text/Secondary"),
             pop_up(&names, &accent).id("accent"),
@@ -84,35 +148,82 @@ impl Component for Gallery {
             )
             .id("increase-contrast"),
         ));
-        let current = page.get().min(PAGES.len().saturating_sub(1));
-        let rows: Vec<Element> = PAGES
-            .iter()
-            .enumerate()
-            .map(|(i, p)| {
-                let page = page.clone();
-                sidebar_row(p.symbol, p.name, i == current, move || page.set(i)).key(i as i64)
-            })
-            .collect();
-        let content = match PAGES.get(current) {
-            Some(p) => (p.build)().key(current as i64),
-            None => label("No pages."),
+        let current = page.get().min(count().saturating_sub(1));
+        let go: Rc<dyn Fn(usize)> = {
+            let page = page.clone();
+            Rc::new(move |i| page.set(i))
         };
+        // Sidebar.vue: the brand, the search, the Library (filtered), the Foundations.
+        let q = query.get().trim().to_lowercase();
+        let row_for = |i: usize, symbol: &str| {
+            let page = page.clone();
+            sidebar_row(symbol, &name_of(i), i == current, move || page.set(i)).key(i as i64)
+        };
+        let mut rows: Vec<Element> = Vec::new();
+        let brand = {
+            let page = page.clone();
+            button("Silica UI Kit  Amalfi 1.0")
+                .style(3)
+                .id("brand")
+                .on_activate(move || page.set(0))
+        };
+        rows.push(group_header("Library", Some("pages of the Sketch kit")).key(-1i64));
+        let mut shown = 0;
+        for (n, p) in PAGES.iter().enumerate() {
+            if q.is_empty() || p.name.to_lowercase().contains(&q) {
+                rows.push(row_for(n + 1, p.symbol));
+                shown += 1;
+            }
+        }
+        if shown == 0 {
+            rows.push(
+                label("No library page matches.")
+                    .text_style("Caption")
+                    .color("Text/Tertiary")
+                    .padding_xy(12.0, 4.0)
+                    .key(-3i64),
+            );
+        }
+        rows.push(group_header("Foundations", None).key(-2i64));
+        for (n, _) in FOUNDATIONS.iter().enumerate() {
+            rows.push(row_for(1 + PAGES.len() + n, "circle"));
+        }
+        let library_page = current >= 1 && current <= PAGES.len();
+        let mut body = content_of(current, go);
+        if library_page {
+            let mode = preview_dark.get();
+            body = body.dark(Some(mode == 1));
+        }
+        let header = row((
+            label(name_of(current)).text_style("Title 2"),
+            spacer(),
+            if library_page {
+                segmented(&["Light", "Dark"], &preview_dark.binding()).id("preview-theme")
+            } else {
+                view(Kind::VIEW)
+            },
+            button("Quit").style(1).id("quit").on_activate(kit::quit),
+        ))
+        .spacing(12.0)
+        .alignment(1)
+        .padding_xy(24.0, 12.0);
         row((
-            column((scroll_view(sidebar(rows).width(240.0)).fill(),))
-                .width(240.0)
-                .max_height(f32::INFINITY),
             column((
-                row((
-                    label(PAGES.get(current).map_or("", |p| p.name)).text_style("Title 2"),
-                    spacer(),
-                    button("Quit").style(1).id("quit").on_activate(kit::quit),
-                ))
-                .padding_xy(24.0, 12.0),
-                scroll_view(content).fill(),
+                brand.padding_xy(8.0, 8.0),
+                search_field("Search pages and components", &query.binding())
+                    .id("search")
+                    .padding_xy(12.0, 0.0),
+                scroll_view(sidebar(rows)).fill(),
             ))
-            .spacing(0.0)
+            .spacing(8.0)
             .alignment(0)
-            .fill(),
+            .width(264.0)
+            .max_height(f32::INFINITY)
+            .background(rgba(0x00000000)),
+            column((header, scroll_view(body).fill()))
+                .spacing(0.0)
+                .alignment(0)
+                .fill(),
         ))
         .spacing(0.0)
         .alignment(0)
@@ -152,9 +263,10 @@ fn snapshot(args: &[String]) -> Option<i32> {
     let run = || -> Result<(), String> {
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         let _rt = kit::Headless::new().map_err(|e| e.to_string())?;
-        for (n, p) in PAGES.iter().enumerate() {
-            let png = render(n, dark).map_err(|e| format!("{}: {e}", p.name))?;
-            let path = dir.join(snapshot_name(n, p.name));
+        for n in 0..count() {
+            let name = name_of(n);
+            let png = render(n, dark).map_err(|e| format!("{name}: {e}"))?;
+            let path = dir.join(snapshot_name(n, &name));
             std::fs::write(&path, png).map_err(|e| format!("{}: {e}", path.display()))?;
         }
         Ok(())

@@ -22,9 +22,9 @@ fn snapshot_writes_one_png_per_page() {
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
     names.sort();
-    assert_eq!(names.len(), 30, "{names:?}");
-    assert_eq!(names.first().map(String::as_str), Some("01-alerts.png"));
-    assert!(names.iter().any(|n| n == "30-example-settings.png"));
+    assert_eq!(names.len(), 34, "{names:?}");
+    assert_eq!(names.first().map(String::as_str), Some("01-home.png"));
+    assert!(names.iter().any(|n| n == "28-example-settings.png"));
     for n in &names {
         let png = std::fs::read(dir.join(n)).unwrap();
         assert_eq!(png.get(1..4), Some(&b"PNG"[..]), "{n}");
