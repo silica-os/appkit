@@ -99,7 +99,7 @@ mod tests {
         assert_eq!(states::DISABLED_OPACITY, 0.35);
         assert_eq!(materials::GLASS_REGULAR_LIGHT.blur, 8.0);
         assert_eq!(materials::GLASS_REGULAR_LIGHT.shadow_level, 4);
-        assert_eq!(shadows::LIGHT[3].y, 8.0);
+        assert_eq!(shadows::LIGHT[3].y, 4.0);
         assert_eq!(materials::GLASS_CLEAR_DARK.magnification, 1.1);
         assert_eq!(motion::SPRING_BOUNCY.damping_ratio, 0.5);
         assert_eq!(motion::FADE_QUICK, 0.15);

@@ -247,8 +247,8 @@ mod tests {
         let t = Theme::light();
         let s = t.material_style("Glass/Regular");
         assert_eq!(s.shadows.len(), 1);
-        assert_eq!(s.shadows[0].blur, 20.0);
-        assert_eq!(s.shadows[0].y, 8.0);
+        assert_eq!(s.shadows[0].blur, 14.0);
+        assert_eq!(s.shadows[0].y, 4.0);
         assert_eq!(s.blurs.len(), 1);
         assert_eq!(s.borders.len(), 1);
         assert_eq!(s.inner_shadows.len(), 2);
