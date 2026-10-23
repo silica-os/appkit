@@ -22,7 +22,7 @@ use crate::text::Align;
 
 /// How much a segmented control grows while held down (ui-kit `--press-scale-segmented`).
 const PRESS_SCALE_SEGMENTED: f32 = 1.035;
-/// The lens blurs what is behind it by 1 pt, saturated 1.2, with corners 1.1 × the item's height.
+/// The lens is `Glass/Regular`, with corners 1.1 × the item's height.
 const LENS_RADIUS: f32 = 1.1;
 
 /// Fixed measures.
@@ -246,9 +246,8 @@ impl ItemLook {
 
 /// The thumb at `t` = 0 and the glass lens at `t` = 1: one element whose every property moves
 /// together (ui-kit `.s-segmented__thumb` and `.is-lens`). At rest: `Surface/Control`, a 1 pt
-/// `Line/Border` ring and `0 1 2` shadow, corners `item / 2`. As the lens: no fill, a 1 pt
-/// `Glass/Rim Dark` ring, `Glass/Rim Light` (0 1 1) and a white 25 % glow (0 0 3) inside,
-/// `blur(1px) saturate(1.2)` behind, corners `item * 1.1`.
+/// `Line/Border` ring and `0 1 2` shadow, corners `item / 2`. As the lens: `Glass/Regular`
+/// (its tint, rims, glow and `shadows.glass`), corners `item * 1.1`. Always under the labels.
 fn paint_thumb(cx: &mut PaintCx<'_>, theme: &Theme, rect: Rect, item_h: f32, t: f32) {
     let c = &theme.colors;
     let rest = ThumbRest {
@@ -256,7 +255,7 @@ fn paint_thumb(cx: &mut PaintCx<'_>, theme: &Theme, rect: Rect, item_h: f32, t: 
         border: Some(c.line_border),
         shadow: control_shadow(theme),
     };
-    let style = morph_style(theme, t, rest, Tier::Clear);
+    let style = morph_style(theme, t, rest, Tier::Regular);
     let radius = item_h / 2.0 + (item_h * LENS_RADIUS - item_h / 2.0) * t;
     cx.rec.layer("Thumb", rect, Shape::rounded(radius), style);
 }
@@ -656,14 +655,13 @@ impl Widget for SegmentedControl {
         let item_radius = m.item_height() / 2.0;
         // The selection of select one: a slide, or the chosen item's own background. While an
         // item is held the thumb is the lens: one element, morphing (ui-kit `.s-segmented__thumb`
-        // and `.is-lens`), drawn above the items while it is the lens and below them otherwise.
+        // and `.is-lens`), always below the items (Track, Lens, Segments from bottom to top).
         let lens_t = self.lens.get().clamp(0.0, 1.0);
         let morphing = one && (self.hot.is_some() || lens_t > 0.0);
         let sliding = one && (self.thumb.is_animating() || morphing);
-        let thumb_over = self.hot.is_some();
         let thumb_rect =
             (sliding && self.thumb.get() != Rect::ZERO).then(|| shift(self.thumb.get()));
-        if !thumb_over && let Some(rect) = thumb_rect {
+        if let Some(rect) = thumb_rect {
             paint_thumb(cx, &theme, rect, m.item_height(), lens_t);
         }
         for (i, seg) in self.segments.iter().enumerate() {
@@ -730,9 +728,6 @@ impl Widget for SegmentedControl {
             if dimmed {
                 cx.rec.pop();
             }
-        }
-        if thumb_over && let Some(rect) = thumb_rect {
-            paint_thumb(cx, &theme, rect, m.item_height(), lens_t);
         }
         if cx.focus_visible()
             && !cx.is_disabled()
@@ -1604,7 +1599,9 @@ impl Pane {
 
 /// The segmented control for switching the panes of a window (settings windows always use
 /// it): a `Glass/Regular` capsule 52 tall of equal panes, each a 20 pt glyph over a Caption
-/// label. Hover, press and selection change in one frame.
+/// label. As in every select-one segmented control (ui-kit `SSegmented`, stacked) the thumb
+/// slides to the chosen pane, and while held it swells into the glass lens, which follows the
+/// pointer from pane to pane; the pane under it when released is chosen.
 #[derive(Debug)]
 pub struct PaneControl {
     /// The panes.
@@ -1616,7 +1613,13 @@ pub struct PaneControl {
     labels: Labels,
     pw: f32,
     hovered: Option<usize>,
-    pressed: Option<usize>,
+    /// Held down by the pointer.
+    down: bool,
+    thumb: Animated<Rect>,
+    /// 0 the thumb, 1 the glass lens (`spring.snappy`).
+    lens: Animated<f32>,
+    /// The pane under the lens.
+    hot: Option<usize>,
 }
 
 impl PaneControl {
@@ -1629,7 +1632,10 @@ impl PaneControl {
             labels: Labels::default(),
             pw: metrics::MIN_PANE_WIDTH,
             hovered: None,
-            pressed: None,
+            down: false,
+            thumb: Animated::new(Rect::ZERO),
+            lens: Animated::new(0.0),
+            hot: None,
         }
     }
 
@@ -1660,6 +1666,51 @@ impl PaneControl {
                 whole(widest + 24.0, 8.0).max(metrics::MIN_PANE_WIDTH)
             }
         };
+        if !self.thumb.is_animating() && self.hot.is_none() && self.lens.get() <= 0.0 {
+            let r = self.item(self.selected).unwrap_or(Rect::ZERO);
+            self.thumb.jump(r);
+        }
+    }
+
+    /// The box of pane `i`, from the control's origin.
+    fn item(&self, i: usize) -> Option<Rect> {
+        (i < self.panes.len()).then(|| {
+            Rect::new(
+                metrics::TRACK_PADDING + i as f32 * self.pw,
+                metrics::TRACK_PADDING,
+                self.pw,
+                metrics::PANE_HEIGHT,
+            )
+        })
+    }
+
+    /// The pane swells into the lens, or the lens moves to it.
+    fn lens_to(&mut self, cx: &mut EventCx<'_>, i: usize) {
+        let Some(item) = self.item(i) else {
+            return;
+        };
+        let spring = SegmentedControl::spring(cx);
+        if self.hot.is_none() && self.thumb.get() == Rect::ZERO {
+            self.thumb.jump(item);
+        }
+        self.hot = Some(i);
+        self.thumb.animate_to(lens_rect(item), spring);
+        self.lens.animate_to(1.0, spring);
+        cx.request_paint();
+        cx.animate();
+    }
+
+    /// The lens turns back into the thumb under the chosen pane.
+    fn lens_off(&mut self, cx: &mut EventCx<'_>) {
+        let spring = SegmentedControl::spring(cx);
+        self.hot = None;
+        match self.item(self.selected) {
+            Some(to) => self.thumb.animate_to(to, spring),
+            None => self.thumb.jump(Rect::ZERO),
+        }
+        self.lens.animate_to(0.0, spring);
+        cx.request_paint();
+        cx.animate();
     }
 
     fn width(&self) -> f32 {
@@ -1684,10 +1735,20 @@ impl PaneControl {
         if i == self.selected || !self.can(i, !is_disabled(cx)) {
             return;
         }
+        let from = self.thumb.get();
         self.selected = i;
+        if let Some(to) = self.item(i) {
+            if cx.theme().appearance.reduce_motion || from == Rect::ZERO {
+                self.thumb.jump(to);
+            } else {
+                self.thumb
+                    .animate_to(to, Timing::Spring(tokens::motion::SPRING_SNAPPY));
+            }
+        }
         cx.emit(Signal::ValueChanged, Value::Int(i as i64));
         cx.emit(Signal::SelectionChanged, Value::Int(i as i64));
         cx.request_paint();
+        cx.animate();
     }
 }
 
@@ -1715,14 +1776,20 @@ impl Widget for PaneControl {
         );
         let enabled = !cx.is_disabled();
         let selected = self.selected.min(self.panes.len().saturating_sub(1));
+        // The thumb slides, or is the lens, below the panes; at rest the chosen pane carries
+        // the thumb's look itself.
+        let lens_t = self.lens.get().clamp(0.0, 1.0);
+        let sliding = self.thumb.is_animating() || self.hot.is_some() || lens_t > 0.0;
+        if sliding && self.thumb.get() != Rect::ZERO {
+            let rect = self.thumb.get().translate(Point::new(b.x, b.y));
+            paint_thumb(cx, &theme, rect, metrics::PANE_HEIGHT, lens_t);
+        }
         for (i, pane) in self.panes.iter().enumerate() {
             let chosen = i == selected;
             let on = pane.enabled;
-            let look = if chosen {
+            let look = if chosen && !sliding {
                 ItemLook::Selected
-            } else if self.pressed == Some(i) && on && enabled {
-                ItemLook::Pressed
-            } else if self.hovered == Some(i) && on && enabled {
+            } else if self.hovered == Some(i) && on && enabled && !self.down && !chosen {
                 ItemLook::Hover
             } else {
                 ItemLook::Rest
@@ -1814,31 +1881,37 @@ impl Widget for PaneControl {
             } => {
                 self.compute(&theme);
                 let i = self.index_at(pos.x - origin.x);
-                if self.can(i, enabled) {
-                    self.pressed = Some(i);
-                    cx.request_paint();
-                    return Handled::Yes;
+                if self.down || !self.can(i, enabled) {
+                    return Handled::No;
                 }
-                Handled::No
+                self.down = true;
+                cx.grow(PRESS_SCALE_SEGMENTED);
+                self.lens_to(cx, i);
+                Handled::Yes
+            }
+            Event::PointerMove {
+                pos,
+                dragging: true,
+                ..
+            } if self.down => {
+                // The lens follows the pointer from pane to pane.
+                let i = self.index_at(pos.x - origin.x);
+                if self.can(i, enabled) && self.hot != Some(i) {
+                    self.lens_to(cx, i);
+                }
+                Handled::Yes
             }
             Event::PointerUp {
-                pos,
                 button: Button::Left,
                 ..
-            } if self.pressed.is_some() => {
-                let p = self.pressed.take();
-                let local = Point::new(pos.x - origin.x, pos.y - origin.y);
-                let inside = local.y >= 0.0
-                    && local.y <= metrics::PANE_BAR_HEIGHT
-                    && local.x >= 0.0
-                    && local.x <= self.width();
-                if let Some(p) = p
-                    && inside
-                    && self.index_at(local.x) == p
-                {
-                    self.choose(cx, p);
+            } if self.down => {
+                self.down = false;
+                cx.grow(1.0);
+                // Released anywhere (the pointer is captured): the pane under the lens.
+                if let Some(t) = self.hot {
+                    self.choose(cx, t);
                 }
-                cx.request_paint();
+                self.lens_off(cx);
                 Handled::Yes
             }
             Event::Key(k) if k.pressed => {
@@ -1860,6 +1933,12 @@ impl Widget for PaneControl {
             }
             _ => Handled::No,
         }
+    }
+
+    fn tick(&mut self, _cx: &mut EventCx<'_>, dt: f32) -> bool {
+        let a = self.thumb.tick(dt);
+        let b = self.lens.tick(dt);
+        a || b
     }
 
     fn interaction(&self) -> Interaction {
@@ -2302,7 +2381,7 @@ mod tests {
     }
 
     #[test]
-    fn the_held_thumb_is_the_glass_lens_of_the_css_above_the_items() {
+    fn the_held_thumb_is_the_regular_glass_lens_under_the_labels() {
         let (mut ui, win, id, _log) =
             scene(SegmentedControl::texts(&["One", "Two", "Three"]).selected(&[0]));
         let (i, n, rest, _) = thumb_layer(&mut ui, id);
@@ -2315,21 +2394,20 @@ mod tests {
         ui.prepare_frame(win);
         let (i, n, lens, radii) = thumb_layer(&mut ui, id);
         let item_h = 20.0;
-        // Settled: transparent, the rims inside, `blur(1px) saturate(1.2)` behind, corners
-        // 1.1 x the item's height, and above the items' labels (the last layers).
-        assert_eq!(
-            lens.fills.first().and_then(|f| f.solid()).map(|c| c.a),
-            Some(0)
-        );
+        // Settled: Regular glass (its tint, the rims inside, the glass shadow, its blur
+        // behind), corners 1.1 x the item's height, and below the items' labels.
+        let theme = Theme::light();
+        let tint = theme.material("Glass/Regular").and_then(|m| m.tint);
+        assert_eq!(lens.fills.last(), tint.map(Into::into).as_ref());
         assert_eq!(lens.inner_shadows.len(), 2);
-        assert_eq!(lens.shadows[0].color.a, 0);
+        assert_eq!(lens.shadows.last().copied(), theme.shadow(4));
         assert!(matches!(
             lens.blurs.first(),
             Some(crate::style::Blur::Glass(g))
-                if g.radius.abs() < 1e-6 && (g.saturation - 1.2).abs() < 1e-3 && g.magnification > 1.0
+                if theme.material("Glass/Regular").is_some_and(|m| (g.radius - m.blur).abs() < 1e-3)
         ));
         assert!((radii[0] - item_h * 1.1).abs() < 0.01, "{radii:?}");
-        assert!(i + 2 >= n, "the lens is drawn after the items ({i} of {n})");
+        assert!(i + 2 < n, "the lens is drawn before the items ({i} of {n})");
         // Let go: it is the thumb again, below the items.
         let _ = ui.set(id, Prop::Pressed, Value::Bool(false));
         ui.prepare_frame(win);
@@ -2360,7 +2438,7 @@ mod tests {
     }
 
     #[test]
-    fn the_label_under_the_lens_is_bent_and_magnified_not_blurred() {
+    fn the_label_over_the_lens_stays_sharp() {
         // Reduced motion: no scale, so the held and the resting renders line up.
         let (mut ui, win, id, _log) =
             scene(SegmentedControl::texts(&["Day", "Week", "Month"]).selected(&[1]));
@@ -2401,20 +2479,11 @@ mod tests {
         }
         let later = ui.snapshot(win, 2.0).expect("later");
         assert_eq!(held.bytes(), later.bytes());
-        // Refraction moves pixels under the lens ...
-        let diff: f32 = grey(&held, r)
-            .iter()
-            .zip(&reference)
-            .map(|(a, b)| (a - b).abs())
-            .sum::<f32>()
-            / reference.len().max(1) as f32;
-        assert!(diff > 0.5, "the lens changes nothing ({diff:.2})");
-        // ... but does not blur them: the edge contrast of the label is kept (a 1 pt blur
-        // would cost a third of it).
+        // The label is drawn over the glass, as sharp as at rest.
         let (got, want) = (std_dev(&grey(&held, r)), std_dev(&reference));
         assert!(
             got >= want * 0.85,
-            "contrast {got:.2} under the lens, {want:.2} at rest"
+            "contrast {got:.2} over the lens, {want:.2} at rest"
         );
     }
 
@@ -2534,6 +2603,37 @@ mod tests {
         click(&mut ui, win, p);
         assert_eq!(*log.borrow(), vec![Value::Int(1)]);
         assert_eq!(ui.get(id, Prop::SelectedIndex), Some(Value::Int(1)));
+    }
+
+    #[test]
+    fn pane_control_slides_its_thumb_and_drags_the_lens() {
+        let (mut ui, win, id, log) = scene(PaneControl::new(vec![
+            Pane::new("General", "gear"),
+            Pane::new("Network", "wifi"),
+            Pane::new("Sound", "speaker"),
+        ]));
+        let lens = |ui: &Ui| {
+            ui.widget::<PaneControl>(id)
+                .map(|c| (c.hot, c.lens.target(), c.thumb.target()))
+        };
+        let start = at(&ui, id, 40.0, 26.0);
+        ui.pointer_move(win, start, Mods::empty());
+        ui.pointer_down(win, start, Button::Left, Mods::empty());
+        // Held: the lens is around the first pane, 8 / 12 beyond it.
+        let first = ui.widget::<PaneControl>(id).and_then(|c| c.item(0));
+        assert_eq!(lens(&ui), first.map(|r| (Some(0), 1.0, lens_rect(r))));
+        // Dragged to the last pane and released below the control: the last one is chosen
+        // and the thumb slides back under it.
+        let far = at(&ui, id, 250.0, 26.0);
+        ui.pointer_move(win, far, Mods::empty());
+        ui.pointer_up(win, at(&ui, id, 250.0, 120.0), Button::Left, Mods::empty());
+        assert_eq!(*log.borrow(), vec![Value::Int(2)]);
+        let last = ui.widget::<PaneControl>(id).and_then(|c| c.item(2));
+        assert_eq!(lens(&ui), last.map(|r| (None, 0.0, r)));
+        assert!(
+            ui.widget::<PaneControl>(id)
+                .is_some_and(|c| c.thumb.is_animating())
+        );
     }
 
     #[test]

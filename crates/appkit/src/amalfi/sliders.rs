@@ -126,10 +126,11 @@ pub fn paint_morph(cx: &mut PaintCx<'_>, prefix: &str, rect: Rect, t: f32, press
 
 /// The glass of a lens at morph `t` (0: none, 1: full), growing with the morph.
 ///
-/// - [`Tier::Regular`] (slider and switch, ui-kit `--s-fx-regular` on `.is-lens`): the
+/// - [`Tier::Regular`] (slider, switch and segmented control, ui-kit `--s-fx-regular` on
+///   `.is-lens`): the
 ///   `Glass/Regular` blur, saturation, brightness and refraction, the same glass as every
 ///   control.
-/// - [`Tier::Clear`] (segmented control, `--s-fx-lens`): the `Glass/Clear` refraction at the
+/// - [`Tier::Clear`] (`--s-fx-lens`, no control uses it now): the `Glass/Clear` refraction at the
 ///   rim and its slight magnification, `saturate(1.2)` and no frosting (σ 0), so the labels
 ///   under the lens stay sharp, only bent and magnified.
 pub fn lens_glass(theme: &Theme, t: f32, tier: Tier) -> Blur {
