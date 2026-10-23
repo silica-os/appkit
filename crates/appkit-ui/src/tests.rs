@@ -695,3 +695,40 @@ fn fields_take_clear_error_inline_button_and_combo_button() {
     assert!(root.host().find("inline").is_some());
     assert!(root.host().find("cb").is_some());
 }
+
+struct Number;
+
+impl Component for Number {
+    fn body(&self, cx: &mut Cx) -> Element {
+        let v = cx.state(|| 98.0f64);
+        let b = v.binding();
+        column((
+            number_field(cx, &b, 0.0, 99.0, 1.0),
+            label(format!("{}", v.get())).id("shown"),
+        ))
+    }
+}
+
+#[test]
+fn a_number_field_steps_clamps_and_shows_the_value() {
+    let rt = Headless::new().unwrap();
+    let root = mount(host(), || Number);
+    let field = root.host().find("Value field").unwrap();
+    let stepper = root.host().find("Stepper").unwrap();
+    assert_eq!(field.get_str(Prop::TEXT).unwrap(), "98");
+    stepper.perform(3 /* AK_ACTION_INCREMENT */).unwrap();
+    rt.advance(0.01);
+    assert_eq!(
+        root.host()
+            .find("shown")
+            .unwrap()
+            .get_str(Prop::TEXT)
+            .unwrap(),
+        "99"
+    );
+    assert_eq!(field.get_str(Prop::TEXT).unwrap(), "99");
+    // Past the maximum nothing moves.
+    stepper.perform(3 /* AK_ACTION_INCREMENT */).unwrap();
+    rt.advance(0.01);
+    assert_eq!(field.get_str(Prop::TEXT).unwrap(), "99");
+}

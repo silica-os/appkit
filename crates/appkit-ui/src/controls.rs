@@ -554,3 +554,83 @@ pub fn inline_button_field(
 pub fn combo_button(action: impl Fn() + 'static) -> Element {
     Element::of(Kind::COMBO_BUTTON).on(Signal::ACTIVATED, move |_| action())
 }
+
+fn format_number(v: f64) -> String {
+    if v.is_finite() && v.fract() == 0.0 {
+        format!("{}", v as i64)
+    } else {
+        v.to_string()
+    }
+}
+
+/// A number field: the value field with a stepper beside it (the kit's `Steppers/With Field`),
+/// 8 apart. `value` is clamped to `min..=max`; typing a number is committed on Return or when
+/// the field loses the focus (a text that is no number gives the value back), and Up and Down
+/// in the field step by `step`.
+pub fn number_field(
+    cx: &mut crate::Cx,
+    value: &Binding<f64>,
+    min: f64,
+    max: f64,
+    step: f64,
+) -> Element {
+    let (lo, hi) = (min.min(max), max.max(min));
+    let typed = cx.state(|| format_number(value.get()));
+    let seen = cx.state(|| value.get());
+    if (seen.get() - value.get()).abs() > f64::EPSILON {
+        // Changed from outside: the field shows it.
+        seen.set(value.get());
+        typed.set(format_number(value.get()));
+    }
+    let commit = {
+        let (value, typed) = (value.clone(), typed.clone());
+        move |text: &str| {
+            let n = text
+                .trim()
+                .replace(',', ".")
+                .parse::<f64>()
+                .ok()
+                .filter(|n| n.is_finite())
+                .map_or(value.get(), |n| n.clamp(lo, hi));
+            value.set(n);
+            typed.set(format_number(n));
+        }
+    };
+    let (c1, c2, t1) = (commit.clone(), commit, typed.clone());
+    let (v1, t2, v2, t3) = (value.clone(), typed.clone(), value.clone(), typed.clone());
+    let field = Element::of(Kind::VALUE_FIELD)
+        .id("Value field")
+        .prop(Prop::TEXT, s(&typed.get()))
+        .on(Signal::TEXT_CHANGED, move |v| {
+            if let Value::Str(t) = v
+                && *t != t1.get()
+            {
+                t1.set(t.clone());
+            }
+        })
+        .on(Signal::SUBMITTED, move |v| {
+            if let Value::Str(t) = v {
+                c1(t);
+            }
+        })
+        .on(Signal::EDITING_ENDED, {
+            let typed = typed.clone();
+            move |_| c2(&typed.get())
+        })
+        .on(Signal::ACTIVATED, move |v| {
+            // Up (1) and Down (-1) in the field.
+            let dir = v.as_int().unwrap_or(0).signum() as f64;
+            let n = (v1.get() + dir * step).clamp(lo, hi);
+            v1.set(n);
+            t2.set(format_number(n));
+        });
+    let stepper = stepper(value, lo, hi, step)
+        .id("Stepper")
+        .on(Signal::VALUE_CHANGED, move |v| {
+            if let Some(n) = v.as_f64() {
+                v2.set(n);
+                t3.set(format_number(n));
+            }
+        });
+    crate::row((field, stepper)).spacing(8.0).alignment(1)
+}

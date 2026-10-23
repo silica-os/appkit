@@ -120,12 +120,7 @@ impl Component for Page {
             .alignment(0),
             column((
                 h2("Number field"),
-                row((
-                    text_field("0", &cx.state(|| qty.get().to_string()).binding()).width(56.0),
-                    stepper(&qty.binding(), 0.0, 99.0, 1.0),
-                    label(format!("number {}", qty.get())).color("Text/Secondary"),
-                ))
-                .spacing(8.0),
+                number_field(cx, &qty.binding(), 0.0, 99.0, 1.0),
             ))
             .spacing(10.0)
             .alignment(0),
