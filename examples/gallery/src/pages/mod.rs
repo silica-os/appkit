@@ -75,7 +75,7 @@ pub const PAGES: &[Entry] = &[
     page!("Sidebars", "sidebar", sidebars),
     page!("Sliders", "sliders", sliders),
     page!("Steppers", "plus", steppers),
-    page!("Text Fields", "text-size", fields, &[1, 2, 4]),
+    page!("Text Fields", "text-size", fields, &[1, 2]),
     page!("Titlebars and toolbars", "window", titlebars),
     page!("Toggles - Checkboxes", "square", toggles, &[1]),
     page!("Toggles - Radio Buttons", "square", toggles, &[2]),
@@ -116,6 +116,84 @@ pub fn captioned(caption: &str, content: Element) -> Element {
     ))
     .spacing(4.0)
     .alignment(1)
+}
+
+/// A wrapping paragraph of `width` points.
+pub fn wrapped(text: &str, style: &str, role: &str, width: f32) -> Element {
+    label(text)
+        .text_style(style)
+        .color(role)
+        .prop(appkit_ui::kit::Prop::WRAPS, appkit_ui::PValue::Bool(true))
+        .width(width)
+}
+
+/// The lead of a Doc: one paragraph under the title.
+pub fn lead(text: &str) -> Element {
+    wrapped(text, "Body", "Text/Secondary", 680.0)
+}
+
+/// A paragraph of a Doc (`<p class="muted">`).
+pub fn para(text: &str) -> Element {
+    wrapped(text, "Callout", "Text/Secondary", 680.0)
+}
+
+/// A section heading of a Doc (`<h2>`).
+pub fn h2(text: &str) -> Element {
+    label(text).text_style("Title 3")
+}
+
+/// A sub heading of a Doc (`<h3>`).
+pub fn h3(text: &str) -> Element {
+    label(text).text_style("Headline")
+}
+
+/// A code block of a Doc.
+pub fn code(text: &str) -> Element {
+    label(text)
+        .text_style("Mono")
+        .color("Text/Secondary")
+        .padding(12.0)
+        .background(rgba(0x80808014))
+        .corner_radius(10.0)
+}
+
+/// The Stage of a Doc: controls on a tinted panel.
+pub fn stage(content: Element) -> Element {
+    content
+        .padding(28.0)
+        .background(rgba(0x80808014))
+        .corner_radius(14.0)
+}
+
+/// A card of controls beside a playground.
+pub fn card(content: Element) -> Element {
+    content
+        .padding(16.0)
+        .background(rgba(0x80808010))
+        .corner_radius(14.0)
+}
+
+/// A labelled field of a controls card.
+pub fn field(name: &str, control: Element) -> Element {
+    column((
+        label(name).text_style("Caption").color("Text/Tertiary"),
+        control,
+    ))
+    .spacing(4.0)
+    .alignment(0)
+}
+
+/// A matrix of live controls: a caption per column, a name per row.
+pub fn matrix(cols: &[&str], rows: Vec<(&str, Vec<Element>)>) -> Element {
+    let mut cells = vec![label("")];
+    for c in cols {
+        cells.push(label(*c).text_style("Caption").color("Text/Tertiary"));
+    }
+    for (name, items) in rows {
+        cells.push(label(name).text_style("Caption").color("Text/Secondary"));
+        cells.extend(items);
+    }
+    grid(cols.len() as i64 + 1, cells)
 }
 
 /// A page: its sections, top to bottom.
