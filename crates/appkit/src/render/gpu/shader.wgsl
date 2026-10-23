@@ -222,7 +222,10 @@ fn fs(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
         let p = to_paint(d);
         let uv = p / P.g0.xy;
         out = textureSampleLevel(t_img, smp, uv, 0.0) * P.color.x;
-        if (P.g1.w > 0.5) {
+        if (P.g1.w > 1.5) {
+            // A coverage texture (the glyph atlas, R8) tinted by the colour.
+            out = P.color * textureSampleLevel(t_img, smp, uv, 0.0).x;
+        } else if (P.g1.w > 0.5) {
             // A coverage image tinted by the colour.
             out = P.color * textureSampleLevel(t_img, smp, uv, 0.0).w;
         }

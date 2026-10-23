@@ -29,11 +29,16 @@ use vello_cpu::peniko::FontData;
 use vello_cpu::{Glyph, Pixmap};
 use wgpu::util::DeviceExt;
 
+mod atlas;
+mod layers;
+mod present;
+pub use present::{PresentSurface, Presented};
+
 use crate::color::Color;
 use crate::geom::{Rect, Transform};
 use crate::render::Painter;
 use crate::render::backdrop::{self, Backdrop};
-use crate::render::canvas::{Brush, StrokeStyle};
+use crate::render::canvas::{Brush, Canvas, StrokeStyle};
 use crate::render::image::Image;
 use crate::render::path::Path;
 
@@ -102,6 +107,8 @@ struct Key {
 
 /// The device, the queue and what is shared by every canvas.
 pub struct GpuContext {
+    instance: wgpu::Instance,
+    adapter_handle: wgpu::Adapter,
     device: wgpu::Device,
     queue: wgpu::Queue,
     adapter: String,
@@ -113,6 +120,8 @@ pub struct GpuContext {
     white: wgpu::TextureView,
     pipelines: RefCell<HashMap<Key, wgpu::RenderPipeline>>,
     images: RefCell<HashMap<u64, wgpu::TextureView>>,
+    atlas: RefCell<atlas::Atlas>,
+    layers: RefCell<layers::LayerCache>,
 }
 
 impl std::fmt::Debug for GpuContext {
@@ -122,24 +131,75 @@ impl std::fmt::Debug for GpuContext {
 }
 
 impl GpuContext {
-    /// A context on the first adapter (Vulkan, then GLES); `None` without one.
+    /// A context on the first adapter (Vulkan, then GLES; `WGPU_BACKEND` narrows it); `None`
+    /// without one.
     pub fn new() -> Option<Rc<GpuContext>> {
+        Self::with_backends(None)
+    }
+
+    /// A context restricted to `backends` (`None`: the defaults and the environment), for the
+    /// GLES fallback to be exercised on a machine that also has Vulkan.
+    pub fn with_backends(backends: Option<wgpu::Backends>) -> Option<Rc<GpuContext>> {
         let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
-        desc.backends = wgpu::Backends::VULKAN | wgpu::Backends::GL;
+        if let Some(b) = backends {
+            desc.backends = b;
+        }
+        Self::build(desc, backends.is_some(), |_| None).map(|(c, _)| c)
+    }
+
+    /// Creates the instance from `desc` (backends from the defaults and the environment) and
+    /// the adapter, compatible with the surface `surface` makes when there is one.
+    fn build(
+        mut desc: wgpu::InstanceDescriptor,
+        fixed: bool,
+        surface: impl FnOnce(&wgpu::Instance) -> Option<wgpu::Surface<'static>>,
+    ) -> Option<(Rc<GpuContext>, Option<wgpu::Surface<'static>>)> {
+        let desc = if fixed {
+            desc
+        } else {
+            desc.backends = match std::env::var("APPKIT_RENDERER").as_deref() {
+                Ok("gl") => wgpu::Backends::GL,
+                Ok("vulkan") => wgpu::Backends::VULKAN,
+                _ => wgpu::Backends::VULKAN | wgpu::Backends::GL,
+            };
+            desc.with_env()
+        };
+        let backends = desc.backends;
         let instance = wgpu::Instance::new(desc);
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        let surface = surface(&instance);
+        let first = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             force_fallback_adapter: false,
-            compatible_surface: None,
+            compatible_surface: surface.as_ref(),
             ..Default::default()
         }))
-        .ok()?;
+        .ok();
+        // The first adapter may not give a device (a vendor's GLES without a display, for
+        // one): the others of the instance are tried in turn, software ones left out.
+        let mut candidates: Vec<wgpu::Adapter> = first.into_iter().collect();
+        for a in pollster::block_on(instance.enumerate_adapters(backends)) {
+            let info = a.get_info();
+            let known = candidates.iter().any(|c| {
+                let ci = c.get_info();
+                ci.name == info.name && ci.backend == info.backend
+            });
+            if known
+                || info.device_type == wgpu::DeviceType::Cpu
+                || surface.as_ref().is_some_and(|s| !a.is_surface_supported(s))
+            {
+                continue;
+            }
+            candidates.push(a);
+        }
+        let (adapter, device, queue) = candidates.into_iter().find_map(|a| {
+            let (device, queue) = pollster::block_on(a.request_device(&wgpu::DeviceDescriptor {
+                label: Some("appkit"),
+                ..Default::default()
+            }))
+            .ok()?;
+            Some((a, device, queue))
+        })?;
         let info = adapter.get_info();
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("appkit"),
-            ..Default::default()
-        }))
-        .ok()?;
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("appkit canvas"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
@@ -207,7 +267,10 @@ impl GpuContext {
             &[255, 255, 255, 255],
         );
         let white = white_tex.create_view(&wgpu::TextureViewDescriptor::default());
-        Some(Rc::new(GpuContext {
+        let atlas = RefCell::new(atlas::Atlas::new(&device));
+        let ctx = Rc::new(GpuContext {
+            instance,
+            adapter_handle: adapter,
             device,
             queue,
             adapter: format!("{} ({:?})", info.name, info.backend),
@@ -219,7 +282,10 @@ impl GpuContext {
             white,
             pipelines: RefCell::new(HashMap::new()),
             images: RefCell::new(HashMap::new()),
-        }))
+            atlas,
+            layers: RefCell::new(layers::LayerCache::default()),
+        });
+        Some((ctx, surface))
     }
 
     /// The adapter's name and backend.
@@ -363,6 +429,11 @@ impl GpuContext {
             });
         self.pipelines.borrow_mut().insert(key, pipeline.clone());
         pipeline
+    }
+
+    /// Drops the cached texture of a one-off image (the draws already recorded keep it alive).
+    fn forget_image(&self, image: &Image) {
+        self.images.borrow_mut().remove(&image.id());
     }
 
     /// The texture of `image`, uploaded once.
@@ -645,6 +716,7 @@ impl GpuCanvas {
     /// Starts a frame: the retained texture keeps what was painted before, so a frame that
     /// clips to a region repaints only that region. `clear` makes the whole frame transparent.
     pub fn begin(&mut self, clear: bool) {
+        self.ctx.layers.borrow_mut().tick();
         self.restore_to(0);
         self.end_pass();
         if clear {
@@ -1741,123 +1813,59 @@ impl Painter for GpuCanvas {
         }
     }
 
-    fn backdrop(&mut self, outline: &Path, mut bd: Backdrop) {
-        if outline.is_empty() {
+    fn backdrop(&mut self, outline: &Path, bd: Backdrop) {
+        if self.layers.is_empty() {
+            self.backdrop_flat(outline, bd, 1.0);
             return;
         }
-        bd.to_device = self.transform_t();
-        let dev = outline.transformed(bd.to_device);
-        let b = dev.bounds().intersect(self.scissor_as_rect());
-        if b.is_empty() {
-            return;
+        // Inside groups: like the CPU canvas, flatten what the open groups hold so far into
+        // the frame (faded, blurred or added as they will be), filter that, and draw the
+        // result at the groups' combined opacity. The groups are reopened empty.
+        let opacity: f32 = self
+            .layers
+            .iter()
+            .map(|l| match l.kind {
+                LayerKind::Opacity(o) => o,
+                _ => 1.0,
+            })
+            .product();
+        let stack: Vec<(LayerKind, [u32; 4], usize)> = self
+            .layers
+            .iter()
+            .map(|l| (l.kind, l.scissor, l.masks))
+            .collect();
+        let base = stack.first().map_or(0, |l| l.2).min(self.masks.len());
+        // The clips opened inside the groups: closing the groups drops them.
+        let inner: Vec<(Path, bool)> = self
+            .masks
+            .iter()
+            .skip(base)
+            .map(|m| (m.path.clone(), m.invert))
+            .collect();
+        let scissor = self.scissor;
+        while !self.layers.is_empty() {
+            self.close_layer();
         }
-        // Where samples can come from: the region grown by the blur's and the refraction's reach.
-        let refract_reach = bd.glass.map_or(0.0, |(r, g)| {
-            let band = g.depth.max(0.0) * r.width.min(r.height) / 2.0;
-            let lens = if (g.magnification - 1.0).abs() > 1e-3 {
-                r.width.max(r.height)
-            } else {
-                0.0
-            };
-            (band * (g.distortion.max(0.0) + g.chromatic_aberration.max(0.0)) + lens)
-                * bd.to_device.m[0].abs().max(bd.to_device.m[3].abs())
-        });
-        let reach = (bd.sigma.max(0.0) * 3.0 + refract_reach).ceil() + 2.0;
-        let (fw, fh) = (self.width as f32, self.height as f32);
-        let sx0 = (b.x - reach).floor().max(0.0) as u32;
-        let sy0 = (b.y - reach).floor().max(0.0) as u32;
-        let sx1 = ((b.right() + reach).ceil().min(fw)) as u32;
-        let sy1 = ((b.bottom() + reach).ceil().min(fh)) as u32;
-        if sx1 <= sx0 || sy1 <= sy0 {
-            return;
+        for (path, invert) in &inner {
+            self.push_mask(path, *invert);
         }
-        let (sw, sh) = (sx1 - sx0, sy1 - sy0);
-        // What is drawn so far: the frame (the groups open now are composited later).
-        self.end_pass();
-        let ctx = self.ctx.clone();
-        let region = ctx.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("backdrop"),
-            size: wgpu::Extent3d {
-                width: sw,
-                height: sh,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: COLOR,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        let src = self.main.color.clone();
-        self.encoder().copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &src,
-                mip_level: 0,
-                origin: wgpu::Origin3d {
-                    x: sx0,
-                    y: sy0,
-                    z: 0,
-                },
-                aspect: wgpu::TextureAspect::All,
-            },
-            region.as_image_copy(),
-            wgpu::Extent3d {
-                width: sw,
-                height: sh,
-                depth_or_array_layers: 1,
-            },
-        );
-        let rview = region.create_view(&wgpu::TextureViewDescriptor::default());
-        let Some(plane) = self.blur_texture(&rview, sw, sh, bd.sigma) else {
-            return;
-        };
-        let (w, h) = self.target_size();
-        let mut p = identity_paint(w, h);
-        p.g1 = [5.0, 0.0, if self.masks.is_empty() { 0.0 } else { 1.0 }, 0.0];
-        p.color = [1.0, 0.0, 0.0, 0.0];
-        p.g2 = [sx0 as f32, sy0 as f32, sw as f32, sh as f32];
-        let inv = bd.to_device.invert().unwrap_or(Transform::IDENTITY).m;
-        p.inv_a = [inv[0], inv[1], inv[2], inv[3]];
-        p.inv_b[0] = inv[4];
-        p.inv_b[1] = inv[5];
-        p.fwd_a = [
-            bd.to_device.m[0],
-            bd.to_device.m[1],
-            bd.to_device.m[2],
-            bd.to_device.m[3],
-        ];
-        p.fwd_b = [bd.to_device.m[4], bd.to_device.m[5], 0.0, 0.0];
-        let m = backdrop::saturation_brightness_matrix(bd.saturation, bd.brightness);
-        p.m0 = [m[0][0], m[0][1], m[0][2], 0.0];
-        p.m1 = [m[1][0], m[1][1], m[1][2], 0.0];
-        p.m2 = [m[2][0], m[2][1], m[2][2], 0.0];
-        if let Some((rect, g)) = bd.glass {
-            let band = g.depth.max(0.0) * rect.width.min(rect.height) / 2.0;
-            let magnify = g.magnification.is_finite() && (g.magnification - 1.0).abs() > 1e-3;
-            if (band > 0.0 && g.distortion > 0.0) || magnify {
-                p.g3 = [rect.x, rect.y, rect.width, rect.height];
-                p.g4 = [
-                    g.distortion,
-                    g.depth,
-                    g.chromatic_aberration,
-                    g.magnification,
-                ];
-                p.g5 = [
-                    rect.width.min(rect.height) / 2.0,
-                    crate::shape::AMALFI_SMOOTHING,
-                    1.0,
-                    0.0,
-                ];
+        self.scissor = scissor;
+        self.backdrop_flat(outline, bd, opacity);
+        self.truncate_masks(base);
+        for (kind, sc, count) in stack {
+            let want = count.saturating_sub(base).min(inner.len());
+            self.truncate_masks(base);
+            for (path, invert) in inner.iter().take(want) {
+                self.push_mask(path, *invert);
             }
+            self.scissor = sc;
+            self.push_layer(kind);
         }
-        self.cover_fill(
-            &outline.bez,
-            outline.even_odd,
-            &p,
-            Some(&plane),
-            Blend::Over,
-        );
+        self.truncate_masks(base);
+        for (path, invert) in &inner {
+            self.push_mask(path, *invert);
+        }
+        self.scissor = scissor;
     }
 
     fn fill_blurred_path(&mut self, path: &Path, sigma: f32, color: Color) {
@@ -2056,7 +2064,78 @@ impl Painter for GpuCanvas {
         let Some(view) = self.ctx.image_view(image) else {
             return;
         };
-        let (iw, ih) = (image.width() as f32, image.height() as f32);
+        self.draw_view(&view, image.width(), image.height(), dst, opacity);
+    }
+
+    fn keeps_layer_textures(&self) -> bool {
+        true
+    }
+
+    fn layer_texture(
+        &mut self,
+        key: u64,
+        version: u64,
+        bounds: Rect,
+        scale: f32,
+        paint: &mut dyn FnMut(&mut dyn Painter),
+    ) -> bool {
+        GpuCanvas::layer_texture(self, key, version, bounds, scale, paint)
+    }
+
+    fn custom(&mut self, rect: Rect, draw: &dyn Fn(&mut Canvas, Rect)) {
+        if rect.is_empty() || !rect.width.is_finite() || !rect.height.is_finite() {
+            return;
+        }
+        // Rasterize on the CPU at the device scale of the current transform, then draw the
+        // result as an image over `rect`.
+        let [a, b, c, d, ..] = self.transform.as_coeffs();
+        let sx = a.hypot(b) as f32;
+        let sy = c.hypot(d) as f32;
+        if !(sx.is_finite() && sy.is_finite()) || sx <= 0.0 || sy <= 0.0 {
+            return;
+        }
+        let iw = (rect.width * sx).ceil().clamp(1.0, 8192.0);
+        let ih = (rect.height * sy).ceil().clamp(1.0, 8192.0);
+        let mut cpu = Canvas::new(iw as u32, ih as u32);
+        cpu.scale((iw / rect.width, ih / rect.height));
+        cpu.translate((-rect.x, -rect.y));
+        draw(&mut cpu, rect);
+        let image = Image::from_pixmap(cpu.into_pixmap());
+        self.draw_image(&image, rect, 1.0);
+        // A one-off texture: not kept in the image cache.
+        self.ctx.forget_image(&image);
+    }
+
+    fn fill_glyphs(
+        &mut self,
+        font: &FontData,
+        size: f32,
+        coords: &[i16],
+        glyphs: &[Glyph],
+        color: Color,
+    ) {
+        if glyphs.is_empty() || color.a == 0 {
+            return;
+        }
+        if self.fill_glyphs_atlas(font, size, coords, glyphs, color) {
+            return;
+        }
+        let outline = GpuCanvas::glyph_outlines(font, size, coords, glyphs);
+        if outline.elements().is_empty() {
+            return;
+        }
+        let p = self.uniform_for(&Brush::Solid(color), 1.0);
+        self.cover_fill(&outline, false, &p, None, Blend::Over);
+    }
+}
+
+impl GpuCanvas {
+    /// Draws a texture of `iw` × `ih` texels (premultiplied) into `dst`.
+    fn draw_view(&mut self, view: &wgpu::TextureView, iw: u32, ih: u32, dst: Rect, opacity: f32) {
+        if dst.is_empty() || iw == 0 || ih == 0 {
+            return;
+        }
+        let (iw, ih) = (iw as f32, ih as f32);
         let m = self.transform
             * Affine::translate((f64::from(dst.x), f64::from(dst.y)))
             * Affine::scale_non_uniform(f64::from(dst.width / iw), f64::from(dst.height / ih));
@@ -2080,13 +2159,7 @@ impl Painter for GpuCanvas {
             pt(dst.right(), dst.bottom()),
             pt(dst.x, dst.bottom()),
         ];
-        self.draw(
-            &quad_of(corners),
-            Mode::Simple,
-            Blend::Over,
-            &p,
-            Some(&view),
-        );
+        self.draw(&quad_of(corners), Mode::Simple, Blend::Over, &p, Some(view));
         let b = kurbo::Rect::new(
             f64::from(dst.x),
             f64::from(dst.y),
@@ -2102,27 +2175,6 @@ impl Painter for GpuCanvas {
         ));
     }
 
-    fn fill_glyphs(
-        &mut self,
-        font: &FontData,
-        size: f32,
-        coords: &[i16],
-        glyphs: &[Glyph],
-        color: Color,
-    ) {
-        if glyphs.is_empty() || color.a == 0 {
-            return;
-        }
-        let outline = GpuCanvas::glyph_outlines(font, size, coords, glyphs);
-        if outline.elements().is_empty() {
-            return;
-        }
-        let p = self.uniform_for(&Brush::Solid(color), 1.0);
-        self.cover_fill(&outline, false, &p, None, Blend::Over);
-    }
-}
-
-impl GpuCanvas {
     /// A target for the device `region`, reusing a closed one of the same size.
     fn take_target(&mut self, format: wgpu::TextureFormat, region: [u32; 4]) -> Target {
         let size = |r: &[u32; 4]| (r[2], r[3]);
@@ -2141,6 +2193,135 @@ impl GpuCanvas {
     fn transform_t(&self) -> Transform {
         Transform {
             m: self.transform.as_coeffs().map(|v| v as f32),
+        }
+    }
+
+    /// A backdrop filter over the frame (no group open), drawn at `opacity`.
+    fn backdrop_flat(&mut self, outline: &Path, mut bd: Backdrop, opacity: f32) {
+        if outline.is_empty() {
+            return;
+        }
+        bd.to_device = self.transform_t();
+        let dev = outline.transformed(bd.to_device);
+        let b = dev.bounds().intersect(self.scissor_as_rect());
+        if b.is_empty() {
+            return;
+        }
+        // Where samples can come from: the region grown by the blur's and the refraction's reach.
+        let refract_reach = bd.glass.map_or(0.0, |(r, g)| {
+            let band = g.depth.max(0.0) * r.width.min(r.height) / 2.0;
+            let lens = if (g.magnification - 1.0).abs() > 1e-3 {
+                r.width.max(r.height)
+            } else {
+                0.0
+            };
+            (band * (g.distortion.max(0.0) + g.chromatic_aberration.max(0.0)) + lens)
+                * bd.to_device.m[0].abs().max(bd.to_device.m[3].abs())
+        });
+        let reach = (bd.sigma.max(0.0) * 3.0 + refract_reach).ceil() + 2.0;
+        let (fw, fh) = (self.width as f32, self.height as f32);
+        let sx0 = (b.x - reach).floor().max(0.0) as u32;
+        let sy0 = (b.y - reach).floor().max(0.0) as u32;
+        let sx1 = ((b.right() + reach).ceil().min(fw)) as u32;
+        let sy1 = ((b.bottom() + reach).ceil().min(fh)) as u32;
+        if sx1 <= sx0 || sy1 <= sy0 {
+            return;
+        }
+        let (sw, sh) = (sx1 - sx0, sy1 - sy0);
+        // What is drawn so far: the frame (the groups open now are composited later).
+        self.end_pass();
+        let ctx = self.ctx.clone();
+        let region = ctx.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("backdrop"),
+            size: wgpu::Extent3d {
+                width: sw,
+                height: sh,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: COLOR,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let src = self.main.color.clone();
+        self.encoder().copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &src,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: sx0,
+                    y: sy0,
+                    z: 0,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            region.as_image_copy(),
+            wgpu::Extent3d {
+                width: sw,
+                height: sh,
+                depth_or_array_layers: 1,
+            },
+        );
+        let rview = region.create_view(&wgpu::TextureViewDescriptor::default());
+        let Some(plane) = self.blur_texture(&rview, sw, sh, bd.sigma) else {
+            return;
+        };
+        let (w, h) = self.target_size();
+        let mut p = identity_paint(w, h);
+        p.g1 = [5.0, 0.0, if self.masks.is_empty() { 0.0 } else { 1.0 }, 0.0];
+        p.color = [opacity, 0.0, 0.0, 0.0];
+        p.g2 = [sx0 as f32, sy0 as f32, sw as f32, sh as f32];
+        let inv = bd.to_device.invert().unwrap_or(Transform::IDENTITY).m;
+        p.inv_a = [inv[0], inv[1], inv[2], inv[3]];
+        p.inv_b[0] = inv[4];
+        p.inv_b[1] = inv[5];
+        p.fwd_a = [
+            bd.to_device.m[0],
+            bd.to_device.m[1],
+            bd.to_device.m[2],
+            bd.to_device.m[3],
+        ];
+        p.fwd_b = [bd.to_device.m[4], bd.to_device.m[5], 0.0, 0.0];
+        let m = backdrop::saturation_brightness_matrix(bd.saturation, bd.brightness);
+        p.m0 = [m[0][0], m[0][1], m[0][2], 0.0];
+        p.m1 = [m[1][0], m[1][1], m[1][2], 0.0];
+        p.m2 = [m[2][0], m[2][1], m[2][2], 0.0];
+        if let Some((rect, g)) = bd.glass {
+            let band = g.depth.max(0.0) * rect.width.min(rect.height) / 2.0;
+            let magnify = g.magnification.is_finite() && (g.magnification - 1.0).abs() > 1e-3;
+            if (band > 0.0 && g.distortion > 0.0) || magnify {
+                p.g3 = [rect.x, rect.y, rect.width, rect.height];
+                p.g4 = [
+                    g.distortion,
+                    g.depth,
+                    g.chromatic_aberration,
+                    g.magnification,
+                ];
+                p.g5 = [
+                    rect.width.min(rect.height) / 2.0,
+                    crate::shape::AMALFI_SMOOTHING,
+                    1.0,
+                    0.0,
+                ];
+            }
+        }
+        self.cover_fill(
+            &outline.bez,
+            outline.even_odd,
+            &p,
+            Some(&plane),
+            Blend::Over,
+        );
+    }
+
+    /// Drops the clips above the first `n`, keeping their mask targets for reuse.
+    fn truncate_masks(&mut self, n: usize) {
+        if self.masks.len() > n {
+            let extra = self.masks.split_off(n);
+            self.retired
+                .extend(extra.into_iter().filter_map(|m| m.target));
         }
     }
 

@@ -20,6 +20,34 @@ use canvas::{Brush, Canvas, StrokeStyle};
 pub trait Painter {
     /// The CPU canvas behind this painter, when it is one (custom drawing, the raster cache).
     fn as_canvas(&mut self) -> Option<&mut Canvas>;
+    /// Runs a custom drawing callback (written for the CPU canvas) over `rect`, in the current
+    /// transform. A painter that is not the CPU canvas rasterizes it into an image and draws
+    /// that, clipped to `rect`.
+    fn custom(&mut self, rect: Rect, draw: &dyn Fn(&mut Canvas, Rect)) {
+        if let Some(c) = self.as_canvas() {
+            c.save();
+            draw(c, rect);
+            c.restore();
+        }
+    }
+    /// Whether this painter keeps subtrees as textures ([`Painter::layer_texture`]); the CPU
+    /// canvas does not, and the raster cache makes images for it.
+    fn keeps_layer_textures(&self) -> bool {
+        false
+    }
+    /// Composites the texture kept for the subtree `key` over `bounds` (view coordinates,
+    /// whole device pixels at `scale`), first rendering it with `paint` when `version` is not
+    /// the kept one. `false` when the subtree cannot be kept: the caller paints it directly.
+    fn layer_texture(
+        &mut self,
+        _key: u64,
+        _version: u64,
+        _bounds: Rect,
+        _scale: f32,
+        _paint: &mut dyn FnMut(&mut dyn Painter),
+    ) -> bool {
+        false
+    }
     /// Pushes the transform and the open layers.
     fn save(&mut self);
     /// Pops to the matching save.

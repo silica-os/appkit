@@ -102,6 +102,8 @@ use crate::core::ui::{Cursor, Request, Ui};
 use crate::core::window::{Edges, KeyboardMode, Layer, WindowId, WindowKind};
 use crate::geom::{Point, Rect, Size};
 use crate::platform::keys::{key_of, mods_of};
+use crate::render::Painter;
+use crate::render::gpu::{GpuCanvas, GpuContext, PresentSurface, Presented};
 
 /// How a window's role is held.
 enum Role {
@@ -125,6 +127,8 @@ impl Role {
 /// A mapped window.
 struct Surface {
     id: WindowId,
+    /// The wgpu swapchain and frame, dropped before the Wayland surface it draws on.
+    gpu: Option<GpuTarget>,
     role: Role,
     configured: bool,
     /// The size in points from the last configure.
@@ -135,6 +139,9 @@ struct Surface {
     viewport: Option<WpViewport>,
     frame_pending: bool,
     wants_frame: bool,
+    /// Swapchains that could not be made or were lost; two strikes and the surface stays on
+    /// shared memory.
+    gpu_fails: u8,
     pool: Option<SlotPool>,
     /// The retained frame (premultiplied RGBA): only the damage is repainted into it.
     frame: Option<crate::render::canvas::Canvas>,
@@ -149,9 +156,25 @@ struct Surface {
 /// The renderer chosen for this process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Renderer {
-    /// vello_cpu into a retained frame, copied into shared-memory buffers (the GPU path
-    /// through wgpu comes later).
+    /// vello_cpu into a retained frame, copied into shared-memory buffers.
     Software,
+    /// wgpu (Vulkan, or GLES) into a retained frame texture, copied into the swapchain.
+    Gpu,
+}
+
+/// The GPU path of a window: its swapchain and the retained frame.
+struct GpuTarget {
+    present: PresentSurface,
+    canvas: Option<GpuCanvas>,
+}
+
+/// Whether the process draws on the GPU.
+enum GpuState {
+    /// No window has asked yet (the adapter is found with the first surface).
+    Untried,
+    Ready(std::rc::Rc<GpuContext>),
+    /// `APPKIT_RENDERER=cpu`, or no adapter, or no surface: shared memory.
+    Off,
 }
 
 /// Copies premultiplied RGBA into a premultiplied BGRA (`Argb8888`, little endian) buffer.
@@ -319,6 +342,7 @@ pub struct Platform {
     pending: std::rc::Rc<std::cell::RefCell<Pending>>,
     a11y: Option<crate::platform::a11y::Accessibility>,
     renderer: Renderer,
+    gpu: GpuState,
     app_id: String,
     had_windows: bool,
     start: Instant,
@@ -602,6 +626,7 @@ impl Platform {
             pending: std::rc::Rc::default(),
             a11y: None,
             renderer: Renderer::Software,
+            gpu: GpuState::Untried,
             had_windows: false,
             start: Instant::now(),
             first_frame_done: false,
@@ -1071,6 +1096,8 @@ impl Platform {
         }
         self.surfaces.push(Surface {
             id,
+            gpu: None,
+            gpu_fails: 0,
             role,
             configured: false,
             size,
@@ -1110,6 +1137,7 @@ impl Platform {
             if let Some(g) = s.glass {
                 g.destroy();
             }
+            drop(s.gpu);
             drop(s.role);
         }
         if self.keyboard_focus == Some(id) {
@@ -1187,12 +1215,97 @@ impl Platform {
             self.ui.advance(dt.min(0.1));
         }
         let damage = self.ui.prepare_frame(id);
+        self.ensure_gpu(id);
+        let ctx = match &self.gpu {
+            GpuState::Ready(c) => Some(c.clone()),
+            _ => None,
+        };
         let Some(s) = self.surfaces.iter_mut().find(|s| s.id == id) else {
             return;
         };
         let scale = s.scale.max(0.5);
         let w = (s.size.width * scale).round().max(1.0) as i32;
         let h = (s.size.height * scale).round().max(1.0) as i32;
+        if let (Some(ctx), Some(mut g)) = (ctx, s.gpu.take()) {
+            let (wu, hu) = (w as u32, h as u32);
+            g.present.resize(&ctx, wu, hu);
+            let fresh = g.canvas.as_ref().is_none_or(|c| c.size() != (wu, hu));
+            if fresh {
+                g.canvas = Some(GpuCanvas::new(&ctx, wu, hu));
+            }
+            if let Some(c) = g.canvas.as_mut() {
+                let logical = if fresh || damage.is_empty() {
+                    Rect::from_size(s.size)
+                } else {
+                    damage.round_out(scale)
+                };
+                let device = Rect::new(
+                    logical.x * scale,
+                    logical.y * scale,
+                    logical.width * scale,
+                    logical.height * scale,
+                )
+                .round_out(1.0);
+                // Only the damage is repainted into the retained frame texture.
+                c.begin(fresh || damage.is_empty());
+                c.save();
+                if !(fresh || damage.is_empty()) {
+                    c.clip_rect(device);
+                    c.clear_rect(device);
+                }
+                c.scale((scale, scale));
+                self.ui.paint_window(id, c, (!fresh).then_some(logical));
+                c.restore();
+                let painted = c.damage().unwrap_or(device);
+                let wl = s.role.wl_surface().clone();
+                send_glass(s, self.ui.glass_regions(id));
+                let size = s.size;
+                let viewport = s.viewport.clone();
+                let qh = self.qh.clone();
+                let outcome = g.present.present(&ctx, c, || {
+                    if let Some(vp) = &viewport {
+                        vp.set_destination(size.width.round() as i32, size.height.round() as i32);
+                    } else {
+                        wl.set_buffer_scale(scale.round().max(1.0) as i32);
+                    }
+                    wl.damage_buffer(
+                        painted.x.floor() as i32,
+                        painted.y.floor() as i32,
+                        painted.width.ceil() as i32 + 1,
+                        painted.height.ceil() as i32 + 1,
+                    );
+                    wl.frame(&qh, wl.clone());
+                });
+                let keep = match outcome {
+                    Presented::Done => {
+                        let _ = c.take_damage();
+                        s.frame_pending = true;
+                        s.wants_frame = self.ui.is_animating();
+                        s.last_frame = now;
+                        true
+                    }
+                    Presented::Skipped => {
+                        // Nothing was presented: ask for a frame callback to try again.
+                        wl.frame(&self.qh, wl.clone());
+                        wl.commit();
+                        s.frame_pending = true;
+                        s.wants_frame = true;
+                        true
+                    }
+                    Presented::Lost => {
+                        tracing::warn!("wgpu surface lost; making another");
+                        s.gpu_fails += 1;
+                        s.wants_frame = true;
+                        false
+                    }
+                };
+                if keep {
+                    s.gpu = Some(g);
+                }
+                return;
+            }
+            s.gpu = Some(g);
+        }
         let stride = w * 4;
         if s.pool.is_none() {
             match SlotPool::new((stride * h * 2) as usize, &self.shm) {
@@ -1273,6 +1386,63 @@ impl Platform {
         s.frame_pending = true;
         s.wants_frame = self.ui.is_animating();
         s.last_frame = now;
+    }
+
+    /// Makes the wgpu swapchain of a window, and the context with the first one. On failure
+    /// (`APPKIT_RENDERER=cpu`, no adapter, no premultiplied surface) the window keeps the
+    /// shared-memory path.
+    fn ensure_gpu(&mut self, id: WindowId) {
+        if matches!(self.gpu, GpuState::Off) {
+            return;
+        }
+        let Some(idx) = self.surfaces.iter().position(|s| s.id == id) else {
+            return;
+        };
+        let Some(s) = self.surfaces.get(idx) else {
+            return;
+        };
+        if s.gpu.is_some() || s.gpu_fails >= 2 {
+            return;
+        }
+        if matches!(self.gpu, GpuState::Untried)
+            && std::env::var("APPKIT_RENDERER")
+                .is_ok_and(|v| matches!(v.as_str(), "cpu" | "software"))
+        {
+            self.gpu = GpuState::Off;
+            return;
+        }
+        let display = std::ptr::NonNull::new(self.conn.backend().display_ptr().cast());
+        let window = std::ptr::NonNull::new(s.role.wl_surface().id().as_ptr().cast());
+        let made = match (display, window, &self.gpu) {
+            (Some(d), Some(w), GpuState::Untried) => GpuContext::for_wayland(d, w),
+            (Some(d), Some(w), GpuState::Ready(c)) => {
+                c.present_surface(d, w).map(|p| (c.clone(), p))
+            }
+            _ => None,
+        };
+        match made {
+            Some((ctx, present)) => {
+                if matches!(self.gpu, GpuState::Untried) {
+                    tracing::info!("wgpu on {}", ctx.adapter());
+                    self.renderer = Renderer::Gpu;
+                }
+                self.gpu = GpuState::Ready(ctx);
+                if let Some(s) = self.surfaces.get_mut(idx) {
+                    s.gpu = Some(GpuTarget {
+                        present,
+                        canvas: None,
+                    });
+                }
+            }
+            None => {
+                tracing::info!("no wgpu surface: shared memory");
+                if matches!(self.gpu, GpuState::Untried) {
+                    self.gpu = GpuState::Off;
+                } else if let Some(s) = self.surfaces.get_mut(idx) {
+                    s.gpu_fails = 2;
+                }
+            }
+        }
     }
 
     fn send_menu_bar(&mut self) {
