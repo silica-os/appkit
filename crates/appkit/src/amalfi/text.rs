@@ -64,6 +64,8 @@ pub struct Text {
     pub wraps: bool,
     /// The most lines a paragraph shows (an ellipsis ends the last); `None`: all of them.
     pub max_lines: Option<usize>,
+    /// Announced by assistive technologies when it appears (an error message).
+    pub live: bool,
     label: Label,
 }
 
@@ -80,6 +82,7 @@ impl Text {
             trailing: 0.0,
             wraps: false,
             max_lines: None,
+            live: false,
             label: Label::default(),
         }
     }
@@ -112,6 +115,12 @@ impl Text {
     /// A paragraph: wraps in the width it is given.
     pub fn wrapping(mut self) -> Text {
         self.wraps = true;
+        self
+    }
+
+    /// Announced when it appears.
+    pub fn live(mut self, live: bool) -> Text {
+        self.live = live;
         self
     }
 
@@ -224,6 +233,7 @@ impl Widget for Text {
     fn accessibility(&self, a: &mut A11y) {
         a.role = Role::Label;
         a.label = Some(self.text.clone());
+        a.live = self.live;
     }
 
     fn hit(&self, _p: crate::geom::Point, _size: Size) -> bool {

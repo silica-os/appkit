@@ -273,7 +273,9 @@ pub fn form_row(
                     TextRole::Tertiary
                 })
                 .layer("Message")
-                .wrapping(),
+                .wrapping()
+                // An error is announced when it appears (`role="alert"`).
+                .live(kind == MessageKind::Error),
         );
         ui.add_child(value, t);
     }
@@ -288,7 +290,10 @@ pub fn form_section(ui: &mut Ui, title: Option<&str>, rows: &[ViewId]) -> ViewId
 
 /// The footer of actions: the buttons at the end, 8 apart, each at least 72 wide.
 #[derive(Debug, Default)]
-pub struct FormFooter;
+pub struct FormFooter {
+    /// How many of the first children are leading ones (kept at the start, the `leading` slot).
+    pub leading: usize,
+}
 
 impl Widget for FormFooter {
     fn kind(&self) -> &'static str {
@@ -301,7 +306,11 @@ impl Widget for FormFooter {
         let mut h = 0.0f32;
         for (i, c) in kids.iter().enumerate() {
             let s = cx.measure(*c, Proposal::UNSPECIFIED);
-            w += s.width.max(metrics::BUTTON_MIN_WIDTH);
+            w += if i < self.leading {
+                s.width
+            } else {
+                s.width.max(metrics::BUTTON_MIN_WIDTH)
+            };
             if i > 0 {
                 w += metrics::FOOTER_GAP;
             }
@@ -313,7 +322,17 @@ impl Widget for FormFooter {
     fn place(&mut self, cx: &mut LayoutCx<'_>, size: Size) {
         let mut x = size.width;
         let kids = cx.children();
-        for c in kids.iter().rev() {
+        let split = self.leading.min(kids.len());
+        let mut lx = 0.0;
+        for c in kids.iter().take(split) {
+            let s = cx.measure(*c, Proposal::UNSPECIFIED);
+            cx.place(
+                *c,
+                Rect::new(lx, (size.height - s.height) / 2.0, s.width, s.height),
+            );
+            lx += s.width + metrics::FOOTER_GAP;
+        }
+        for c in kids.iter().skip(split).rev() {
             let s = cx.measure(*c, Proposal::UNSPECIFIED);
             let w = s.width.max(metrics::BUTTON_MIN_WIDTH);
             x -= w;
@@ -328,12 +347,31 @@ impl Widget for FormFooter {
     fn hit(&self, _p: Point, _size: Size) -> bool {
         false
     }
+
+    fn set_prop(&mut self, prop: Prop, value: &Value) -> PropChange {
+        match (prop, value.as_int()) {
+            // How many of the first children are leading ones.
+            (Prop::Value, Some(n)) if n >= 0 => {
+                self.leading = usize::try_from(n).unwrap_or(0);
+                PropChange::Layout
+            }
+            _ => PropChange::Unknown,
+        }
+    }
 }
 
 /// Makes a footer over `buttons` (in reading order, the default action last).
 pub fn form_footer(ui: &mut Ui, buttons: &[ViewId]) -> ViewId {
-    let f = ui.create(FormFooter);
-    for b in buttons {
+    form_footer_with(ui, &[], buttons)
+}
+
+/// Makes a footer with `leading` views at the start (a Help button, "New Folder") and the
+/// buttons at the end.
+pub fn form_footer_with(ui: &mut Ui, leading: &[ViewId], buttons: &[ViewId]) -> ViewId {
+    let f = ui.create(FormFooter {
+        leading: leading.len(),
+    });
+    for b in leading.iter().chain(buttons) {
         ui.add_child(f, *b);
     }
     f
@@ -499,5 +537,59 @@ mod tests {
         );
         // 28 + 4 + two lines of 14.
         assert_eq!(ui.measure(e, Proposal::UNSPECIFIED).height, 60.0);
+    }
+
+    #[test]
+    fn the_footer_keeps_leading_views_at_the_start() {
+        use crate::amalfi::button::PushButton;
+        let mut ui = Ui::new_headless();
+        let help = ui.create(PushButton::new("New Folder"));
+        let cancel = ui.create(PushButton::new("Cancel"));
+        let save = ui.create(PushButton::new("Save"));
+        let f = form_footer_with(&mut ui, &[help], &[cancel, save]);
+        let win = ui.create_window(
+            crate::core::window::WindowKind::Normal,
+            Size::new(400.0, 100.0),
+        );
+        ui.set_content(win, f);
+        ui.show_window(win);
+        ui.prepare_frame(win);
+        let x = |v| ui.tree.window_rect(v).x;
+        assert!(x(help) <= x(f) + 0.01);
+        assert!(x(cancel) > x(help) && x(save) > x(cancel));
+        assert!((ui.tree.window_rect(save).right() - ui.tree.window_rect(f).right()).abs() < 0.01);
+    }
+
+    #[test]
+    fn an_error_message_is_announced_and_help_is_not() {
+        let mut ui = Ui::new_headless();
+        let field = ui.create(TextField::text());
+        let row = form_row(
+            &mut ui,
+            "Email",
+            field,
+            Some(("Bad.", MessageKind::Error)),
+            true,
+        );
+        let msg = *ui
+            .tree
+            .children(*ui.tree.children(row).first().expect("value"))
+            .last()
+            .expect("msg");
+        assert!(ui.accessibility_of(msg).map(|a| a.live).unwrap_or(false));
+        let field = ui.create(TextField::text());
+        let row = form_row(
+            &mut ui,
+            "Email",
+            field,
+            Some(("Hint.", MessageKind::Help)),
+            true,
+        );
+        let msg = *ui
+            .tree
+            .children(*ui.tree.children(row).first().expect("value"))
+            .last()
+            .expect("msg");
+        assert!(!ui.accessibility_of(msg).map(|a| a.live).unwrap_or(true));
     }
 }
