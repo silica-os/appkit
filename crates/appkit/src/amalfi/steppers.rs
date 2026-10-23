@@ -41,7 +41,7 @@ pub mod metrics {
     }
 
     /// The divider's inset from the sides.
-    pub const DIVIDER_INSET: f32 = 4.0;
+    pub const DIVIDER_INSET: f32 = crate::amalfi::tokens::spacing::XS;
     /// The chevrons' size.
     pub const GLYPH: f32 = 12.0;
     /// Seconds a held half waits before it repeats.
