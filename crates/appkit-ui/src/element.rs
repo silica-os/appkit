@@ -719,6 +719,16 @@ impl Element {
         self.prop(Prop::STYLE, PValue::Int(s))
     }
 
+    /// The axes of a scroll view that have a bar: 0 both, 1 vertical only, 2 horizontal only.
+    pub fn scroll_axis(self, axis: i64) -> Self {
+        self.prop(Prop::VALUE, PValue::Int(axis))
+    }
+
+    /// Keeps a scroll view's bars in a state: 0 follows the pointer, 1 thin, 2 expanded.
+    pub fn scroll_hold(self, hold: i64) -> Self {
+        self.prop(Prop::STATE, PValue::Int(hold))
+    }
+
     /// Control size: 0 mini, 1 small, 2 regular, 3 large.
     pub fn control_size(self, s: i64) -> Self {
         self.prop(Prop::CONTROL_SIZE, PValue::Int(s))

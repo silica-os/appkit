@@ -650,3 +650,22 @@ fn a_sidebar_group_folds_and_unfolds_its_rows() {
         "unfolded rows come back"
     );
 }
+
+#[test]
+fn a_scroll_view_takes_its_mode_axis_and_hold() {
+    let _rt = Headless::new().unwrap();
+    struct Scroll;
+    impl Component for Scroll {
+        fn body(&self, _cx: &mut Cx) -> Element {
+            scroll_view(label("x"))
+                .id("s")
+                .style(1)
+                .scroll_axis(1)
+                .scroll_hold(2)
+        }
+    }
+    let root = mount(host(), || Scroll);
+    let s = root.host().find("s").unwrap();
+    assert_eq!(s.get_int(Prop::STYLE).unwrap(), 1);
+    assert_eq!(s.get_int(Prop::VALUE).unwrap(), 1);
+}
