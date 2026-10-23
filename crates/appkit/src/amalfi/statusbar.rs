@@ -21,19 +21,23 @@ use crate::text::Align;
 /// Fixed measures of the kit.
 pub mod metrics {
     /// An item's height.
-    pub const ITEM_HEIGHT: f32 = 28.0;
+    pub const ITEM_HEIGHT: f32 = crate::amalfi::tokens::control_heights::REGULAR;
     /// The bar's height (2 pt above and below the items).
-    pub const BAR_HEIGHT: f32 = 32.0;
+    pub const BAR_HEIGHT: f32 = crate::amalfi::tokens::control_heights::LARGE;
     /// An item's padding at its sides.
-    pub const PADDING: f32 = 8.0;
+    pub const PADDING: f32 = crate::amalfi::tokens::spacing::S;
     /// A status glyph's size.
-    pub const GLYPH: f32 = 20.0;
+    pub const GLYPH: f32 = crate::amalfi::tokens::control_icons::MENU_BAR;
     /// Gap between an item's text and glyph.
-    pub const GAP: f32 = 4.0;
-    /// The selection's and the plate's corner radius.
+    pub const GAP: f32 = crate::amalfi::tokens::spacing::XS;
+    /// The selection's and the plate's corner radius (`SMenuBarItem`: 14, half the item).
     pub const RADIUS: f32 = 14.0;
+    /// A text-only item (the clock) is at least this wide (`SStatusItem`).
+    pub const MIN_TEXT_WIDTH: f32 = 120.0;
+    /// The text before a glyph is at least this wide (`SStatusItem`).
+    pub const MIN_LABEL_WIDTH: f32 = 32.0;
     /// The label grid.
-    pub const STEP: f32 = 4.0;
+    pub const STEP: f32 = crate::amalfi::tokens::grid::BASE;
 }
 
 /// What an item shows.
@@ -71,7 +75,6 @@ pub struct StatusItem {
     /// The accessible label.
     pub title: String,
     text: Label,
-    hovered: bool,
 }
 
 impl StatusItem {
@@ -83,7 +86,6 @@ impl StatusItem {
             on_dark: false,
             title: String::new(),
             text: Label::default(),
-            hovered: false,
         }
     }
 
@@ -124,14 +126,21 @@ impl StatusItem {
         whole(self.text.width(text, &style), metrics::STEP)
     }
 
+    /// The text before a glyph: at least 32 wide, right-aligned in it.
+    fn label_width(&mut self, theme: &Theme, text: &str) -> f32 {
+        self.text_width(theme, text).max(metrics::MIN_LABEL_WIDTH)
+    }
+
     fn natural_width(&mut self, theme: &Theme) -> f32 {
         let pad = 2.0 * metrics::PADDING;
         match self.content.clone() {
             ItemContent::Glyph(_) => pad + metrics::GLYPH,
-            ItemContent::Clock(t) => pad + self.text_width(theme, &t),
+            ItemContent::Clock(t) => {
+                (pad + self.text_width(theme, &t)).max(metrics::MIN_TEXT_WIDTH)
+            }
             ItemContent::Battery { percentage: t, .. }
             | ItemContent::InputSource { label: t, .. } => {
-                pad + self.text_width(theme, &t) + metrics::GAP + metrics::GLYPH
+                pad + self.label_width(theme, &t) + metrics::GAP + metrics::GLYPH
             }
         }
     }
@@ -155,7 +164,9 @@ impl Widget for StatusItem {
         let theme = *cx.theme();
         let r = cx.bounds();
         let ink = self.ink(&theme);
-        if self.active || self.hovered {
+        // The selection shows while the menu is open or the item has the keyboard focus (there
+        // is no hover state).
+        if self.active || cx.focus_visible() {
             let color = theme
                 .color("Menu Bar/Selection")
                 .unwrap_or(theme.colors.state_hover_overlay);
@@ -188,7 +199,7 @@ impl Widget for StatusItem {
             }
             ItemContent::Battery { symbol, percentage } => {
                 let style = theme.text(&typography::BODY_EMPHASIS, ink);
-                let tw = self.text_width(&theme, &percentage);
+                let tw = self.label_width(&theme, &percentage);
                 let layout = self
                     .text
                     .layout(&percentage, &style, Align::End, tw, Some(1));
@@ -209,8 +220,8 @@ impl Widget for StatusItem {
             }
             ItemContent::InputSource { symbol, label } => {
                 let style = theme.text(&typography::BODY_EMPHASIS, ink);
-                let tw = self.text_width(&theme, &label);
-                let layout = self.text.layout(&label, &style, Align::Start, tw, Some(1));
+                let tw = self.label_width(&theme, &label);
+                let layout = self.text.layout(&label, &style, Align::End, tw, Some(1));
                 cx.rec.text(
                     "Label",
                     Rect::new(r.x + pad, r.y + 5.0, tw, 18.0),
@@ -243,12 +254,8 @@ impl Widget for StatusItem {
         }
     }
 
-    fn state_changed(&mut self, cx: &mut EventCx<'_>, _old: NodeFlags, new: NodeFlags) {
-        let hovered = new.contains(NodeFlags::HOVERED);
-        if hovered != self.hovered {
-            self.hovered = hovered;
-            cx.request_paint();
-        }
+    fn state_changed(&mut self, cx: &mut EventCx<'_>, _old: NodeFlags, _new: NodeFlags) {
+        cx.request_paint();
     }
 
     fn interaction(&self) -> Interaction {
@@ -469,5 +476,37 @@ mod tests {
         let a = ui.create(StatusItem::glyph("wifi"));
         let _ = ui.set(a, Prop::Expanded, Value::Bool(true));
         assert_eq!(ui.get(a, Prop::Expanded), Some(Value::Bool(true)));
+    }
+
+    #[test]
+    fn there_is_no_hover_state_but_focus_and_an_open_menu_show_the_selection() {
+        use crate::core::event::Mods;
+        let mut ui = Ui::new_headless();
+        let win = ui.create_window(WindowKind::Normal, Size::new(300.0, 100.0));
+        let a = ui.create(StatusItem::glyph("wifi"));
+        ui.set_content(win, a);
+        ui.show_window(win);
+        ui.prepare_frame(win);
+        let names = |ui: &mut Ui| -> Vec<String> {
+            ui.prepare_frame(win);
+            ui.inspect_layers(a).into_iter().map(|l| l.path).collect()
+        };
+        ui.pointer_move(win, ui.tree.window_rect(a).center(), Mods::empty());
+        assert!(!names(&mut ui).iter().any(|n| n == "Active fill"));
+        let _ = ui.set(a, Prop::Expanded, Value::Bool(true));
+        assert!(names(&mut ui).iter().any(|n| n == "Active fill"));
+    }
+
+    #[test]
+    fn the_clock_and_the_labels_have_their_minimum_widths() {
+        let mut ui = Ui::new_headless();
+        let clock = ui.create(StatusItem::new(ItemContent::Clock("9:41".into())));
+        assert_eq!(ui.measure(clock, Proposal::UNSPECIFIED).width, 120.0);
+        let bat = ui.create(StatusItem::new(ItemContent::Battery {
+            symbol: "battery".into(),
+            percentage: "8".into(),
+        }));
+        // 8 + 32 + 4 + 20 + 8
+        assert_eq!(ui.measure(bat, Proposal::UNSPECIFIED).width, 72.0);
     }
 }
