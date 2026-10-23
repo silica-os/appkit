@@ -29,24 +29,20 @@ mod windows;
 pub struct Entry {
     /// Its name.
     pub name: &'static str,
-    /// Its symbol.
-    pub symbol: &'static str,
     /// Builds its content.
     pub build: fn() -> Element,
 }
 
 macro_rules! page {
-    ($name:expr, $symbol:expr, $m:ident) => {
+    ($name:expr, $m:ident) => {
         Entry {
             name: $name,
-            symbol: $symbol,
             build: || component($m::Page),
         }
     };
-    ($name:expr, $symbol:expr, $m:ident, $only:expr) => {
+    ($name:expr, $m:ident, $only:expr) => {
         Entry {
             name: $name,
-            symbol: $symbol,
             build: || component($m::Page($only)),
         }
     };
@@ -56,33 +52,33 @@ macro_rules! page {
 /// the shell-only ones (Control Center, Menu Bar and Dock, Notifications). Collections, Panels
 /// and the Status Bar have no Library page: they are in `examples/extras`.
 pub const PAGES: &[Entry] = &[
-    page!("Alerts", "warning", alerts),
-    page!("Buttons", "square", buttons),
-    page!("Color Wells", "palette", wells, &[1]),
-    page!("Combo Boxes", "chevron-down", fields, &[5]),
-    page!("Dialogs", "compose", dialogs),
-    page!("Disclosure Controls", "chevron-right", disclosure),
-    page!("Forms", "list-bullet", forms),
-    page!("Group Boxes", "square", group_boxes),
-    page!("Image Wells", "photo", wells, &[2]),
-    page!("Menus", "list-bullet", menus),
-    page!("Pop-up and Pull-down Buttons", "chevron-down", popup),
-    page!("Popovers", "message", popovers),
-    page!("Progress Indicators", "gauge", progress),
-    page!("Scrollbars", "chevron-down", scrollbars),
-    page!("Search Fields", "search", fields, &[3]),
-    page!("Segmented Controls", "window-split", segments),
-    page!("Sidebars", "sidebar", sidebars),
-    page!("Sliders", "sliders", sliders),
-    page!("Steppers", "plus", steppers),
-    page!("Text Fields", "text-size", fields, &[1, 2]),
-    page!("Titlebars and toolbars", "window", titlebars),
-    page!("Toggles - Checkboxes", "square", toggles, &[1, 2]),
-    page!("Toggles - Radio Buttons", "square", toggles, &[3]),
-    page!("Toggles - Switches", "square", toggles, &[4]),
-    page!("Tooltips", "info", tooltips),
-    page!("Windows", "window", windows),
-    page!("Example: Settings", "gear", settings),
+    page!("Alerts", alerts),
+    page!("Buttons", buttons),
+    page!("Color Wells", wells, &[1]),
+    page!("Combo Boxes", fields, &[5]),
+    page!("Dialogs", dialogs),
+    page!("Disclosure Controls", disclosure),
+    page!("Forms", forms),
+    page!("Group Boxes", group_boxes),
+    page!("Image Wells", wells, &[2]),
+    page!("Menus", menus),
+    page!("Pop-up and Pull-down Buttons", popup),
+    page!("Popovers", popovers),
+    page!("Progress Indicators", progress),
+    page!("Scrollbars", scrollbars),
+    page!("Search Fields", fields, &[3]),
+    page!("Segmented Controls", segments),
+    page!("Sidebars", sidebars),
+    page!("Sliders", sliders),
+    page!("Steppers", steppers),
+    page!("Text Fields", fields, &[1, 2]),
+    page!("Titlebars and toolbars", titlebars),
+    page!("Toggles - Checkboxes", toggles, &[1, 2]),
+    page!("Toggles - Radio Buttons", toggles, &[3]),
+    page!("Toggles - Switches", toggles, &[4]),
+    page!("Tooltips", tooltips),
+    page!("Windows", windows),
+    page!("Example: Settings", settings),
 ];
 
 /// The sections of a page that a sidebar entry shows: `only` lists them (1-based; empty: all).
@@ -154,7 +150,9 @@ pub fn h3(text: &str) -> Element {
 /// `content` on `fill` inside a 1 pt `Line/Separator` rim, corners of `radius`: the
 /// storybook's bordered surfaces, in the tokens of the current appearance.
 pub fn boxed(content: Element, fill: &str, radius: f32) -> Element {
-    column((content
+    // The fill is its own view, so a content of fixed size still fills the box.
+    column((column((content,))
+        .alignment(0)
         .fill_width()
         .background_role(fill)
         .corner_radius(radius - 1.0),))
@@ -195,7 +193,8 @@ pub fn playground(live: Element, controls: Element) -> Element {
             column((spacer(), live, spacer()))
                 .alignment(1)
                 .padding(48.0)
-                .min_height(200.0),
+                .min_height(200.0)
+                .fill_width(),
             "Surface/Window",
             14.0,
         ),
@@ -238,7 +237,9 @@ pub fn matrix(cols: &[&str], rows: Vec<(&str, Vec<Element>)>) -> Element {
         );
         cells.extend(items);
     }
-    grid(cols.len() as i64 + 1, cells)
+    // Columns of at most 200 pt, as the storybook's tables size to their content.
+    let n = cols.len() + 1;
+    grid(n as i64, cells).max_width(200.0 * n as f32)
 }
 
 /// A page: its sections, top to bottom (the window adds the title and the 36 pt margins).

@@ -327,18 +327,25 @@ impl Widget for Row {
                 },
             )
         };
-        cx.rec.glyph(
-            "Icon",
-            Rect::new(
-                r.x + metrics::PADDING,
-                r.y + 6.0,
-                metrics::ICON,
-                metrics::ICON,
-            ),
-            &self.icon,
-            400,
-            icon_color,
-        );
+        // A row without an icon (SSidebarItem's `icon` is optional) starts its label at the
+        // padding.
+        let label_x = if self.icon.is_empty() {
+            metrics::PADDING
+        } else {
+            cx.rec.glyph(
+                "Icon",
+                Rect::new(
+                    r.x + metrics::PADDING,
+                    r.y + 6.0,
+                    metrics::ICON,
+                    metrics::ICON,
+                ),
+                &self.icon,
+                400,
+                icon_color,
+            );
+            metrics::LABEL_X
+        };
         let mut style = theme.text(&typography::SIDEBAR, label_color);
         if self.selected {
             style.weight = 600;
@@ -349,13 +356,13 @@ impl Widget for Row {
         } else {
             trailing
         };
-        let w = (end - metrics::LABEL_X).max(0.0);
+        let w = (end - label_x).max(0.0);
         let layout = self
             .text
             .layout(&self.label, &style, Align::Start, w, Some(1));
         cx.rec.text(
             "Label",
-            Rect::new(r.x + metrics::LABEL_X, r.y + 6.0, w, 20.0),
+            Rect::new(r.x + label_x, r.y + 6.0, w, 20.0),
             layout,
             Some(typography::SIDEBAR.name),
             label_color,

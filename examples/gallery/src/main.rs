@@ -13,8 +13,7 @@ mod pages;
 
 use std::rc::Rc;
 
-use appkit_ui::PValue;
-use appkit_ui::kit::{self, AppearanceOption, Kind, Prop};
+use appkit_ui::kit::{self, AppearanceOption, Kind};
 use appkit_ui::prelude::*;
 use pages::{PAGES, field};
 
@@ -96,12 +95,22 @@ fn option(tick: &State<u32>, o: AppearanceOption) -> Binding<bool> {
     )
 }
 
+/// A section label of the sidebar (`.label`: 11, semibold, upper case, muted; the subtitle
+/// in plain case).
 fn group_header(title: &str, subtitle: Option<&str>) -> Element {
-    let text = match subtitle {
-        Some(s) => format!("{title}  {s}"),
-        None => title.to_string(),
-    };
-    view(Kind::SIDEBAR_HEADER).prop(Prop::TITLE, PValue::Str(text.as_str().into()))
+    let mut parts = vec![
+        label(title.to_uppercase())
+            .text_style("Label")
+            .color("Text/Secondary"),
+    ];
+    if let Some(sub) = subtitle {
+        parts.push(label(sub).text_style("Caption").color("Text/Secondary"));
+    }
+    // Rows inset their label by the panel's padding; the label lines up with them.
+    row(parts)
+        .spacing(4.0)
+        .alignment(10)
+        .padding_edges(14.0, 12.0, 4.0, 12.0)
 }
 
 impl Component for Gallery {
@@ -153,13 +162,13 @@ impl Component for Gallery {
                         spacer(),
                         switch(&motion).id("reduce-motion"),
                     ))
-                    .alignment(1),
+                    .alignment(4),
                     row((
                         label("Increase Contrast"),
                         spacer(),
                         switch(&contrast).id("increase-contrast"),
                     ))
-                    .alignment(1),
+                    .alignment(4),
                 ))
                 .spacing(12.0)
                 .alignment(0)
@@ -194,14 +203,15 @@ impl Component for Gallery {
         };
         // Sidebar.vue: the brand, the search, the Library (filtered), the Foundations.
         let q = query.get().trim().to_lowercase();
-        let row_for = |i: usize, symbol: &str| {
+        let row_for = |i: usize| {
             let page = page.clone();
-            sidebar_row(symbol, &name_of(i), i == current, move || page.set(i)).key(i as i64)
+            sidebar_row("", &name_of(i), i == current, move || page.set(i)).key(i as i64)
         };
         let mut rows: Vec<Element> = Vec::new();
+        // The brand goes home, as the storybook's does.
         let brand = {
             let page = page.clone();
-            button("Silica UI Kit  Amalfi 1.0")
+            button("Silica UI Kit")
                 .style(3)
                 .id("brand")
                 .on_activate(move || page.set(0))
@@ -210,7 +220,7 @@ impl Component for Gallery {
         let mut shown = 0;
         for (n, p) in PAGES.iter().enumerate() {
             if q.is_empty() || p.name.to_lowercase().contains(&q) {
-                rows.push(row_for(n + 1, p.symbol));
+                rows.push(row_for(n + 1));
                 shown += 1;
             }
         }
@@ -225,7 +235,7 @@ impl Component for Gallery {
         }
         rows.push(group_header("Foundations", None).key(-2i64));
         for (n, _) in FOUNDATIONS.iter().enumerate() {
-            rows.push(row_for(1 + PAGES.len() + n, "circle"));
+            rows.push(row_for(1 + PAGES.len() + n));
         }
         // DocPage: the title, then the page, 36 in and at most 1100 wide.
         // Home carries its own heading.
@@ -241,18 +251,24 @@ impl Component for Gallery {
             .max_width(1100.0)
             .fill_width();
         row((
+            // Sidebar.vue: 264 wide on the panel, 16 by 12 in, a 1 pt rule on its right.
             column((
-                brand.padding_xy(8.0, 8.0),
-                search_field("Search pages and components", &query.binding())
-                    .id("search")
-                    .padding_xy(12.0, 0.0),
+                row((brand, label("Amalfi 1.0").color("Text/Secondary")))
+                    .spacing(4.0)
+                    .alignment(10),
+                search_field("Search pages and components", &query.binding()).id("search"),
                 scroll_view(sidebar(rows)).fill(),
             ))
-            .spacing(8.0)
+            .spacing(12.0)
             .alignment(0)
-            .width(264.0)
+            .padding_edges(16.0, 12.0, 0.0, 12.0)
+            .width(263.0)
             .max_height(f32::INFINITY)
             .background_role("Surface/Sidebar"),
+            view(Kind::VIEW)
+                .width(1.0)
+                .max_height(f32::INFINITY)
+                .background_role("Line/Separator"),
             scroll_view(body).fill().background_role("Surface/Window"),
         ))
         .spacing(0.0)

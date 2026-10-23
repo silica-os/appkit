@@ -19,10 +19,10 @@ impl Component for Page {
                 .disabled(disabled.get()),
             row((
                 view(Kind::IMAGE_WELL)
-                    .frame(64.0, 64.0)
+                    .control_size(2)
                     .disabled(disabled.get()),
                 view(Kind::IMAGE_WELL)
-                    .frame(32.0, 32.0)
+                    .control_size(1)
                     .disabled(disabled.get()),
             ))
             .spacing(12.0),
@@ -62,15 +62,15 @@ impl Component for Page {
                 (
                     "Regular",
                     vec![
-                        view(Kind::IMAGE_WELL).frame(64.0, 64.0),
-                        view(Kind::IMAGE_WELL).frame(64.0, 64.0).disabled(true),
+                        view(Kind::IMAGE_WELL).control_size(2),
+                        view(Kind::IMAGE_WELL).control_size(2).disabled(true),
                     ],
                 ),
                 (
                     "Small",
                     vec![
-                        view(Kind::IMAGE_WELL).frame(32.0, 32.0),
-                        view(Kind::IMAGE_WELL).frame(32.0, 32.0).disabled(true),
+                        view(Kind::IMAGE_WELL).control_size(1),
+                        view(Kind::IMAGE_WELL).control_size(1).disabled(true),
                     ],
                 ),
             ],

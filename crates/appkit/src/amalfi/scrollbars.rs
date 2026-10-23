@@ -721,7 +721,13 @@ impl Widget for ScrollView {
     fn measure(&mut self, cx: &mut LayoutCx<'_>, p: Proposal) -> Size {
         let mut content = Size::ZERO;
         if let Some(c) = cx.children().first().copied() {
-            content = cx.measure(c, Proposal::UNSPECIFIED);
+            // The document tracks the visible width (it still scrolls sideways when it
+            // cannot be that narrow); its height is its own.
+            let width = p
+                .width
+                .filter(|w| w.is_finite())
+                .map(|w| self.viewport_for(Size::new(w, 0.0)).width);
+            content = cx.measure(c, Proposal::new(width, None));
         }
         self.content = content;
         p.replacing_unspecified(content)
@@ -731,7 +737,7 @@ impl Widget for ScrollView {
         self.viewport = self.viewport_for(size);
         self.offset = self.clamp(self.offset);
         if let Some(c) = cx.children().first().copied() {
-            let s = cx.measure(c, Proposal::UNSPECIFIED);
+            let s = cx.measure(c, Proposal::new(Some(self.viewport.width), None));
             self.content = s;
             self.viewport = self.viewport_for(size);
             self.offset = self.clamp(self.offset);
