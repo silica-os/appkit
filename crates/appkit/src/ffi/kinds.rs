@@ -104,6 +104,7 @@ pub fn make(kind: u32) -> Option<Box<dyn Widget>> {
             crate::amalfi::materials::Tier::Regular,
             16.0,
         )),
+        AK_KIND_TOUCH_PROBE => Box::new(crate::amalfi::touchpad::TouchProbe::new()),
         AK_KIND_CALLOUT => Box::new(crate::amalfi::callouts::Callout::new(
             crate::amalfi::callouts::CalloutShape::new(
                 Some(crate::amalfi::popovers::Edge::Bottom),

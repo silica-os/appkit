@@ -346,6 +346,11 @@ pub fn glass_panel(tier: Glass, radius: f32, content: Element) -> Element {
         .children(content)
 }
 
+/// The touchpad probe: a panel showing the touchpad events it receives.
+pub fn touch_probe() -> Element {
+    Element::of(Kind::TOUCH_PROBE)
+}
+
 /// A callout around `content`: a glass bubble whose arrow is on `edge` (0 top, 1 bottom,
 /// 2 leading, 3 trailing, anything else none).
 pub fn callout(edge: i64, tier: Glass, content: Element) -> Element {

@@ -32,5 +32,6 @@ pub mod toggles;
 pub mod tokens;
 pub mod toolbar;
 pub mod tooltips;
+pub mod touchpad;
 pub mod wells;
 pub mod windows;

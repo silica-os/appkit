@@ -323,6 +323,7 @@ typedef void (*AKAlertFn)(int64_t response, void *user);
 #define AK_KIND_BOX_SURFACE 61u
 #define AK_KIND_GLASS_PANEL 62u
 #define AK_KIND_CALLOUT 63u
+#define AK_KIND_TOUCH_PROBE 64u
 
 /* Window kinds. */
 #define AK_WINDOW_NORMAL 1u

@@ -198,6 +198,7 @@ impl Kind {
     pub const GRID_VIEW: Kind = Kind(sys::AK_KIND_GRID_VIEW);
     pub const GLASS_PANEL: Kind = Kind(sys::AK_KIND_GLASS_PANEL);
     pub const CALLOUT: Kind = Kind(sys::AK_KIND_CALLOUT);
+    pub const TOUCH_PROBE: Kind = Kind(sys::AK_KIND_TOUCH_PROBE);
     pub const TAB_VIEW: Kind = Kind(sys::AK_KIND_TAB_VIEW);
     pub const STATUS_ITEM: Kind = Kind(sys::AK_KIND_STATUS_ITEM);
     pub const TOOLBAR: Kind = Kind(sys::AK_KIND_TOOLBAR);

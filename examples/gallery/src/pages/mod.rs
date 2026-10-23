@@ -28,6 +28,7 @@ mod steppers;
 mod titlebars;
 mod toggles;
 mod tooltips;
+mod touchpad;
 mod wells;
 mod windows;
 
@@ -77,6 +78,7 @@ pub const PAGES: &[Entry] = &[
     page!("Titlebars", "window", titlebars),
     page!("Toggles", "square", toggles),
     page!("Tooltips", "info", tooltips),
+    page!("Touchpad", "arrow-left-right", touchpad),
     page!("Wells", "palette", wells),
     page!("Windows", "window", windows),
     page!("Motion", "waveform", motion),
