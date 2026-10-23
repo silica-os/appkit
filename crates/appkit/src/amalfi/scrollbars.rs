@@ -438,6 +438,13 @@ impl Widget for ScrollView {
             self.content = s;
             self.viewport = self.viewport_for(size);
             self.offset = self.clamp(self.offset);
+            // A sidebar panel is the document of its scroll view: its background fills the
+            // view when its rows do not.
+            let s = if cx.ui.widget::<crate::amalfi::sidebars::Panel>(c).is_some() {
+                Size::new(s.width, s.height.max(self.viewport.height))
+            } else {
+                s
+            };
             cx.place(
                 c,
                 Rect::new(-self.offset.x, -self.offset.y, s.width, s.height),
@@ -761,6 +768,22 @@ mod tests {
         ui.show_window(win);
         ui.prepare_frame(win);
         (ui, win, sv)
+    }
+
+    #[test]
+    fn a_sidebar_panel_fills_its_scroll_view_when_its_rows_are_few() {
+        let mut ui = Ui::new_headless();
+        let win = ui.create_window(WindowKind::Normal, Size::new(300.0, 600.0));
+        let row = crate::amalfi::sidebars::row(&mut ui, "square", "Row", None, false);
+        let panel = ui.create(crate::amalfi::sidebars::Panel::default());
+        ui.add_child(panel, row);
+        let sv = scroll_view(&mut ui, ScrollbarStyle::Overlay, panel);
+        let _ = ui.set(sv, Prop::MaxHeight, Value::from(f32::INFINITY));
+        ui.set_content(win, sv);
+        ui.show_window(win);
+        ui.prepare_frame(win);
+        let h = ui.tree.window_rect(panel).height;
+        assert!(h >= 600.0 - 0.5, "the panel is {h} tall in a 600 pt view");
     }
 
     #[test]
