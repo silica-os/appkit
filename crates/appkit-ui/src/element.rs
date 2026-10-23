@@ -546,6 +546,12 @@ impl Element {
         self.prop(Prop::DISABLED, PValue::Bool(d))
     }
 
+    /// Held down without a pointer (the showcase's `force="pressed"`): the lens of a
+    /// segmented control, the stretched thumb of a switch.
+    pub fn pressed(self, p: bool) -> Self {
+        self.prop(Prop::PRESSED, PValue::Bool(p))
+    }
+
     /// An identifier for tests and the inspector.
     pub fn id(self, ident: &str) -> Self {
         self.prop(Prop::IDENTIFIER, PValue::Str(Rc::from(ident)))

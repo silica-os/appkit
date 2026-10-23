@@ -655,6 +655,15 @@ impl Ui {
                 self.request_paint_subtree(id);
                 PropChange::Paint
             }
+            Prop::Pressed => {
+                let p = value.as_bool().ok_or(Error::BadValue)?;
+                node.flags.set(NodeFlags::PRESSED, p);
+                if !self.state_check.contains(&id) {
+                    self.state_check.push(id);
+                }
+                self.request_paint(id);
+                PropChange::Paint
+            }
             Prop::Identifier => {
                 node.identifier = value.as_str().map(str::to_string);
                 PropChange::Nothing
@@ -728,6 +737,7 @@ impl Ui {
             Prop::Opacity => Value::from(m.opacity),
             Prop::Hidden => Value::Bool(n.flags.contains(NodeFlags::HIDDEN)),
             Prop::Disabled => Value::Bool(n.flags.contains(NodeFlags::DISABLED)),
+            Prop::Pressed => Value::Bool(n.flags.contains(NodeFlags::PRESSED)),
             Prop::Identifier => n.identifier.clone().map(Value::Str).unwrap_or_default(),
             Prop::Tooltip => n.tooltip.clone().map(Value::Str).unwrap_or_default(),
             Prop::AccessibilityLabel => n.a11y.label.clone().map(Value::Str).unwrap_or_default(),

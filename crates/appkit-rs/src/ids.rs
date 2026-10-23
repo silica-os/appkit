@@ -102,6 +102,7 @@ impl Prop {
     pub const ALLOWS_MULTIPLE_SELECTION: Prop = Prop(sys::AK_PROP_ALLOWS_MULTIPLE_SELECTION);
     pub const EXPANDED_ITEMS: Prop = Prop(sys::AK_PROP_EXPANDED_ITEMS);
     pub const TILE_SIZE: Prop = Prop(sys::AK_PROP_TILE_SIZE);
+    pub const PRESSED: Prop = Prop(sys::AK_PROP_PRESSED);
 }
 
 /// A signal id.

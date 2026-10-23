@@ -310,7 +310,17 @@ fn segmented_controls_match_the_kit() {
             .selected(&selected)
             .size(csize);
         let pressed = state == "Pressed";
-        let mut skip: Vec<&str> = Vec::new();
+        // ui-kit `SSegmented`: the selected thumb is the element that swells into the lens, so
+        // the selected item has no background of its own while an item is held; the kit's
+        // masters keep it under the lens.
+        let held_backgrounds: Vec<String> = if pressed && one {
+            (1..=count)
+                .map(|i| format!("Segment {i}/Background"))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let mut skip: Vec<&str> = held_backgrounds.iter().map(String::as_str).collect();
         let mut devs: Vec<&str> = thr.iter().map(String::as_str).collect();
         if pressed {
             // Room for the lens: 8 beside the item, 12 above and below it.

@@ -1,4 +1,4 @@
-//! Segmented controls: text segments, several sizes, disabled.
+//! Segmented controls: text segments, several sizes, held down (the lens), disabled.
 
 use appkit_ui::prelude::*;
 
@@ -35,9 +35,18 @@ impl Component for Page {
             &b.binding(),
         );
         let off = segmented(&["On", "Off"], &a.binding()).disabled(true);
+        // Held down (the lens), as the ui-kit showcase's `force="pressed"`.
+        let held = row((
+            segmented(&["Day", "Week", "Month"], &b.binding()).pressed(true),
+            segmented(&["Inbox", "Sent", "Drafts", "Archive"], &c.binding())
+                .control_size(3)
+                .pressed(true),
+        ))
+        .spacing(32.0);
         page(vec![
             section("Sizes", sizes),
             section("Five segments", many),
+            section("Pressed: the thumb turns into the lens", held),
             section("Disabled", off),
         ])
     }

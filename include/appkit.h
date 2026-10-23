@@ -230,6 +230,7 @@ typedef void (*AKAlertFn)(int64_t response, void *user);
 #define AK_PROP_ALLOWS_MULTIPLE_SELECTION 166u
 #define AK_PROP_EXPANDED_ITEMS 167u
 #define AK_PROP_TILE_SIZE 168u
+#define AK_PROP_PRESSED 169u
 
 /* Signals. */
 #define AK_SIGNAL_ACTIVATED 1u

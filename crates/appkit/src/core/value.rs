@@ -417,6 +417,9 @@ numbered_enum! {
         ExpandedItems = 167,
         /// The tile of a grid view (`Size`).
         TileSize = 168,
+        /// Held down without a pointer (`Bool`): the pressed look, as the ui-kit showcase's
+        /// `force="pressed"`.
+        Pressed = 169,
     }
 }
 

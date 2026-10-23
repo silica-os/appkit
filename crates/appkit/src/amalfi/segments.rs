@@ -6,12 +6,13 @@ use crate::amalfi::foundation::{ControlSize, Label, control_shadow, focus_halo_n
 use crate::amalfi::theme::Theme;
 use crate::amalfi::tokens::{self, TypeStyle, control_heights, typography};
 use crate::color::Color;
+use crate::core::NodeFlags;
 use crate::core::a11y::{A11y, Action, Role};
 use crate::core::event::{Button, Event, Handled, Key};
 use crate::core::layout::Proposal;
 use crate::core::value::{Prop, Signal, Value};
 use crate::core::widget::{EventCx, FocusKind, Interaction, LayoutCx, PaintCx, PropChange, Widget};
-use crate::geom::{Point, Rect, Size, Transform};
+use crate::geom::{Point, Rect, Size};
 use crate::motion::{Animated, Timing};
 use crate::shape::Shape;
 use crate::style::{Border, Style};
@@ -286,22 +287,6 @@ fn is_disabled(cx: &mut EventCx<'_>) -> bool {
     cx.ui().is_disabled(id)
 }
 
-/// Scales what `f` records about the centre of `rect`.
-fn magnified(cx: &mut PaintCx<'_>, rect: Rect, k: f32, f: impl FnOnce(&mut PaintCx<'_>)) {
-    if (k - 1.0).abs() < 1e-3 {
-        f(cx);
-        return;
-    }
-    let c = rect.center();
-    cx.rec.push_transform(
-        Transform::translate(-c.x, -c.y)
-            .then(Transform::scale(k, k))
-            .then(Transform::translate(c.x, c.y)),
-    );
-    f(cx);
-    cx.rec.pop();
-}
-
 fn text_width(cache: &mut Label, theme: &Theme, token: &'static TypeStyle, text: &str) -> f32 {
     let style = theme.text(token, theme.colors.text_primary);
     whole(cache.width(text, &style), metrics::STEP)
@@ -321,26 +306,14 @@ pub enum Selection {
     Any,
 }
 
-/// The lens over a pressed segment of a select-one control (`materials.md`, lens rule): 8
-/// beyond the item on each side, 12 above and below it, growing from the item's own size.
-pub fn lens_rect(item: Rect, centre_x: f32, presence: f32) -> Rect {
-    let p = if presence.is_finite() {
-        presence.max(0.0)
-    } else {
-        0.0
-    };
-    let from = Rect::new(centre_x - item.width / 2.0, item.y, item.width, item.height);
-    let full = Rect::new(
-        from.x - 8.0,
-        from.y - 12.0,
-        from.width + 16.0,
-        from.height + 24.0,
-    );
+/// The lens a pressed segment of a select-one control swells into (ui-kit `SSegmented`
+/// `measure`, `materials.md` lens rule): 8 beyond the item on each side, 12 above and below.
+pub fn lens_rect(item: Rect) -> Rect {
     Rect::new(
-        from.x + (full.x - from.x) * p,
-        from.y + (full.y - from.y) * p,
-        from.width + (full.width - from.width) * p,
-        from.height + (full.height - from.height) * p,
+        item.x - 8.0,
+        item.y - 12.0,
+        item.width + 16.0,
+        item.height + 24.0,
     )
 }
 
@@ -363,11 +336,12 @@ pub struct SegmentedControl {
     items: Vec<Rect>,
     width: f32,
     thumb: Animated<Rect>,
-    presence: Animated<f32>,
-    lens_x: Animated<f32>,
-    lens_opacity: Animated<f32>,
-    lens_up: bool,
-    grab: f32,
+    /// 0 the thumb, 1 the glass lens (the same element morphing, `spring.snappy`).
+    lens: Animated<f32>,
+    /// The item held down: the lens is around it (it follows the pointer item to item).
+    hot: Option<usize>,
+    /// Held down by `Prop::Pressed` (the showcase's `force="pressed"`), not by the pointer.
+    forced: bool,
     hovered: Option<usize>,
     down: bool,
     pressed_item: Option<usize>,
@@ -389,11 +363,9 @@ impl SegmentedControl {
             items: Vec::new(),
             width: 0.0,
             thumb: Animated::new(Rect::ZERO),
-            presence: Animated::new(0.0),
-            lens_x: Animated::new(0.0),
-            lens_opacity: Animated::new(0.0),
-            lens_up: false,
-            grab: 0.0,
+            lens: Animated::new(0.0),
+            hot: None,
+            forced: false,
             hovered: None,
             down: false,
             pressed_item: None,
@@ -460,7 +432,7 @@ impl SegmentedControl {
             x += w;
         }
         self.width = x + metrics::TRACK_PADDING;
-        if !self.thumb.is_animating() {
+        if !self.thumb.is_animating() && self.hot.is_none() && self.lens.get() <= 0.0 {
             let r = self.single().and_then(|i| self.items.get(i)).copied();
             self.thumb.jump(r.unwrap_or(Rect::ZERO));
         }
@@ -527,7 +499,7 @@ impl SegmentedControl {
                         self.thumb.jump(to);
                     } else {
                         self.thumb
-                            .animate_to(to, Timing::Spring(tokens::motion::SPRING_MORPH));
+                            .animate_to(to, Timing::Spring(tokens::motion::SPRING_SNAPPY));
                     }
                 }
             }
@@ -547,28 +519,71 @@ impl SegmentedControl {
         cx.animate();
     }
 
-    fn settle(&mut self, cx: &mut EventCx<'_>, target: Option<usize>) {
-        let reduce = cx.theme().appearance.reduce_motion;
-        if reduce {
-            self.hide_lens();
+    fn spring(cx: &EventCx<'_>) -> Timing {
+        if cx.theme().appearance.reduce_motion {
+            Timing::None
+        } else {
+            Timing::Spring(tokens::motion::SPRING_SNAPPY)
+        }
+    }
+
+    /// The item swells into the lens (or the lens moves to it): the thumb's rect and the
+    /// morph both animate with `spring.snappy`.
+    fn lens_to(&mut self, cx: &mut EventCx<'_>, i: usize) {
+        let Some(item) = self.items.get(i).copied() else {
             return;
+        };
+        let spring = Self::spring(cx);
+        if self.hot.is_none() && self.thumb.get() == Rect::ZERO {
+            self.thumb.jump(item);
         }
-        if let Some(r) = target.and_then(|t| self.items.get(t)) {
-            self.lens_x
-                .animate_to(r.center().x, Timing::Spring(tokens::motion::SPRING_MORPH));
-        }
-        self.lens_opacity.animate_to(
-            0.0,
-            Timing::curve(tokens::motion::FADE_QUICK_CURVE, tokens::motion::FADE_QUICK),
-        );
+        self.hot = Some(i);
+        self.thumb.animate_to(lens_rect(item), spring);
+        self.lens.animate_to(1.0, spring);
+        cx.request_paint();
         cx.animate();
     }
 
-    fn hide_lens(&mut self) {
-        self.presence.jump(0.0);
-        self.lens_x.jump(self.lens_x.get());
-        self.lens_opacity.jump(0.0);
-        self.lens_up = false;
+    /// The lens turns back into the thumb under the selected item.
+    fn lens_off(&mut self, cx: &mut EventCx<'_>) {
+        let spring = Self::spring(cx);
+        self.hot = None;
+        let to = self
+            .single()
+            .and_then(|i| self.items.get(i))
+            .copied()
+            .unwrap_or(Rect::ZERO);
+        if to == Rect::ZERO {
+            self.thumb.jump(to);
+        } else {
+            self.thumb.animate_to(to, spring);
+        }
+        self.lens.animate_to(0.0, spring);
+        cx.request_paint();
+        cx.animate();
+    }
+
+    /// The enabled item nearest to `x` (ui-kit `move`: the distance to the item's span).
+    fn nearest_enabled(&self, x: f32, enabled: bool) -> Option<usize> {
+        let mut best = None;
+        let mut dist = f32::INFINITY;
+        for (i, r) in self.items.iter().enumerate() {
+            if !self.can_choose(i, enabled) {
+                continue;
+            }
+            let d = if x < r.x {
+                r.x - x
+            } else if x > r.right() {
+                x - r.right()
+            } else {
+                0.0
+            };
+            if d < dist {
+                dist = d;
+                best = Some(i);
+            }
+        }
+        best
     }
 
     fn step(&mut self, cx: &mut EventCx<'_>, step: isize) {
@@ -617,39 +632,30 @@ impl Widget for SegmentedControl {
         );
         let one = self.mode == Selection::One;
         let item_radius = m.item_height() / 2.0;
-        // The selection of select one: a slide, or the chosen item's own background.
-        let sliding = one && self.thumb.is_animating();
-        if sliding {
+        // The selection of select one: a slide, or the chosen item's own background. While an
+        // item is held the thumb is the lens: one element, morphing (ui-kit `.s-segmented__thumb`
+        // and `.is-lens`).
+        let lens_t = self.lens.get().clamp(0.0, 1.0);
+        let morphing = one && (self.hot.is_some() || lens_t > 0.0);
+        let sliding = one && (self.thumb.is_animating() || morphing);
+        if sliding && self.thumb.get() != Rect::ZERO {
+            let rect = shift(self.thumb.get());
+            let mut thumb = ItemLook::Selected.style(&theme);
+            thumb.opacity = 1.0 - lens_t;
+            let lens_radius = (rect.height.min(rect.width) / 2.0 - 1.0).max(0.0);
             cx.rec.layer(
                 "Thumb",
-                shift(self.thumb.get()),
-                Shape::rounded(item_radius),
-                ItemLook::Selected.style(&theme),
+                rect,
+                Shape::rounded(item_radius + (lens_radius - item_radius) * lens_t),
+                thumb,
             );
-        }
-        // The lens, under the items.
-        let presence = self.presence.get();
-        let lens_opacity = self.lens_opacity.get();
-        let lens_on = self.lens_up && !self.items.is_empty() && lens_opacity > 0.0;
-        let lens_x = self.lens_x.get();
-        if lens_on {
-            let under = self.index_at_x(lens_x).unwrap_or(0);
-            if let Some(item) = self.items.get(under) {
-                let rect = lens_rect(*item, lens_x, presence);
+            if lens_t > 0.0 {
                 let mut style = theme.material_style("Glass/Clear");
-                style.opacity = lens_opacity;
-                cx.rec.layer(
-                    "Lens",
-                    shift(rect),
-                    Shape::rounded((rect.height.min(rect.width) / 2.0 - 1.0).max(0.0)),
-                    style,
-                );
+                style.opacity = lens_t;
+                cx.rec
+                    .layer("Lens", rect, Shape::rounded(lens_radius), style);
             }
         }
-        let magnification = theme
-            .material("Glass/Clear")
-            .map_or(1.0, |c| c.magnification)
-            .max(1.0);
         for (i, seg) in self.segments.iter().enumerate() {
             let Some(item) = self.items.get(i).copied() else {
                 continue;
@@ -685,28 +691,19 @@ impl Widget for SegmentedControl {
                 Shape::rounded(item_radius),
                 look.style(&theme),
             );
-            let k = if lens_on {
-                let cover =
-                    (1.0 - (item.center().x - lens_x).abs() / item.width.max(1.0)).clamp(0.0, 1.0);
-                1.0 + (magnification - 1.0) * (presence * lens_opacity).clamp(0.0, 1.0) * cover
-            } else {
-                1.0
-            };
             let color = theme.colors.text_primary;
             match &seg.content {
                 Content::Text(t) => {
                     let cache = self.labels.get(i);
-                    magnified(cx, rect, k, |cx| {
-                        paint_label(
-                            cx,
-                            cache,
-                            &format!("{prefix}Label"),
-                            rect,
-                            t,
-                            m.item_token(),
-                            color,
-                        );
-                    });
+                    paint_label(
+                        cx,
+                        cache,
+                        &format!("{prefix}Label"),
+                        rect,
+                        t,
+                        m.item_token(),
+                        color,
+                    );
                 }
                 Content::Icon(symbol) => {
                     let g = m.glyph();
@@ -716,10 +713,8 @@ impl Widget for SegmentedControl {
                         g,
                         g,
                     );
-                    magnified(cx, rect, k, |cx| {
-                        cx.rec
-                            .glyph(&format!("{prefix}Glyph Sidebar"), r, symbol, 400, color);
-                    });
+                    cx.rec
+                        .glyph(&format!("{prefix}Glyph Sidebar"), r, symbol, 400, color);
                 }
             }
             if dimmed {
@@ -792,25 +787,7 @@ impl Widget for SegmentedControl {
                     cx.request_paint();
                     return Handled::Yes;
                 }
-                let Some(centre) = self.items.get(i).map(|r| r.center().x) else {
-                    return Handled::No;
-                };
-                let reduce = theme.appearance.reduce_motion;
-                self.grab = centre - local.x;
-                self.lens_x.jump(centre);
-                self.lens_opacity.jump(1.0);
-                if !self.lens_up {
-                    self.presence.jump(0.0);
-                }
-                self.lens_up = true;
-                if reduce {
-                    self.presence.jump(1.0);
-                } else {
-                    self.presence
-                        .animate_to(1.0, Timing::Spring(tokens::motion::SPRING_SNAPPY));
-                }
-                cx.request_paint();
-                cx.animate();
+                self.lens_to(cx, i);
                 Handled::Yes
             }
             Event::PointerMove {
@@ -825,11 +802,14 @@ impl Widget for SegmentedControl {
                         self.pressed_inside = inside;
                         cx.request_paint();
                     }
-                } else if let (Some(first), Some(last)) = (self.items.first(), self.items.last()) {
-                    let (lo, hi) = (first.center().x, last.center().x);
-                    let x = (local.x + self.grab).clamp(lo.min(hi), lo.max(hi));
-                    self.lens_x.jump(x);
-                    cx.request_paint();
+                } else if self.mode == Selection::One {
+                    // The lens follows the pointer from item to item.
+                    if let Some(n) = self.nearest_enabled(local.x, enabled)
+                        && self.hot != Some(n)
+                    {
+                        self.focus_index = n;
+                        self.lens_to(cx, n);
+                    }
                 }
                 Handled::Yes
             }
@@ -848,21 +828,11 @@ impl Widget for SegmentedControl {
                     cx.request_paint();
                     return Handled::Yes;
                 }
-                let inside = self.index_at(local).is_some();
-                let target = if inside {
-                    self.index_at_x(self.lens_x.get())
-                } else {
-                    None
-                };
-                match target.filter(|t| self.can_choose(*t, enabled)) {
-                    Some(t) => {
-                        self.focus_index = t;
-                        self.choose(cx, t);
-                        self.settle(cx, Some(t));
-                    }
-                    None => self.settle(cx, None),
+                // Released anywhere (the pointer is captured): the item under the lens is chosen.
+                if let Some(t) = self.hot.filter(|t| self.can_choose(*t, enabled)) {
+                    self.choose(cx, t);
                 }
-                cx.request_paint();
+                self.lens_off(cx);
                 Handled::Yes
             }
             Event::Key(k) if k.pressed => {
@@ -885,14 +855,27 @@ impl Widget for SegmentedControl {
 
     fn tick(&mut self, _cx: &mut EventCx<'_>, dt: f32) -> bool {
         let a = self.thumb.tick(dt);
-        let b = self.presence.tick(dt);
-        let c = self.lens_x.tick(dt);
-        let d = self.lens_opacity.tick(dt);
-        let busy = a || b || c || d;
-        if self.lens_up && !self.down && !busy && self.lens_opacity.get() <= 0.0 {
-            self.hide_lens();
+        let b = self.lens.tick(dt);
+        a || b
+    }
+
+    fn state_changed(&mut self, cx: &mut EventCx<'_>, old: NodeFlags, new: NodeFlags) {
+        // `Prop::Pressed` holds the control down without a pointer: the second item (the
+        // first when there is one) is the pressed one, as in the ui-kit showcase.
+        let held = new.contains(NodeFlags::PRESSED) && !self.down;
+        if held && !old.contains(NodeFlags::PRESSED) {
+            self.forced = true;
+            self.compute(&cx.theme());
+            cx.grow(PRESS_SCALE_SEGMENTED);
+            if self.mode == Selection::One {
+                let i = usize::from(self.items.len() > 1);
+                self.lens_to(cx, i);
+            }
+        } else if self.forced && !new.contains(NodeFlags::PRESSED) {
+            self.forced = false;
+            cx.grow(1.0);
+            self.lens_off(cx);
         }
-        busy
     }
 
     fn interaction(&self) -> Interaction {
@@ -2139,7 +2122,7 @@ mod tests {
         }
         assert!(
             ui.widget::<SegmentedControl>(id)
-                .is_some_and(|c| !c.lens_up)
+                .is_some_and(|c| c.hot.is_none() && c.lens.get() <= 0.0)
         );
         // Choosing the chosen one again changes nothing.
         let n = log.borrow().len();
@@ -2158,13 +2141,103 @@ mod tests {
         ui.pointer_move(win, at(&ui, id, 190.0, 14.0), Mods::empty());
         ui.pointer_up(win, at(&ui, id, 190.0, 14.0), Button::Left, Mods::empty());
         assert_eq!(ui.get(id, Prop::SelectedIndex), Some(Value::Int(2)));
-        // A release outside cancels.
+        // The pointer is captured: released far below, the item under the lens is chosen
+        // (ui-kit `up`).
         let start = at(&ui, id, 40.0, 14.0);
         ui.pointer_move(win, start, Mods::empty());
         ui.pointer_down(win, start, Button::Left, Mods::empty());
         ui.pointer_move(win, at(&ui, id, 40.0, 90.0), Mods::empty());
         ui.pointer_up(win, at(&ui, id, 40.0, 90.0), Button::Left, Mods::empty());
+        assert_eq!(ui.get(id, Prop::SelectedIndex), Some(Value::Int(0)));
+    }
+
+    fn scale_of(ui: &Ui, id: crate::core::ViewId) -> f32 {
+        let s = ui
+            .tree
+            .get(id)
+            .and_then(|n| n.anim.as_ref())
+            .map_or(1.0, |a| a.scale.get());
+        (s * 1000.0).round() / 1000.0
+    }
+
+    fn settle(ui: &mut Ui) {
+        for _ in 0..120 {
+            ui.advance(0.02);
+        }
+    }
+
+    #[test]
+    fn the_thumb_swells_into_the_lens_and_jumps_from_item_to_item() {
+        let (mut ui, win, id, _log) =
+            scene(SegmentedControl::texts(&["One", "Two", "Three"]).selected(&[0]));
+        let items = ui
+            .widget::<SegmentedControl>(id)
+            .map(|c| c.items.clone())
+            .unwrap_or_default();
+        let start = at(&ui, id, 40.0, 14.0);
+        ui.pointer_move(win, start, Mods::empty());
+        ui.pointer_down(win, start, Button::Left, Mods::empty());
+        settle(&mut ui);
+        let state = |ui: &Ui| {
+            ui.widget::<SegmentedControl>(id)
+                .map(|c| (c.thumb.get(), c.lens.get(), c.hot))
+                .unwrap_or_default()
+        };
+        // Pressed: the lens is around the first item, 8 / 12 beyond it.
+        let (rect, t, hot) = state(&ui);
+        assert_eq!(rect, lens_rect(items[0]));
+        assert!((t - 1.0).abs() < 1e-3);
+        assert_eq!(hot, Some(0));
+        // Dragged to the third: the same element moves there (it does not trail the pointer).
+        ui.pointer_move(win, at(&ui, id, 190.0, 14.0), Mods::empty());
+        let (_, _, hot) = state(&ui);
+        assert_eq!(hot, Some(2));
+        settle(&mut ui);
+        assert_eq!(state(&ui).0, lens_rect(items[2]));
+        // Released: the selection is the third, the lens is the thumb again under it.
+        ui.pointer_up(win, at(&ui, id, 190.0, 14.0), Button::Left, Mods::empty());
+        settle(&mut ui);
+        let (rect, t, hot) = state(&ui);
+        assert_eq!((rect, hot), (items[2], None));
+        assert!(t.abs() < 1e-3);
         assert_eq!(ui.get(id, Prop::SelectedIndex), Some(Value::Int(2)));
+    }
+
+    #[test]
+    fn the_whole_control_grows_while_held_and_not_with_reduced_motion() {
+        let (mut ui, win, id, _log) =
+            scene(SegmentedControl::texts(&["One", "Two"]).selected(&[0]));
+        let p = at(&ui, id, 40.0, 14.0);
+        ui.pointer_move(win, p, Mods::empty());
+        ui.pointer_down(win, p, Button::Left, Mods::empty());
+        settle(&mut ui);
+        assert_eq!(scale_of(&ui, id), 1.035);
+        ui.pointer_up(win, p, Button::Left, Mods::empty());
+        settle(&mut ui);
+        assert_eq!(scale_of(&ui, id), 1.0);
+    }
+
+    #[test]
+    fn pressed_holds_the_second_item_without_a_pointer() {
+        let (mut ui, win, id, log) =
+            scene(SegmentedControl::texts(&["One", "Two", "Three"]).selected(&[0]));
+        let items = ui
+            .widget::<SegmentedControl>(id)
+            .map(|c| c.items.clone())
+            .unwrap_or_default();
+        let _ = ui.set(id, Prop::Pressed, Value::Bool(true));
+        ui.prepare_frame(win);
+        settle(&mut ui);
+        let thumb = ui.widget::<SegmentedControl>(id).map(|c| c.thumb.get());
+        assert_eq!(thumb, Some(lens_rect(items[1])));
+        assert_eq!(scale_of(&ui, id), 1.035);
+        // Letting go chooses nothing.
+        let _ = ui.set(id, Prop::Pressed, Value::Bool(false));
+        ui.prepare_frame(win);
+        settle(&mut ui);
+        assert!(log.borrow().is_empty());
+        assert_eq!(ui.get(id, Prop::SelectedIndex), Some(Value::Int(0)));
+        assert_eq!(scale_of(&ui, id), 1.0);
     }
 
     #[test]
@@ -2262,8 +2335,6 @@ mod tests {
     #[test]
     fn lens_geometry() {
         let item = Rect::new(76.0, 8.0, 72.0, 20.0);
-        let full = lens_rect(item, item.center().x, 1.0);
-        assert_eq!(full, Rect::new(68.0, -4.0, 88.0, 44.0));
-        assert_eq!(lens_rect(item, item.center().x, 0.0), item);
+        assert_eq!(lens_rect(item), Rect::new(68.0, -4.0, 88.0, 44.0));
     }
 }
