@@ -691,6 +691,8 @@ pub struct GpuCanvas {
     damage: Option<Rect>,
     /// Device pixels of path coverage this frame may still rasterize.
     path_budget: u64,
+    /// When this frame stops rasterizing path cells.
+    path_deadline: std::time::Instant,
 }
 
 impl std::fmt::Debug for GpuCanvas {
@@ -774,6 +776,7 @@ impl GpuCanvas {
             started: false,
             damage: None,
             path_budget: atlas::PATH_BUDGET,
+            path_deadline: std::time::Instant::now(),
         }
     }
 
@@ -792,6 +795,7 @@ impl GpuCanvas {
     pub fn begin(&mut self, clear: bool) {
         self.ctx.layers.borrow_mut().tick();
         self.path_budget = atlas::PATH_BUDGET;
+        self.path_deadline = std::time::Instant::now() + atlas::PATH_TIME;
         self.restore_to(0);
         self.end_pass();
         if clear {

@@ -284,6 +284,10 @@ const PATH_AREA: u32 = 256 * 1024;
 /// The most device pixels of path coverage rasterized in one frame; past it a path is
 /// filled by stencil and cover.
 pub(super) const PATH_BUDGET: u64 = 1 << 20;
+/// The most time a frame spends rasterizing path cells: a page shown for the first time
+/// fills the atlas over a few frames instead of stalling one (on a slow CPU, blurred cells
+/// cost milliseconds each).
+pub(super) const PATH_TIME: std::time::Duration = std::time::Duration::from_millis(3);
 
 /// A hash of what a path cell depends on: the path, the linear part of the transform, the
 /// quarter pixel its box starts on, the fill rule and the stroke.
@@ -563,7 +567,7 @@ impl GpuCanvas {
             Some(None) => return Cell::Empty,
             None => {
                 let px = u64::from(w) * u64::from(h);
-                if self.path_budget < px {
+                if self.path_budget < px || std::time::Instant::now() >= self.path_deadline {
                     return Cell::No;
                 }
                 self.path_budget -= px;
@@ -616,21 +620,20 @@ fn rasterize_path(
                 bez: to_cell * bez.clone(),
                 even_odd,
             };
-            if blur > 0.0 {
-                Painter::fill_blurred_path(&mut cpu, &path, blur, Color::rgb(255, 255, 255));
-            } else {
-                Painter::fill_path(&mut cpu, &path, &white, 1.0);
-            }
+            Painter::fill_path(&mut cpu, &path, &white, 1.0);
         }
     }
     let pm = cpu.into_pixmap();
-    let coverage: Vec<u8> = pm
+    let mut coverage: Vec<u8> = pm
         .data_as_u8_slice()
         .as_chunks::<4>()
         .0
         .iter()
         .map(|&[_, _, _, a]| a)
         .collect();
+    if blur > 0.0 {
+        coverage = gaussian_blur(&coverage, w as usize, blur);
+    }
     if coverage.iter().all(|&c| c == 0) {
         return None;
     }
@@ -641,6 +644,55 @@ fn rasterize_path(
         oy: 0,
         coverage,
     })
+}
+
+/// `coverage` (rows of `w`) blurred by a Gaussian of σ `sigma` pixels, in two separable
+/// passes; what falls outside the cell counts as empty.
+fn gaussian_blur(coverage: &[u8], w: usize, sigma: f32) -> Vec<u8> {
+    if w == 0 {
+        return coverage.to_vec();
+    }
+    let r = (sigma * 3.0).ceil().max(1.0) as usize;
+    let mut kernel: Vec<f32> = (0..=2 * r)
+        .map(|i| {
+            let x = i as f32 - r as f32;
+            (-x * x / (2.0 * sigma * sigma)).exp()
+        })
+        .collect();
+    let sum: f32 = kernel.iter().sum();
+    kernel.iter_mut().for_each(|k| *k /= sum);
+    // One pass along rows of `n`: zero padded on both sides.
+    let pass = |data: &[f32], n: usize| -> Vec<f32> {
+        let mut out = Vec::with_capacity(data.len());
+        let mut padded = vec![0.0f32; n + 2 * r];
+        for row in data.chunks(n) {
+            padded.iter_mut().for_each(|v| *v = 0.0);
+            for (d, s) in padded.iter_mut().skip(r).zip(row) {
+                *d = *s;
+            }
+            out.extend(
+                padded
+                    .windows(2 * r + 1)
+                    .take(row.len())
+                    .map(|win| win.iter().zip(&kernel).map(|(a, k)| a * k).sum::<f32>()),
+            );
+        }
+        out
+    };
+    let transpose = |data: &[f32], n: usize| -> Vec<f32> {
+        let rows = data.len() / n;
+        (0..n)
+            .flat_map(|x| (0..rows).map(move |y| data.get(y * n + x).copied().unwrap_or(0.0)))
+            .collect()
+    };
+    let h = coverage.len() / w;
+    let data: Vec<f32> = coverage.iter().map(|&c| f32::from(c)).collect();
+    let across = pass(&data, w);
+    let down = pass(&transpose(&across, w), h);
+    transpose(&down, h)
+        .iter()
+        .map(|v| v.round().clamp(0.0, 255.0) as u8)
+        .collect()
 }
 
 #[cfg(test)]
