@@ -118,19 +118,48 @@ pub fn smooth_rect_path(rect: Rect, corners: Corners, smoothing: f32) -> Path {
     if rect.is_empty() {
         return path.detach();
     }
-    let half_w = rect.width / 2.0;
-    let half_h = rect.height / 2.0;
-    let limit = half_w.min(half_h);
     let s = if smoothing.is_finite() {
         smoothing.clamp(0.0, 1.0)
     } else {
         0.0
     };
-    // Going clockwise, each corner is entered along one side and left along the other.
-    let tr = SmoothCorner::new(corners.top_right, s, limit, half_w, half_h);
-    let br = SmoothCorner::new(corners.bottom_right, s, limit, half_h, half_w);
-    let bl = SmoothCorner::new(corners.bottom_left, s, limit, half_w, half_h);
-    let tl = SmoothCorner::new(corners.top_left, s, limit, half_h, half_w);
+    // smoothPath.js: a corner takes (1 + s) r of each of its edges; neighbours share an edge, and
+    // when their tangents do not fit both are scaled down together.
+    let limit = (rect.width.min(rect.height) / 2.0).max(0.0);
+    let rad = |r: f32| {
+        if r.is_finite() {
+            r.clamp(0.0, limit)
+        } else {
+            0.0
+        }
+    };
+    let (rtl, rtr, rbr, rbl) = (
+        rad(corners.top_left),
+        rad(corners.top_right),
+        rad(corners.bottom_right),
+        rad(corners.bottom_left),
+    );
+    let edge = |len: f32, a: f32, b: f32| {
+        let need = (1.0 + s) * (a + b);
+        if need > len && need > 0.0 {
+            len / need
+        } else {
+            1.0
+        }
+    };
+    let (w, h) = (rect.width, rect.height);
+    let top = edge(w, rtl, rtr);
+    let right = edge(h, rtr, rbr);
+    let bottom = edge(w, rbr, rbl);
+    let left = edge(h, rbl, rtl);
+    // Entered along one edge and left along the other, each with the share of that edge.
+    let corner = |r: f32, k_in: f32, k_out: f32| {
+        SmoothCorner::new(r, s, (1.0 + s) * r * k_in, (1.0 + s) * r * k_out)
+    };
+    let tr = corner(rtr, top, right);
+    let br = corner(rbr, right, bottom);
+    let bl = corner(rbl, bottom, left);
+    let tl = corner(rtl, left, top);
     if tl.is_square() && tr.is_square() && br.is_square() && bl.is_square() {
         path.add_rect(rect);
         return path.detach();
@@ -163,25 +192,24 @@ struct SmoothCorner {
 }
 
 impl SmoothCorner {
-    fn new(radius: f32, smoothing: f32, limit: f32, in_budget: f32, out_budget: f32) -> Self {
-        let r = if radius.is_finite() {
-            radius.clamp(0.0, limit.max(0.0))
-        } else {
-            0.0
-        };
-        if r <= 0.0 {
+    /// A corner of radius `radius` that may use `b_in` of the edge it is entered along and
+    /// `b_out` of the one it leaves along: on each side the smoothing is given up first, and
+    /// the radius is already clamped to the shorter half side. (smoothPath.js gives both sides
+    /// up together; the Sketch export keeps the free side's smoothing, and the kit tests
+    /// compare against it.)
+    fn new(radius: f32, smoothing: f32, b_in: f32, b_out: f32) -> Self {
+        if radius <= 0.0 {
             return SmoothCorner {
                 r: 0.0,
                 s_in: 0.0,
                 s_out: 0.0,
             };
         }
-        // On each side the smoothing shrinks until the corner fits in half of that side.
-        let fit = |budget: f32| (smoothing.min(budget / r - 1.0)).max(0.0);
+        let fit = |b: f32| (smoothing.min(b / radius - 1.0)).max(0.0);
         SmoothCorner {
-            r,
-            s_in: fit(in_budget),
-            s_out: fit(out_budget),
+            r: radius,
+            s_in: fit(b_in),
+            s_out: fit(b_out),
         }
     }
 
@@ -290,5 +318,79 @@ mod tests {
             Shape::rounded(50.0).corner_radii(Rect::new(0.0, 0.0, 40.0, 20.0)),
             [10.0; 4]
         );
+    }
+
+    /// Every point of smoothPath.js's `smoothRectPath(w, h, r)` (values computed from the JS
+    /// formula: tangent (1 + s) r, arc turning 90 (1 - s) degrees, two cubics with
+    /// b = (x1 - c) / 3) is a point of our outline.
+    fn assert_has(p: &Path, expected: &[(f32, f32)]) {
+        let mut pts = Vec::new();
+        for el in p.bez.elements() {
+            use vello_cpu::kurbo::PathEl::*;
+            match *el {
+                MoveTo(a) | LineTo(a) => pts.push(a),
+                QuadTo(a, b) => pts.extend([a, b]),
+                CurveTo(a, b, c) => pts.extend([a, b, c]),
+                ClosePath => {}
+            }
+        }
+        for (x, y) in expected {
+            assert!(
+                pts.iter()
+                    .any(|q| (q.x as f32 - x).abs() < 0.02 && (q.y as f32 - y).abs() < 0.02),
+                "({x}, {y}) is not on the outline"
+            );
+        }
+    }
+
+    #[test]
+    fn the_corner_matches_smooth_rect_path_of_the_kit() {
+        let all = |r| Corners::all(r);
+        // 100 x 60, r 16: the corner takes 25.6, the arc runs from 8.74 to 1.74 ...
+        let p = smooth_rect_path(Rect::new(0.0, 0.0, 100.0, 60.0), all(16.0), 0.6);
+        assert_has(
+            &p,
+            &[
+                (0.0, 25.6),
+                (0.0, 16.64),
+                (0.0, 12.16),
+                (1.74, 8.74),
+                (8.74, 1.74),
+                (12.16, 0.0),
+                (16.64, 0.0),
+                (25.6, 0.0),
+                (74.4, 0.0),
+                (98.26, 8.74),
+                (100.0, 47.84),
+                (91.26, 58.26),
+                (25.6, 60.0),
+                (0.0, 34.4),
+            ],
+        );
+        // 200 x 40, r 20: the short side has no room for the smoothing (circular there, at
+        // 20), the long side keeps it (32). smoothPath.js drops both; the Sketch export, which
+        // the kit tests compare with, keeps the free side.
+        let p = smooth_rect_path(Rect::new(0.0, 0.0, 200.0, 40.0), all(20.0), 0.6);
+        assert_has(&p, &[(0.0, 20.0), (32.0, 0.0), (168.0, 0.0), (200.0, 20.0)]);
+        // 60 x 60, r 40: only then does the radius give (to 30).
+        let p = smooth_rect_path(Rect::new(0.0, 0.0, 60.0, 60.0), all(40.0), 0.6);
+        assert_has(&p, &[(0.0, 30.0), (30.0, 0.0), (60.0, 30.0), (30.0, 60.0)]);
+    }
+
+    #[test]
+    fn neighbours_share_an_edge() {
+        // Radii 30 and 10 on a 60 wide edge: 48 + 16 > 60, both tangents scale by 15/16.
+        let c = Corners {
+            top_left: 30.0,
+            top_right: 10.0,
+            bottom_right: 0.0,
+            bottom_left: 0.0,
+        };
+        let p = smooth_rect_path(Rect::new(0.0, 0.0, 60.0, 200.0), c, 0.6);
+        let b = p.bounds();
+        assert!((b.width - 60.0).abs() < 1e-3 && (b.height - 200.0).abs() < 1e-3);
+        // The top edge between the two corners has no length left to waste: the first
+        // corner ends where the second starts (within rounding).
+        assert_has(&p, &[(0.0, 48.0), (45.0, 0.0), (60.0, 16.0)]);
     }
 }
