@@ -1,12 +1,12 @@
-//! Menus: the app's menu bar and pop-up menus (context menus, pop-up and pull-down
-//! buttons), always through the system menu service (silica-desktop#241, `silica-menu-v1`):
-//! the shell draws them, the app describes them. Items carry ids; choosing one runs its
-//! action. Shortcuts of the menu bar's items become app key equivalents.
+//! Menus: the app's menu bar, described to the system menu service (`silica-menu-v1`), and
+//! pop-up menus (context menus, pop-up and pull-down buttons), which are the app's own
+//! popups drawn by AppKit, as on macOS. Items carry ids; choosing one runs its action.
+//! Shortcuts of the menu bar's items become app key equivalents.
 
 use crate::core::event::Shortcut;
 use crate::core::tree::ViewId;
 use crate::core::ui::{Request, Ui};
-use crate::core::window::WindowId;
+use crate::core::value::{Prop, Signal, Value};
 use crate::geom::Rect;
 
 /// An item's action.
@@ -145,29 +145,6 @@ pub enum PopupKind {
     PopUp,
 }
 
-/// A pop-up menu waiting to be shown by the platform.
-#[derive(Debug, Clone)]
-pub struct PopupMenuRequest {
-    /// Token to answer with [`Ui::popup_menu_result`].
-    pub token: u64,
-    /// The window it belongs to.
-    pub window: WindowId,
-    /// Anchor in window coordinates (a 0 × 0 rectangle at the pointer for context menus).
-    pub anchor: Rect,
-    /// Kind.
-    pub kind: PopupKind,
-    /// The id of the item a pop-up button shows (0: none).
-    pub selected: u32,
-    /// Rows (ids assigned).
-    pub items: Vec<MenuItem>,
-}
-
-impl PartialEq for PopupMenuRequest {
-    fn eq(&self, other: &Self) -> bool {
-        self.token == other.token
-    }
-}
-
 /// The menu state of the runtime.
 #[derive(Default)]
 pub struct MenuState {
@@ -213,6 +190,42 @@ fn shortcuts(items: &[MenuItem], out: &mut Vec<(String, u32)>) {
     }
 }
 
+/// The rows AppKit draws for `items`.
+fn rows_of(items: &[MenuItem]) -> Vec<crate::amalfi::menus::Row> {
+    use crate::amalfi::menus::{Row, RowKind};
+    items
+        .iter()
+        .map(|it| Row {
+            kind: if it.separator {
+                RowKind::Separator
+            } else if it.heading {
+                RowKind::Header
+            } else {
+                RowKind::Item
+            },
+            label: it.title.clone(),
+            shortcut: it.shortcut.clone(),
+            icon: it.icon.clone(),
+            checked: it.checked == Some(true),
+            submenu: it.submenu.is_some(),
+            sub: it.submenu.as_deref().map(rows_of).unwrap_or_default(),
+            destructive: it.destructive,
+            disabled: !it.enabled,
+        })
+        .collect()
+}
+
+/// The id of the item at `path` (row indices, into submenus).
+fn id_at(items: &[MenuItem], path: &[i64]) -> Option<u32> {
+    let (first, rest) = path.split_first()?;
+    let it = items.get(usize::try_from(*first).ok()?)?;
+    match it.submenu.as_deref() {
+        Some(sub) if !rest.is_empty() => id_at(sub, rest),
+        _ if rest.is_empty() && !it.separator && !it.heading => Some(it.id),
+        _ => None,
+    }
+}
+
 impl Ui {
     /// Sets the app's menu bar (sent to the menu service; key equivalents registered).
     pub fn set_menu_bar(&mut self, mut menus: Vec<Menu>) {
@@ -254,8 +267,9 @@ impl Ui {
         self.flush();
     }
 
-    /// Shows a pop-up menu for `view` anchored at `anchor` (view coordinates); `done` gets
-    /// the chosen id (after the item's own action ran) or `None`.
+    /// Shows a pop-up menu for `view` anchored at `anchor` (view coordinates): a popup of the
+    /// app drawn by AppKit, as on macOS. `done` gets the chosen id (after the item's own
+    /// action ran) or `None`.
     pub fn popup_menu(
         &mut self,
         view: ViewId,
@@ -265,22 +279,52 @@ impl Ui {
         mut items: Vec<MenuItem>,
         done: Option<PopupDone>,
     ) -> Option<u64> {
+        use crate::amalfi::menus;
         let window = self.window_of(view)?;
         let mut actions = Vec::new();
         let mut next = 0;
         assign(&mut items, &mut next, &mut actions);
         self.menus.next_token += 1;
         let token = self.menus.next_token;
-        let origin = self.tree.window_origin(view);
+        let anchor = anchor.translate(self.tree.window_origin(view));
         self.menus.popups.push((token, actions, done));
-        self.request(Request::PopupMenu(Box::new(PopupMenuRequest {
-            token,
-            window,
-            anchor: anchor.translate(origin),
-            kind,
-            selected,
-            items,
-        })));
+        let (m, _) = menus::menu(self, &rows_of(&items));
+        let row = items
+            .iter()
+            .position(|it| selected != 0 && it.id == selected);
+        let placement = match kind {
+            PopupKind::PopUp => menus::Placement::PopUp {
+                row: row.unwrap_or(0),
+            },
+            // A context menu whose anchor has a height is a pull-down (docs/spec/menus.md).
+            PopupKind::Context if anchor.height > 0.0 => menus::Placement::PullDown,
+            PopupKind::Context => menus::Placement::At,
+        };
+        if let (PopupKind::PopUp, Some(r)) = (kind, row) {
+            let _ = self.set(m, Prop::SelectedIndex, Value::Int(r as i64));
+        }
+        let popup = menus::present(self, window, anchor, m, placement);
+        self.connect(m, Signal::Activated, move |ui, _, v| {
+            let path = match v {
+                Value::Int(i) => vec![*i],
+                Value::IntList(p) => p.clone(),
+                _ => Vec::new(),
+            };
+            let chosen = id_at(&items, &path);
+            ui.popup_menu_result(token, chosen);
+            ui.close_window(popup);
+        });
+        self.connect(m, Signal::CloseRequested, move |ui, _, _| {
+            ui.close_window(popup);
+        });
+        // However it goes (Escape, a click outside, the compositor), an unanswered menu is
+        // dismissed.
+        if let Some(root) = self.window(popup).map(|w| w.root) {
+            self.connect(root, Signal::Closed, move |ui, _, _| {
+                ui.popup_menu_result(token, None);
+            });
+        }
+        self.set_focus(m, true);
         Some(token)
     }
 
@@ -413,19 +457,21 @@ mod tests {
                 Some(Box::new(move |_, id| g2.set(g2.get() + id.unwrap_or(0)))),
             )
             .unwrap();
-        let req = ui
-            .take_requests()
-            .into_iter()
-            .find_map(|r| match r {
-                Request::PopupMenu(p) => Some(p),
-                _ => None,
-            })
-            .unwrap();
-        let id = req.items[0].id;
-        ui.popup_menu_result(token, Some(id));
-        assert_eq!(got.get(), 10 + id);
+        // The menu is a popup of the app; choosing its row answers once and closes it.
+        let popup = ui
+            .windows()
+            .find(|w| matches!(w.kind, WindowKind::Popup { .. }))
+            .map(|w| (w.id, w.root));
+        let Some((popup, root)) = popup else {
+            panic!("no popup");
+        };
+        let menu = ui.tree.children(root)[0];
+        ui.emit(menu, Signal::Activated, Value::Int(0));
+        ui.flush();
+        assert_eq!(got.get(), 10 + 1);
+        assert!(ui.window(popup).is_none());
         // A second answer is ignored.
         ui.popup_menu_result(token, None);
-        assert_eq!(got.get(), 10 + id);
+        assert_eq!(got.get(), 10 + 1);
     }
 }

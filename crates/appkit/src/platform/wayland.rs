@@ -86,7 +86,6 @@ use silica_protocols::glass::client::silica_glass_manager_v1::SilicaGlassManager
 use silica_protocols::glass::client::silica_glass_v1::{self, SilicaGlassV1};
 use silica_protocols::menu::client::silica_menu_manager_v1::SilicaMenuManagerV1;
 use silica_protocols::menu::client::silica_menu_v1::{self, SilicaMenuV1};
-use silica_protocols::menu::client::silica_popup_menu_v1::{self, SilicaPopupMenuV1};
 use silica_protocols::shell::client::silica_shell_manager_v1::{self, SilicaShellManagerV1};
 use silica_protocols::window::client::silica_window_manager_v1::SilicaWindowManagerV1;
 use silica_protocols::window::client::silica_window_v1::{self, SilicaWindowV1};
@@ -97,7 +96,6 @@ use wayland_protocols::ext::foreign_toplevel_list::v1::client::{
 
 use crate::core::display::TipSide;
 use crate::core::event::{Button, Key, KeyEvent, Mods, Phase};
-use crate::core::menu::{MenuItem, PopupKind, PopupMenuRequest};
 use crate::core::ui::GlassRegion;
 use crate::core::ui::{Cursor, Request, Ui};
 use crate::core::window::{
@@ -322,7 +320,6 @@ pub struct Platform {
     toplevel_info:
         std::collections::HashMap<wayland_client::backend::ObjectId, (String, String, String)>,
     menu: Option<SilicaMenuV1>,
-    popup_menus: Vec<(SilicaPopupMenuV1, u64)>,
     surfaces: Vec<Surface>,
     seat: Option<wl_seat::WlSeat>,
     keyboard: Option<wl_keyboard::WlKeyboard>,
@@ -692,7 +689,6 @@ impl Platform {
             toplevels: None,
             toplevel_info: std::collections::HashMap::new(),
             menu: None,
-            popup_menus: Vec::new(),
             compositor,
             shm,
             surfaces: Vec::new(),
@@ -968,7 +964,6 @@ impl Platform {
                     self.inhibitors.push((id, i));
                 }
             }
-            Request::PopupMenu(req) => self.show_popup_menu(*req),
         }
     }
 
@@ -1587,38 +1582,6 @@ impl Platform {
         }
     }
 
-    fn show_popup_menu(&mut self, req: PopupMenuRequest) {
-        let (Some(mgr), Some(wl)) = (
-            self.menu_manager.as_ref().filter(|m| m.version() >= 2),
-            self.surface(req.window)
-                .map(|s| s.role.wl_surface().clone()),
-        ) else {
-            // No menu service: the menu cannot be shown (in-process menus are the
-            // components' fallback, not the platform's).
-            self.ui.popup_menu_result(req.token, None);
-            return;
-        };
-        let kind = match req.kind {
-            PopupKind::Context => silica_menu_v1_popup_kind_context(),
-            PopupKind::PopUp => silica_menu_v1_popup_kind_popup(),
-        };
-        let a = req.anchor;
-        let menu = mgr.get_popup_menu(
-            &wl,
-            kind,
-            a.x.round() as i32,
-            a.y.round() as i32,
-            a.width.round() as i32,
-            a.height.round() as i32,
-            req.selected,
-            &self.qh,
-            req.token,
-        );
-        add_rows(&menu, &req.items);
-        menu.show();
-        self.popup_menus.push((menu, req.token));
-    }
-
     fn apply_cursor(&self) {
         let (Some(dev), true) = (&self.cursor_device, self.pointer_focus.is_some()) else {
             return;
@@ -1755,74 +1718,6 @@ impl Platform {
         if let Some(t) = self.repeat_timer.take() {
             self.loop_handle.remove(t);
         }
-    }
-}
-
-fn silica_menu_v1_popup_kind_context()
--> silica_protocols::menu::client::silica_menu_manager_v1::PopupKind {
-    silica_protocols::menu::client::silica_menu_manager_v1::PopupKind::Context
-}
-
-fn silica_menu_v1_popup_kind_popup()
--> silica_protocols::menu::client::silica_menu_manager_v1::PopupKind {
-    silica_protocols::menu::client::silica_menu_manager_v1::PopupKind::PopUp
-}
-
-/// The rows of a pop-up menu in document order.
-fn add_rows(menu: &SilicaPopupMenuV1, items: &[MenuItem]) {
-    use silica_popup_menu_v1::{Flags, Modifiers};
-    for it in items {
-        if it.separator {
-            menu.add_separator();
-            continue;
-        }
-        if it.heading {
-            menu.add_section(it.title.clone());
-            continue;
-        }
-        let mut flags = Flags::empty();
-        if !it.enabled {
-            flags |= Flags::Disabled;
-        }
-        match it.checked {
-            Some(true) => flags |= Flags::Checked,
-            Some(false) => flags |= Flags::Mixed,
-            None => {}
-        }
-        if it.destructive {
-            flags |= Flags::Destructive;
-        }
-        let icon = it.icon.clone().unwrap_or_default();
-        if let Some(sub) = &it.submenu {
-            menu.begin_submenu(it.title.clone(), flags, icon);
-            add_rows(menu, sub);
-            menu.end_submenu();
-            continue;
-        }
-        let (key, mods) = match it
-            .shortcut
-            .as_deref()
-            .and_then(crate::core::event::Shortcut::parse)
-        {
-            Some(sc) => {
-                let mut m = Modifiers::empty();
-                if sc.mods.contains(Mods::LOGO) {
-                    m |= Modifiers::Meta;
-                }
-                if sc.mods.contains(Mods::CTRL) {
-                    m |= Modifiers::Ctrl;
-                }
-                if sc.mods.contains(Mods::ALT) {
-                    m |= Modifiers::Alt;
-                }
-                if sc.mods.contains(Mods::SHIFT) {
-                    m |= Modifiers::Shift;
-                }
-                (sc.key.to_uppercase(), m)
-            }
-            None => (String::new(), Modifiers::empty()),
-        };
-        menu.add_item(it.id, it.title.clone(), flags, icon, key, mods);
     }
 }
 
@@ -3090,26 +2985,6 @@ impl Dispatch<SilicaMenuV1, ()> for Platform {
         if let silica_menu_v1::Event::Activated { id } = event {
             state.ui.menu_activated(id);
         }
-    }
-}
-
-impl Dispatch<SilicaPopupMenuV1, u64> for Platform {
-    fn event(
-        state: &mut Self,
-        menu: &SilicaPopupMenuV1,
-        event: silica_popup_menu_v1::Event,
-        token: &u64,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-        let chosen = match event {
-            silica_popup_menu_v1::Event::Selected { id } => Some(id),
-            silica_popup_menu_v1::Event::Dismissed => None,
-            _ => return,
-        };
-        state.popup_menus.retain(|(m, _)| m != menu);
-        menu.destroy();
-        state.ui.popup_menu_result(*token, chosen);
     }
 }
 

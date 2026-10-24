@@ -137,8 +137,6 @@ pub enum Request {
     SetMenuBar,
     /// Keep the screen awake while the window is shown (video, presentations).
     InhibitIdle(WindowId, bool),
-    /// Show a pop-up menu (answer with [`Ui::popup_menu_result`]).
-    PopupMenu(Box<crate::core::menu::PopupMenuRequest>),
 }
 
 /// A view painted after its window, over the clips of its containers.
