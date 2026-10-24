@@ -9,7 +9,7 @@ use crate::amalfi::statusbar::{self, ItemContent, StatusItem};
 use crate::core::event::{Event, Key, KeyEvent, Shortcut};
 use crate::core::menu::{MenuAction, MenuItem, PopupKind, id_at, rows_of};
 use crate::core::tree::ViewId;
-use crate::core::ui::{Request, Ui};
+use crate::core::ui::{AppAction, Request, Ui};
 use crate::core::value::{Prop, Signal, Value};
 use crate::core::window::{WindowId, WindowKind};
 use crate::geom::{Rect, Size};
@@ -45,6 +45,9 @@ pub(crate) struct Status {
 pub(crate) struct StripState {
     /// The compositor has a menu bar.
     available: bool,
+    /// The compositor runs the App menu's Hide, Hide Others and Show All, and Bring All to
+    /// Front (`silica_menu_titles_v1.app_action`).
+    app_actions: bool,
     titles: Option<Titles>,
     /// The room the compositor gives the titles.
     room: Option<f32>,
@@ -62,6 +65,17 @@ fn key_of(shortcut: &Shortcut) -> Option<KeyEvent> {
     Some(KeyEvent::press(Key::Char(c), shortcut.mods))
 }
 
+/// The item of the app menu the compositor runs for a standard role.
+fn app_action(role: &str) -> Option<AppAction> {
+    match role {
+        "hide" => Some(AppAction::Hide),
+        "hide_others" => Some(AppAction::HideOthers),
+        "show_all" => Some(AppAction::ShowAll),
+        "bring_all_to_front" => Some(AppAction::BringAllToFront),
+        _ => None,
+    }
+}
+
 /// The standard items that act through their key equivalent in the key window.
 const EDIT_ROLES: [&str; 6] = ["undo", "redo", "cut", "copy", "paste", "select_all"];
 
@@ -71,6 +85,13 @@ impl Ui {
     pub fn set_menu_bar_available(&mut self, available: bool) {
         self.menus.strip.available = available;
         self.sync_menu_titles();
+    }
+
+    /// The compositor runs the items that act on other apps or on the stacking (Hide, Hide
+    /// Others, Show All, Bring All to Front): they show enabled and send
+    /// [`Request::AppAction`].
+    pub fn set_app_actions_available(&mut self, available: bool) {
+        self.menus.strip.app_actions = available;
     }
 
     /// Sets what decides, right before a menu shows, which of its items are enabled.
@@ -300,7 +321,7 @@ impl Ui {
     /// `items` as they show now: an item is enabled when it is, when it does something (an
     /// action, a submenu, a standard role AppKit runs) and when the validator agrees; without
     /// that it shows disabled, as AppKit's autoenabling menus do (the standard items AppKit
-    /// does not run yet: silica-os/appkit#26).
+    /// does not run yet, About and Services: silica-os/appkit#26).
     pub(crate) fn validated(
         &mut self,
         items: &[MenuItem],
@@ -313,6 +334,14 @@ impl Ui {
             }
             if let Some(sub) = &it.submenu {
                 it.submenu = Some(self.validated(sub, target));
+            }
+            if it.role.as_deref() == Some("fullscreen")
+                && it.action.is_none()
+                && target
+                    .and_then(|w| self.window(w))
+                    .is_some_and(|w| w.fullscreen)
+            {
+                it.title = "Exit Full Screen".into();
             }
             it.enabled = self.can_choose(it, target);
         }
@@ -328,6 +357,11 @@ impl Ui {
             || item.submenu.is_some()
             || match item.role.as_deref() {
                 Some("close" | "minimize") => target.is_some(),
+                // A window that can be resized can fill the screen.
+                Some("fullscreen") => target
+                    .and_then(|w| self.window(w))
+                    .is_some_and(|w| w.resizable && w.kind == WindowKind::Normal),
+                Some(r) if app_action(r).is_some() => self.menus.strip.app_actions,
                 Some(r) if EDIT_ROLES.contains(&r) => {
                     target.is_some_and(|w| self.focus(w).is_some())
                         && item
@@ -353,10 +387,16 @@ impl Ui {
         }
         if let Some(a) = &item.action {
             a(self);
+        } else if let Some(action) = item.role.as_deref().and_then(app_action) {
+            self.request(Request::AppAction(action));
         } else if let Some(w) = target {
             match item.role.as_deref() {
                 Some("close") => self.request_window_close(w),
                 Some("minimize") => self.request(Request::Minimize(w)),
+                Some("fullscreen") => {
+                    let on = self.window(w).is_some_and(|w| !w.fullscreen);
+                    self.request(Request::SetFullscreen(w, on));
+                }
                 Some(r) if EDIT_ROLES.contains(&r) => {
                     let key = item
                         .shortcut
@@ -688,6 +728,76 @@ mod tests {
         allow.set(true);
         ui.key(win, KeyEvent::press(Key::Char('n'), Mods::LOGO));
         assert_eq!(hits.get(), 1);
+    }
+
+    #[test]
+    fn the_compositor_runs_the_app_items_and_full_screen_toggles() {
+        let mut ui = Ui::new_headless();
+        let win = ui.create_window(WindowKind::Normal, Size::new(100.0, 100.0));
+        ui.set_window_active(win, true);
+        let info = crate::core::app::AppInfo {
+            name: "Recipes".into(),
+            ..Default::default()
+        };
+        let window = Menu {
+            title: "Window".into(),
+            role: Some("window".into()),
+            items: vec![
+                crate::core::app::system_item("fullscreen"),
+                crate::core::app::system_item("bring_all_to_front"),
+            ],
+        };
+        ui.set_menu_bar(vec![
+            crate::core::app::app_menu(&info, None, Vec::new()),
+            window,
+        ]);
+        let app = ui.menu_bar()[0].items.clone();
+        let enabled = |ui: &mut Ui, items: &[MenuItem], role: &str| {
+            ui.validated(items, Some(win))
+                .iter()
+                .find(|i| i.role.as_deref() == Some(role))
+                .unwrap()
+                .enabled
+        };
+        // An older compositor runs none of them; Services stays off.
+        assert!(!enabled(&mut ui, &app, "hide"));
+        ui.set_app_actions_available(true);
+        for role in ["hide", "hide_others", "show_all"] {
+            assert!(enabled(&mut ui, &app, role), "{role}");
+        }
+        assert!(!enabled(&mut ui, &app, "services"));
+        // ⌘H asks the compositor to hide the app.
+        ui.take_requests();
+        ui.key(win, KeyEvent::press(Key::Char('h'), Mods::LOGO));
+        assert!(
+            ui.take_requests()
+                .contains(&Request::AppAction(AppAction::Hide))
+        );
+
+        // ⌃⌘F fills the screen; once it does, the item reads Exit Full Screen.
+        let items = ui.menu_bar()[1].items.clone();
+        assert!(enabled(&mut ui, &items, "bring_all_to_front"));
+        ui.key(
+            win,
+            KeyEvent::press(Key::Char('f'), Mods::LOGO | Mods::CTRL),
+        );
+        assert!(
+            ui.take_requests()
+                .contains(&Request::SetFullscreen(win, true))
+        );
+        ui.set_window_fullscreen(win, true);
+        assert_eq!(ui.validated(&items, Some(win))[0].title, "Exit Full Screen");
+        ui.key(
+            win,
+            KeyEvent::press(Key::Char('f'), Mods::LOGO | Mods::CTRL),
+        );
+        assert!(
+            ui.take_requests()
+                .contains(&Request::SetFullscreen(win, false))
+        );
+        // A window of fixed size cannot.
+        ui.window_mut(win).unwrap().resizable = false;
+        assert!(!enabled(&mut ui, &items, "fullscreen"));
     }
 
     #[test]

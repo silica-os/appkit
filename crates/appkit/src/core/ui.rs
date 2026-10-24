@@ -85,6 +85,19 @@ pub enum Cursor {
     NotAllowed,
 }
 
+/// An item of the app menu that the compositor runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppAction {
+    /// Hide: the app's windows leave the screen.
+    Hide,
+    /// Hide Others: every other app's windows do.
+    HideOthers,
+    /// Show All: every hidden app comes back.
+    ShowAll,
+    /// Bring All to Front: the app's windows come forward.
+    BringAllToFront,
+}
+
 /// What the core asks of the platform.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Request {
@@ -135,6 +148,11 @@ pub enum Request {
     AccessibilityChanged(WindowId),
     /// Minimize a window (the Window menu's Minimize).
     Minimize(WindowId),
+    /// Put a window in full screen or take it out (the View menu's Enter Full Screen).
+    SetFullscreen(WindowId, bool),
+    /// An item of the App or Window menu that the compositor runs, as it acts on other apps
+    /// or on the stacking (`silica_menu_titles_v1.app_action`).
+    AppAction(AppAction),
     /// Show or hide a status item in the menu bar.
     SetStatusItemVisible(WindowId, bool),
     /// Keep the screen awake while the window is shown (video, presentations).
@@ -1209,6 +1227,13 @@ impl Ui {
         for r in roots {
             self.request_paint_subtree(r);
             self.request_layout(r);
+        }
+    }
+
+    /// The compositor put the window in full screen or took it out.
+    pub fn set_window_fullscreen(&mut self, window: WindowId, fullscreen: bool) {
+        if let Some(w) = self.window_mut(window) {
+            w.fullscreen = fullscreen;
         }
     }
 

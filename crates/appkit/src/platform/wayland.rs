@@ -100,7 +100,7 @@ use wayland_protocols::ext::foreign_toplevel_list::v1::client::{
 use crate::core::display::TipSide;
 use crate::core::event::{Button, Key, KeyEvent, Mods, Phase};
 use crate::core::ui::GlassRegion;
-use crate::core::ui::{Cursor, Request, Ui};
+use crate::core::ui::{AppAction, Cursor, Request, Ui};
 use crate::core::window::{
     Edges, KeyboardMode, Layer, PopupPlacement, PopupSide, WindowId, WindowKind,
 };
@@ -656,6 +656,9 @@ pub fn run_with(
     // The app's titles and status items go in the compositor's menu bar.
     let menu_bar = platform.menu_bar.is_some();
     platform.ui.set_menu_bar_available(menu_bar);
+    // Version 2: the compositor runs Hide, Hide Others, Show All and Bring All to Front.
+    let app_actions = platform.menu_bar.as_ref().is_some_and(|m| m.version() >= 2);
+    platform.ui.set_app_actions_available(app_actions);
     setup(&mut platform.ui);
     stage("setup");
     platform.process();
@@ -716,7 +719,7 @@ impl Platform {
                 .filter(|t| !t.is_empty()),
             glass_manager,
             window_manager: globals.bind(&qh, 1..=4, ()).ok(),
-            menu_bar: globals.bind(&qh, 1..=1, ()).ok(),
+            menu_bar: globals.bind(&qh, 1..=2, ()).ok(),
             shell: None,
             toplevels: None,
             toplevel_info: std::collections::HashMap::new(),
@@ -984,6 +987,33 @@ impl Platform {
             Request::Minimize(id) => {
                 if let Some(Role::Toplevel(w)) = self.surface(id).map(|s| &s.role) {
                     w.set_minimized();
+                }
+            }
+            Request::SetFullscreen(id, on) => {
+                if let Some(Role::Toplevel(w)) = self.surface(id).map(|s| &s.role) {
+                    if on {
+                        w.set_fullscreen(None);
+                    } else {
+                        w.unset_fullscreen();
+                    }
+                }
+            }
+            Request::AppAction(action) => {
+                let titles = self.ui.menu_titles_window().and_then(|id| self.surface(id));
+                if let Some(Role::Strip(Strip {
+                    part: StripPart::Titles(t),
+                    ..
+                })) = titles.map(|s| &s.role)
+                    && t.version() >= 2
+                {
+                    t.app_action(match action {
+                        AppAction::Hide => silica_menu_titles_v1::AppAction::Hide,
+                        AppAction::HideOthers => silica_menu_titles_v1::AppAction::HideOthers,
+                        AppAction::ShowAll => silica_menu_titles_v1::AppAction::ShowAll,
+                        AppAction::BringAllToFront => {
+                            silica_menu_titles_v1::AppAction::BringAllToFront
+                        }
+                    });
                 }
             }
             Request::SetStatusItemVisible(id, visible) => {
@@ -2180,6 +2210,7 @@ impl WindowHandler for Platform {
         };
         let active = configure.is_activated();
         self.ui.set_window_active(id, active);
+        self.ui.set_window_fullscreen(id, configure.is_fullscreen());
         self.configured(id, size);
     }
 }

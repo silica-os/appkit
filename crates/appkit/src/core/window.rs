@@ -303,6 +303,8 @@ pub struct Window {
     pub visible: bool,
     /// The key window (has the keyboard).
     pub active: bool,
+    /// Full screen (as the compositor configured it).
+    pub fullscreen: bool,
     /// Appearance override (`Some(true)`: always dark, the Clock and Calculator).
     pub dark_override: Option<bool>,
     /// Last click: time, position, count (double-click detection).
@@ -353,6 +355,7 @@ impl Window {
             needs_frame: true,
             visible: false,
             active: false,
+            fullscreen: false,
             dark_override: None,
             last_click: (f64::NEG_INFINITY, Point::ZERO, 0),
             keyboard_navigation: false,

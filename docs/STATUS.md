@@ -202,7 +202,7 @@ deviations they cause are in [kit-issues.md](kit-issues.md).
 | Alerts | `Alert`, `alert()` (title, message, accessories, buttons, badge) | 26 | done (icons are bitmaps: masked); in the C ABI (`ak_alert_*`, presented as a sheet or a panel) |
 | Dialogs | `Dialog`, `Pane`, `browser`, `dialog_footer` | 12 | done |
 | Status Bar | `StatusItem`, `StatusBar` (plates of Increase Contrast and Reduce Transparency) | 22 | done; `STATUS_ITEM` kind (content kind, glyph, text); status items in the C ABI (`ak_status_item_*`) |
-| Menu Bar | `MenuTitle` (mark, bold app name, menus), `MenuBar` | 12 | done (Menu Open: the menu is compared by `Menus`); the Silica mark's system menu is silica-os/appkit#25 |
+| Menu Bar | `MenuTitle` (mark, bold app name, menus), `MenuBar` | 12 | done (Menu Open: the menu is compared by `Menus`); the Silica mark's system menu is silica-os/appkit#25; Hide, Hide Others, Show All and Bring All to Front run in the compositor (menu bar protocol v2) and Enter Full Screen toggles; the About panel and Services are silica-os/appkit#26 |
 | Windows | `WindowFrame`, `Block` | 40 | done for the window's own layers; nested components of other families (group boxes, segments, checkbox group, search field, menu bar) are placeholders there |
 | Collections (`Apps/Mustache` file list) | `TableHeader`, `TableView` rows, `ListView` rows, `GridView` tile | 16 | done (two kit quirks in kit-issues.md) |
 
