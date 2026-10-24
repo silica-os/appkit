@@ -45,6 +45,12 @@ pub struct Toolbar {
     /// Extra room before the first piece, which a split window animates while its sidebar
     /// folds (the controls and the reveal button move into this section).
     pub inset: f32,
+    /// Extra room after the last piece, which a split window animates while its inspector
+    /// folds (the inspector's reveal button moves into this section).
+    pub end: f32,
+    /// No surface of its own: the section above a split window's inspector (the pane's
+    /// surface shows through).
+    pub bare: bool,
 }
 
 impl Default for Toolbar {
@@ -53,6 +59,8 @@ impl Default for Toolbar {
             controls: true,
             sidebar: false,
             inset: 0.0,
+            end: 0.0,
+            bare: false,
         }
     }
 }
@@ -116,6 +124,7 @@ impl Widget for Toolbar {
         let items = self.items(cx);
         let natural = self.leading()
             + metrics::TRAILING
+            + self.end
             + items
                 .iter()
                 .map(|(_, s, _)| s.width + 2.0 * metrics::PIECE_PAD)
@@ -135,7 +144,7 @@ impl Widget for Toolbar {
             .map(|i| i.1.width + pads)
             .sum();
         let flex = items.iter().filter(|i| i.2).count();
-        let free = (size.width - self.leading() - metrics::TRAILING - fixed).max(0.0);
+        let free = (size.width - self.leading() - metrics::TRAILING - self.end - fixed).max(0.0);
         let share = if flex > 0 { free / flex as f32 } else { 0.0 };
         let mut x = self.leading();
         for (c, s, f) in items {
@@ -159,7 +168,7 @@ impl Widget for Toolbar {
     }
 
     fn paint(&mut self, cx: &mut PaintCx<'_>) {
-        if self.sidebar {
+        if self.sidebar || self.bare {
             return;
         }
         let c = cx.theme().colors;

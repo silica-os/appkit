@@ -233,6 +233,8 @@ typedef void (*AKAlertFn)(int64_t response, void *user);
 #define AK_PROP_TILE_SIZE 168u
 #define AK_PROP_PRESSED 169u
 #define AK_PROP_DRAGGING 170u
+#define AK_PROP_INSPECTOR_OPEN 171u
+#define AK_PROP_INSPECTOR_WIDTH 172u
 
 /* Signals. */
 #define AK_SIGNAL_ACTIVATED 1u
@@ -261,6 +263,8 @@ typedef void (*AKAlertFn)(int64_t response, void *user);
 #define AK_SIGNAL_SORT_CHANGED 24u
 #define AK_SIGNAL_CELL_EDITED 25u
 #define AK_SIGNAL_COLUMN_RESIZED 26u
+#define AK_SIGNAL_INSPECTOR_EXPANDED_CHANGED 27u
+#define AK_SIGNAL_INSPECTOR_RESIZED 28u
 
 /* View kinds. */
 #define AK_KIND_VIEW 1u

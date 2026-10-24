@@ -65,7 +65,10 @@ Gallery from this checkout and merges them into the running dev VM (`tools/run-v
   in an active window, grey otherwise. Kit parity against the ui-kit masters (`Tables`,
   `Outlines`, `Lists`, `Grids`, synced with `cargo xtask sync-kit --ui-kit`). `TabView` (window tabs on the kit's tab bar), `Toolbar` (kit unified
   bar pieces after the window controls), form pieces as kinds (value, footer, box surface).
-- **Windows**: size limits honoured (#245: sizes clamped from the compositor, the app and
+- **Windows**: split windows (`amalfi::split::SplitWindow`, ui-kit `SWindow`): a sidebar
+  (200–360, ⌃⌘S) and an optional inspector (240–400, ⌥⌘I) fold on `spring.panel`, resize
+  from their inner edge and fold when pulled 56 under their minimum; the toolbar sections
+  track them and the reveal buttons fade in where they went. Size limits honoured (#245: sizes clamped from the compositor, the app and
   restoration); sheets are xdg-dialog modal dialogs with client-side decorations (Ossido on
   the silica-desktop `appkit` branch centres them, veils the parent, keeps the focus and
   moves them with the parent) and their parent takes no input; state restoration

@@ -104,6 +104,8 @@ impl Prop {
     pub const TILE_SIZE: Prop = Prop(sys::AK_PROP_TILE_SIZE);
     pub const PRESSED: Prop = Prop(sys::AK_PROP_PRESSED);
     pub const DRAGGING: Prop = Prop(sys::AK_PROP_DRAGGING);
+    pub const INSPECTOR_OPEN: Prop = Prop(sys::AK_PROP_INSPECTOR_OPEN);
+    pub const INSPECTOR_WIDTH: Prop = Prop(sys::AK_PROP_INSPECTOR_WIDTH);
 }
 
 /// A signal id.
@@ -137,6 +139,9 @@ impl Signal {
     pub const SORT_CHANGED: Signal = Signal(sys::AK_SIGNAL_SORT_CHANGED);
     pub const CELL_EDITED: Signal = Signal(sys::AK_SIGNAL_CELL_EDITED);
     pub const COLUMN_RESIZED: Signal = Signal(sys::AK_SIGNAL_COLUMN_RESIZED);
+    pub const INSPECTOR_EXPANDED_CHANGED: Signal =
+        Signal(sys::AK_SIGNAL_INSPECTOR_EXPANDED_CHANGED);
+    pub const INSPECTOR_RESIZED: Signal = Signal(sys::AK_SIGNAL_INSPECTOR_RESIZED);
 }
 
 /// A view kind.

@@ -423,6 +423,10 @@ numbered_enum! {
         /// Dragging without a pointer (`Bool`): the glass lens of a slider or a switch, as the
         /// ui-kit showcase's `force="drag"`.
         Dragging = 170,
+        /// A split window's inspector is shown (`Bool`).
+        InspectorOpen = 171,
+        /// A split window's inspector width when shown (`Float`).
+        InspectorWidth = 172,
     }
 }
 
@@ -481,6 +485,10 @@ numbered_enum! {
         CellEdited = 25,
         /// A column was resized (payload: `IntList` [column, width]).
         ColumnResized = 26,
+        /// A split window's inspector was shown or folded (payload: `Bool`).
+        InspectorExpandedChanged = 27,
+        /// A split window's inspector was resized (payload: `Float`, the width).
+        InspectorResized = 28,
     }
 }
 
