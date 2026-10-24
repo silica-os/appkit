@@ -144,6 +144,8 @@ pub enum Request {
     Quit,
     /// Start an interactive move of the window (title bar drag).
     StartMove(WindowId),
+    /// Zoom the window to the usable area, or back (a double click on its toolbar).
+    Zoom(WindowId),
     /// The accessibility tree changed.
     AccessibilityChanged(WindowId),
     /// Minimize a window (the Window menu's Minimize).
@@ -1237,6 +1239,31 @@ impl Ui {
         }
     }
 
+    /// The compositor zoomed the window to the usable area or took it back.
+    pub fn set_window_maximized(&mut self, window: WindowId, maximized: bool) {
+        if let Some(w) = self.window_mut(window) {
+            w.maximized = maximized;
+        }
+    }
+
+    /// A left press at `pos` on the background of a full-size window's toolbar: the window
+    /// moves from there, and a double click zooms it, as on the compositor's own title bar.
+    fn toolbar_press(&mut self, window: WindowId, pos: Point, clicks: u32) {
+        let Some(w) = self.window_mut(window) else {
+            return;
+        };
+        if w.kind != WindowKind::Normal || w.fullscreen || !(0.0..w.toolbar_height).contains(&pos.y)
+        {
+            return;
+        }
+        if clicks == 2 {
+            w.move_press = None;
+            self.requests.push(Request::Zoom(window));
+        } else {
+            w.move_press = Some(pos);
+        }
+    }
+
     /// The window became (in)active.
     pub fn set_window_active(&mut self, window: WindowId, active: bool) {
         let root = match self.window_mut(window) {
@@ -1686,6 +1713,13 @@ impl Ui {
             return;
         };
         w.pointer = Some(pos);
+        if w.move_press
+            .is_some_and(|p| (pos - p).length() > DOUBLE_CLICK_SLOP)
+        {
+            w.move_press = None;
+            self.requests.push(Request::StartMove(window));
+            return;
+        }
         let capture = w.capture;
         if let Some(c) = capture
             && self.tree.contains(c)
@@ -1820,6 +1854,9 @@ impl Ui {
         let Some((target, _)) = self.hit_test(window, pos) else {
             // A click on nothing removes the focus.
             self.clear_focus(window);
+            if button == Button::Left {
+                self.toolbar_press(window, pos, clicks);
+            }
             self.flush();
             return;
         };
@@ -1849,6 +1886,9 @@ impl Ui {
             mods,
         };
         let handled_by = self.send_bubbling(target, &ev);
+        if button == Button::Left && interactive.is_none() && handled_by.is_none() {
+            self.toolbar_press(window, pos, clicks);
+        }
         let capture = match (button, interactive) {
             (Button::Left, Some(i)) => {
                 if let Some(n) = self.tree.get_mut(i) {
@@ -1874,6 +1914,9 @@ impl Ui {
 
     /// A button went up at `pos`.
     pub fn pointer_up(&mut self, window: WindowId, pos: Point, button: Button, mods: Mods) {
+        if let Some(w) = self.window_mut(window) {
+            w.move_press = None;
+        }
         let capture = self.window_mut(window).and_then(|w| w.capture.take());
         if let Some(c) = capture.filter(|c| self.tree.contains(*c)) {
             let ev = Event::PointerUp {
@@ -3266,6 +3309,55 @@ mod tests {
         let (mut ui, win, a, _b, _count) = setup();
         ui.pointer_move(win, ui.tree.window_rect(a).center(), Mods::empty());
         assert_eq!(ui.prepare_frame(win), ui.tree.window_rect(a));
+    }
+
+    #[test]
+    fn the_toolbar_background_moves_and_zooms_the_window() {
+        let mut ui = Ui::new_headless();
+        let win = ui.create_window(WindowKind::Normal, Size::new(400.0, 300.0));
+        let v = ui.create(Backdrop);
+        ui.set_content(win, v);
+        ui.set_toolbar_height(win, 52.0);
+        ui.show_window(win);
+        ui.prepare_frame(win);
+        let moves = |ui: &mut Ui| {
+            ui.take_requests()
+                .iter()
+                .filter(|r| matches!(r, Request::StartMove(w) if *w == win))
+                .count()
+        };
+        let drag = |ui: &mut Ui, from: Point| {
+            ui.pointer_down(win, from, Button::Left, Mods::empty());
+            ui.pointer_move(win, Point::new(from.x + 2.0, from.y), Mods::empty());
+            ui.pointer_move(win, Point::new(from.x + 12.0, from.y), Mods::empty());
+            ui.pointer_move(win, Point::new(from.x + 30.0, from.y), Mods::empty());
+            ui.pointer_up(
+                win,
+                Point::new(from.x + 30.0, from.y),
+                Button::Left,
+                Mods::empty(),
+            );
+        };
+        ui.take_requests();
+        // Out of the slop on the toolbar: one move.
+        drag(&mut ui, Point::new(100.0, 20.0));
+        assert_eq!(moves(&mut ui), 1);
+        // Under the toolbar the content takes the drag.
+        drag(&mut ui, Point::new(100.0, 200.0));
+        assert_eq!(moves(&mut ui), 0);
+        // A click that stays in the slop does not move; a double click zooms.
+        let at = Point::new(300.0, 20.0);
+        ui.pointer_down(win, at, Button::Left, Mods::empty());
+        ui.pointer_up(win, at, Button::Left, Mods::empty());
+        ui.pointer_down(win, at, Button::Left, Mods::empty());
+        ui.pointer_up(win, at, Button::Left, Mods::empty());
+        let requests = ui.take_requests();
+        assert!(
+            requests
+                .iter()
+                .any(|r| matches!(r, Request::Zoom(w) if *w == win))
+        );
+        assert!(!requests.iter().any(|r| matches!(r, Request::StartMove(_))));
     }
 
     #[test]

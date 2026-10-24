@@ -305,6 +305,11 @@ pub struct Window {
     pub active: bool,
     /// Full screen (as the compositor configured it).
     pub fullscreen: bool,
+    /// Zoomed to the usable area (as the compositor configured it).
+    pub maximized: bool,
+    /// A left press on the toolbar's background, where the window moves from if the pointer
+    /// leaves the slop while the button is down.
+    pub(crate) move_press: Option<Point>,
     /// Appearance override (`Some(true)`: always dark, the Clock and Calculator).
     pub dark_override: Option<bool>,
     /// Last click: time, position, count (double-click detection).
@@ -358,6 +363,8 @@ impl Window {
             fullscreen: false,
             dark_override: None,
             last_click: (f64::NEG_INFINITY, Point::ZERO, 0),
+            maximized: false,
+            move_press: None,
             keyboard_navigation: false,
             keep_on_close_request: false,
             compositor_glass: kind_glass(&kind_ref),

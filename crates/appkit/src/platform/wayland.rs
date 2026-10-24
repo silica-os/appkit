@@ -983,6 +983,16 @@ impl Platform {
                     w.move_(seat, self.pointer_serial);
                 }
             }
+            Request::Zoom(id) => {
+                let maximized = self.ui.window(id).is_some_and(|w| w.maximized);
+                if let Some(Role::Toplevel(w)) = self.surface(id).map(|s| &s.role) {
+                    if maximized {
+                        w.unset_maximized();
+                    } else {
+                        w.set_maximized();
+                    }
+                }
+            }
             Request::AccessibilityChanged(_) => {}
             Request::Minimize(id) => {
                 if let Some(Role::Toplevel(w)) = self.surface(id).map(|s| &s.role) {
@@ -2211,6 +2221,7 @@ impl WindowHandler for Platform {
         let active = configure.is_activated();
         self.ui.set_window_active(id, active);
         self.ui.set_window_fullscreen(id, configure.is_fullscreen());
+        self.ui.set_window_maximized(id, configure.is_maximized());
         self.configured(id, size);
     }
 }
