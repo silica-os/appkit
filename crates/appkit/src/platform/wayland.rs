@@ -151,6 +151,8 @@ struct Surface {
     dialog: Option<XdgDialogV1>,
     glass: Option<SilicaGlassV1>,
     glass_sent: Vec<GlassRegion>,
+    /// The size and opacity the opaque region was last declared for.
+    opaque_sent: Option<(Size, bool)>,
     last_frame: Instant,
 }
 
@@ -1197,6 +1199,7 @@ impl Platform {
             dialog: sheet_dialog,
             glass,
             glass_sent: Vec::new(),
+            opaque_sent: None,
             last_frame: Instant::now(),
         });
     }
@@ -1288,6 +1291,44 @@ impl Platform {
         }
     }
 
+    /// An opaque window tells the compositor so (`set_opaque_region`, applied with the frame's
+    /// commit): it skips drawing what lies under it. A window's rounded corners are left out.
+    fn declare_opaque(&mut self, id: WindowId) {
+        // Windows have rounded corners; an opaque shell surface (the wallpaper) has none.
+        let (opaque, rounded) = self.ui.window(id).map_or((false, false), |w| match w.kind {
+            WindowKind::Normal | WindowKind::Panel | WindowKind::Sheet { .. } => (w.opaque, true),
+            WindowKind::Shell { .. } => (w.opaque, false),
+            _ => (false, false),
+        });
+        let Some(s) = self.surfaces.iter_mut().find(|s| s.id == id) else {
+            return;
+        };
+        if s.opaque_sent == Some((s.size, opaque)) {
+            return;
+        }
+        s.opaque_sent = Some((s.size, opaque));
+        let surface = s.role.wl_surface().clone();
+        if !opaque {
+            surface.set_opaque_region(None);
+            return;
+        }
+        let Ok(region) = smithay_client_toolkit::compositor::Region::new(&self.compositor) else {
+            return;
+        };
+        let (w, h) = (s.size.width.floor() as i32, s.size.height.floor() as i32);
+        let r = if rounded {
+            crate::amalfi::tokens::radii::WINDOW.ceil() as i32
+        } else {
+            0
+        };
+        if w > 2 * r && h > 2 * r {
+            region.add(0, r, w, h - 2 * r);
+            region.add(r, 0, w - 2 * r, r);
+            region.add(r, h - r, w - 2 * r, r);
+        }
+        surface.set_opaque_region(Some(region.wl_region()));
+    }
+
     fn render_frame(&mut self, id: WindowId) {
         if !self.first_frame_done {
             stage("first render begins");
@@ -1304,6 +1345,7 @@ impl Platform {
         let t = Instant::now();
         let damage = self.ui.prepare_frame(id);
         self.stats.add(2, t);
+        self.declare_opaque(id);
         self.ensure_gpu(id);
         let ctx = match &self.gpu {
             GpuState::Ready(c) => Some(c.clone()),
