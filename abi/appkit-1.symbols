@@ -107,3 +107,4 @@ ak_status_item_set_menu
 ak_status_item_set_action
 ak_status_item_set_visible
 ak_status_item_remove
+ak_menu_set_role

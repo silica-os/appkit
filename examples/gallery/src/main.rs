@@ -11,6 +11,7 @@
 mod foundations;
 mod pages;
 
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use appkit_ui::kit::{self, AppearanceOption, Kind};
@@ -37,6 +38,137 @@ const FOUNDATIONS: &[&str] = &[
     "Motion",
     "Animation Lab",
 ];
+
+/// The menu items the gallery runs (the others have roles AppKit runs).
+const QUIT: u32 = 1;
+const SIDEBAR: u32 = 2;
+const LIGHT: u32 = 3;
+const DARK: u32 = 4;
+const HOME: u32 = 5;
+const PREVIOUS: u32 = 6;
+const NEXT: u32 = 7;
+const ROLE: u32 = 100;
+
+/// What the menus act on: the window's page, sidebar and appearance, and what the bar shows.
+struct Nav {
+    page: State<usize>,
+    sidebar: State<bool>,
+    tick: State<u32>,
+    shown: Option<(usize, bool, bool)>,
+}
+
+thread_local! {
+    static NAV: RefCell<Option<Nav>> = const { RefCell::new(None) };
+}
+
+/// The window rendered: the menus follow its page, sidebar and appearance.
+fn follow(page: &State<usize>, sidebar: &State<bool>, tick: &State<u32>) {
+    let now = (page.get(), sidebar.get(), kit::is_dark());
+    let changed = NAV.with(|nav| {
+        let mut nav = nav.borrow_mut();
+        let changed = nav.as_ref().is_none_or(|n| n.shown != Some(now));
+        *nav = Some(Nav {
+            page: page.clone(),
+            sidebar: sidebar.clone(),
+            tick: tick.clone(),
+            shown: Some(now),
+        });
+        changed
+    });
+    if changed {
+        let _ = menus(now.0, now.1, now.2);
+    }
+}
+
+/// A menu item AppKit runs: `role`, with its standard shortcut.
+fn standard(
+    menu: kit::Menu,
+    title: &str,
+    shortcut: Option<&str>,
+    role: &str,
+) -> kit::Result<kit::Menu> {
+    menu.item(title, shortcut, ROLE, 0)?.role(role)
+}
+
+/// The menu bar: the App, File, Edit, View, Go and Window menus.
+fn menus(page: usize, sidebar: bool, dark: bool) -> kit::Result<()> {
+    use kit::menu_flags::{CHECKED, DISABLED};
+    let when = |on: bool| if on { 0 } else { DISABLED };
+    let check = |on: bool| if on { CHECKED } else { 0 };
+    let mut app = kit::Menu::new("Kit Gallery", Some("app"))?;
+    app = standard(app, "About Kit Gallery", None, "about")?.separator()?;
+    app = standard(app, "Hide Kit Gallery", Some("cmd+h"), "hide")?;
+    app = standard(app, "Hide Others", Some("cmd+alt+h"), "hide_others")?;
+    app = standard(app, "Show All", None, "show_all")?
+        .separator()?
+        .item("Quit Kit Gallery", Some("cmd+q"), QUIT, 0)?;
+    let file = standard(
+        kit::Menu::new("File", None)?,
+        "Close Window",
+        Some("cmd+w"),
+        "close",
+    )?;
+    let mut edit = kit::Menu::new("Edit", Some("edit"))?;
+    edit = standard(edit, "Undo", Some("cmd+z"), "undo")?;
+    edit = standard(edit, "Redo", Some("cmd+shift+z"), "redo")?.separator()?;
+    for (title, key, role) in [
+        ("Cut", "cmd+x", "cut"),
+        ("Copy", "cmd+c", "copy"),
+        ("Paste", "cmd+v", "paste"),
+        ("Select All", "cmd+a", "select_all"),
+    ] {
+        edit = standard(edit, title, Some(key), role)?;
+    }
+    let sidebar_title = if sidebar {
+        "Hide Sidebar"
+    } else {
+        "Show Sidebar"
+    };
+    let mut view = kit::Menu::new("View", None)?
+        .item(sidebar_title, Some("ctrl+cmd+s"), SIDEBAR, 0)?
+        .separator()?
+        .item("Light", None, LIGHT, check(!dark))?
+        .item("Dark", None, DARK, check(dark))?
+        .separator()?;
+    view = standard(view, "Enter Full Screen", Some("ctrl+cmd+f"), "fullscreen")?;
+    let last = count().saturating_sub(1);
+    let go = kit::Menu::new("Go", None)?
+        .item("Home", Some("shift+cmd+h"), HOME, when(page != 0))?
+        .item("Previous Page", Some("cmd+["), PREVIOUS, when(page > 0))?
+        .item("Next Page", Some("cmd+]"), NEXT, when(page < last))?;
+    let mut window = kit::Menu::new("Window", Some("window"))?;
+    window = standard(window, "Minimize", Some("cmd+m"), "minimize")?;
+    window = standard(window, "Zoom", None, "zoom")?.separator()?;
+    window = standard(window, "Bring All to Front", None, "bring_all_to_front")?;
+    kit::set_menu_bar(vec![app, file, edit, view, go, window], chosen)
+}
+
+/// A gallery menu item was chosen.
+fn chosen(id: u32) {
+    if id == QUIT {
+        kit::quit();
+        return;
+    }
+    let Some((page, sidebar, tick)) = NAV.with(|nav| {
+        nav.borrow()
+            .as_ref()
+            .map(|n| (n.page.clone(), n.sidebar.clone(), n.tick.clone()))
+    }) else {
+        return;
+    };
+    let now = page.get();
+    match id {
+        SIDEBAR => sidebar.set(!sidebar.get()),
+        LIGHT | DARK => {
+            let _ = kit::set_dark(id == DARK);
+            tick.update(|n| *n += 1);
+        }
+        HOME => page.set(0),
+        PREVIOUS => page.set(now.saturating_sub(1)),
+        NEXT => page.set((now + 1).min(count().saturating_sub(1))),
+        _ => {}
+    }
+}
 
 /// What the sidebar and the snapshots index: 0 is Home, then the Library pages, then the
 /// Foundations.
@@ -177,6 +309,7 @@ impl Component for Gallery {
         };
         let current = page.get().min(count().saturating_sub(1));
         let sidebar_open = cx.state(|| true);
+        follow(&page, &sidebar_open, &tick);
         let bar = (
             toolbar_title(&name_of(current)),
             spacer(),
@@ -358,20 +491,8 @@ fn main() {
     if let Some(code) = snapshot(&args).or_else(|| preview(&args)) {
         std::process::exit(code);
     }
-    let menus = || -> kit::Result<()> {
-        let app = kit::Menu::new("Kit Gallery", Some("app"))?
-            .item("About Kit Gallery", None, 1, 0)?
-            .separator()?
-            .item("Quit Kit Gallery", Some("cmd+q"), 2, 0)?;
-        let window = kit::Menu::new("Window", Some("window"))?;
-        kit::set_menu_bar(vec![app, window], |id| {
-            if id == 2 {
-                kit::quit()
-            }
-        })
-    };
     let r = kit::run("dev.silica.KitGallery", move || {
-        let _ = menus();
+        let _ = menus(0, true, kit::is_dark());
         let spec = appkit_ui::WindowSpec::new("Kit Gallery", SIZE)
             .min_size(900.0, 600.0)
             .autosave("gallery");

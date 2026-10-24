@@ -449,6 +449,7 @@ macro_rules! for_each_function {
             fn ak_menu_add_item(menu: *mut $crate::AKMenu, title: *const ::std::ffi::c_char, shortcut: *const ::std::ffi::c_char, id: u32, flags: u32) -> $crate::AKStatus;
             fn ak_menu_add_separator(menu: *mut $crate::AKMenu) -> $crate::AKStatus;
             fn ak_menu_set_icon(menu: *mut $crate::AKMenu, symbol: *const ::std::ffi::c_char) -> $crate::AKStatus;
+            fn ak_menu_set_role(menu: *mut $crate::AKMenu, role: *const ::std::ffi::c_char) -> $crate::AKStatus;
             fn ak_menu_add_submenu(menu: *mut $crate::AKMenu, submenu: *mut $crate::AKMenu) -> $crate::AKStatus;
             fn ak_app_set_menu_bar(menus: *const *mut $crate::AKMenu, count: usize, callback: $crate::AKMenuFn, user: *mut ::std::ffi::c_void, destroy: $crate::AKDestroy) -> $crate::AKStatus;
             fn ak_view_popup_menu(view: *mut $crate::AKView, menu: *mut $crate::AKMenu, anchor: $crate::AKRect, kind: u32, selected: u32, callback: $crate::AKMenuFn, user: *mut ::std::ffi::c_void, destroy: $crate::AKDestroy) -> $crate::AKStatus;

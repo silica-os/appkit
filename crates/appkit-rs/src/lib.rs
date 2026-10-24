@@ -1676,6 +1676,16 @@ impl Menu {
         Ok(self)
     }
 
+    /// Gives the last item added a standard role ("about", "close", "minimize", "zoom",
+    /// "fullscreen", "hide", "hide_others", "show_all", "bring_all_to_front" and the edit ones):
+    /// AppKit runs it instead of the callback, and enables it only while it works.
+    pub fn role(self, role: &str) -> Result<Menu> {
+        let s = cstring(role)?;
+        // SAFETY: the menu is ours; the string is alive for the call.
+        check(unsafe { f::ak_menu_set_role(self.ptr, s.as_ptr()) })?;
+        Ok(self)
+    }
+
     /// Adds a submenu.
     pub fn submenu(self, sub: Menu) -> Result<Menu> {
         let raw = sub.into_raw();

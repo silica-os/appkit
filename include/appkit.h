@@ -458,6 +458,7 @@ void ak_menu_free(AKMenu *menu);
 AKStatus ak_menu_add_item(AKMenu *menu, const char *title, const char *shortcut, uint32_t id, uint32_t flags);
 AKStatus ak_menu_add_separator(AKMenu *menu);
 AKStatus ak_menu_set_icon(AKMenu *menu, const char *symbol);
+AKStatus ak_menu_set_role(AKMenu *menu, const char *role);
 AKStatus ak_menu_add_submenu(AKMenu *menu, AKMenu *submenu);
 AKStatus ak_app_set_menu_bar(AKMenu *const *menus, size_t count, AKMenuFn callback, void *user, AKDestroy destroy);
 AKStatus ak_view_popup_menu(AKView *view, AKMenu *menu, AKRect anchor, uint32_t kind, uint32_t selected, AKMenuFn callback, void *user, AKDestroy destroy);

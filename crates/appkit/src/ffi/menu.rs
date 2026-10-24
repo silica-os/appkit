@@ -132,6 +132,25 @@ pub extern "C" fn ak_menu_set_icon(menu: *mut AKMenu, symbol: *const c_char) -> 
     })
 }
 
+/// Gives the last item a standard role ("about", "close", "minimize", "zoom", "fullscreen", "hide",
+/// "hide_others", "show_all", "bring_all_to_front", "undo", "redo", "cut", "copy", "paste",
+/// "select_all"): AppKit runs it instead of the callback, and enables it only while it works.
+#[unsafe(no_mangle)]
+pub extern "C" fn ak_menu_set_role(menu: *mut AKMenu, role: *const c_char) -> AKStatus {
+    guard(AK_ERROR_PLATFORM, || {
+        let (Some(b), Ok(role)) = (building(menu), req_str(role)) else {
+            return set_last(AK_ERROR_INVALID_ARGUMENT);
+        };
+        match b.menu.items.last_mut() {
+            Some(item) if !item.separator => {
+                item.role = Some(role.to_string());
+                set_last(AK_OK)
+            }
+            _ => set_last(AK_ERROR_INVALID_ARGUMENT),
+        }
+    })
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn ak_menu_add_submenu(menu: *mut AKMenu, submenu: *mut AKMenu) -> AKStatus {
     guard(AK_ERROR_PLATFORM, || {
@@ -156,7 +175,8 @@ fn wire(items: &mut [MenuItem], f: unsafe extern "C" fn(u32, *mut c_void), data:
     for it in items {
         if let Some(sub) = &mut it.submenu {
             wire(sub, f, data);
-        } else if it.id != 0 && !it.separator {
+        } else if it.id != 0 && !it.separator && it.role.is_none() {
+            // An item with a role is AppKit's to run.
             let id = it.id;
             let d = data.clone();
             it.action = Some(Rc::new(move |ui| {

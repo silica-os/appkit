@@ -387,8 +387,8 @@ impl Ui {
             || match item.role.as_deref() {
                 Some("close" | "minimize") => target.is_some(),
                 Some("about") => true,
-                // A window that can be resized can fill the screen.
-                Some("fullscreen") => target
+                // A window that can be resized can fill the screen, or the usable area.
+                Some("fullscreen" | "zoom") => target
                     .and_then(|w| self.window(w))
                     .is_some_and(|w| w.resizable && w.kind == WindowKind::Normal),
                 Some(r) if app_action(r).is_some() => self.menus.strip.app_actions,
@@ -529,6 +529,7 @@ impl Ui {
             match item.role.as_deref() {
                 Some("close") => self.request_window_close(w),
                 Some("minimize") => self.request(Request::Minimize(w)),
+                Some("zoom") => self.request(Request::Zoom(w)),
                 Some("fullscreen") => {
                     let on = self.window(w).is_some_and(|w| !w.fullscreen);
                     self.request(Request::SetFullscreen(w, on));
@@ -881,6 +882,11 @@ mod tests {
             items: vec![
                 crate::core::app::system_item("fullscreen"),
                 crate::core::app::system_item("bring_all_to_front"),
+                {
+                    let mut zoom = MenuItem::new("Zoom").role("zoom");
+                    zoom.id = 77;
+                    zoom
+                },
             ],
         };
         ui.set_menu_bar(vec![
@@ -931,9 +937,14 @@ mod tests {
             ui.take_requests()
                 .contains(&Request::SetFullscreen(win, false))
         );
-        // A window of fixed size cannot.
+        // Zoom fills the usable area.
+        assert!(enabled(&mut ui, &items, "zoom"));
+        ui.choose_bar_item(77, Some(win));
+        assert!(ui.take_requests().contains(&Request::Zoom(win)));
+        // A window of fixed size cannot do either.
         ui.window_mut(win).unwrap().resizable = false;
         assert!(!enabled(&mut ui, &items, "fullscreen"));
+        assert!(!enabled(&mut ui, &items, "zoom"));
     }
 
     #[test]
