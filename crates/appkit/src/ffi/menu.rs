@@ -5,8 +5,14 @@ use std::rc::Rc;
 
 use appkit_sys::*;
 
-use super::{UserData, enter, guard, opt_str, req_str, set_last, view_id, with_ui};
-use crate::core::menu::{Menu, MenuItem, PopupKind};
+use super::{
+    UserData, enter, guard, opt_str, req_str, set_last, view_id, window_id, window_ptr, with_ui,
+};
+use crate::amalfi::statusbar::ItemContent;
+use crate::core::Ui;
+use crate::core::menu::{Menu, MenuAction, MenuItem, PopupKind};
+use crate::core::menu_bar::MenuValidator;
+use crate::core::window::WindowId;
 use crate::geom::Rect;
 
 /// A menu being built (behind `AKMenu *`).
@@ -231,5 +237,157 @@ pub extern "C" fn ak_view_popup_menu(
             Ok(None) => set_last(AK_ERROR_NO_SUCH_OBJECT),
             Err(e) => set_last(e),
         }
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ak_app_set_menu_validator(
+    validate: AKMenuValidateFn,
+    user: *mut c_void,
+    destroy: AKDestroy,
+) -> AKStatus {
+    guard(AK_ERROR_PLATFORM, || {
+        let data = UserData::new(user, destroy);
+        let validator: Option<MenuValidator> = validate.map(|f| {
+            Rc::new(move |ui: &mut Ui, item: &MenuItem| {
+                let (id, user) = (item.id, data.user);
+                // SAFETY: the caller's callback with its own data.
+                id == 0 || enter(ui, || unsafe { f(id, user) }) != 0
+            }) as MenuValidator
+        });
+        match with_ui(|ui| ui.set_menu_validator(validator)) {
+            Ok(()) => set_last(AK_OK),
+            Err(e) => set_last(e),
+        }
+    })
+}
+
+/// A status item's content: its symbol, else its title.
+fn item_content(symbol: *const c_char, title: *const c_char) -> Result<ItemContent, AKStatus> {
+    Ok(match opt_str(symbol)? {
+        Some(s) => ItemContent::Glyph(s.to_string()),
+        None => ItemContent::Title(opt_str(title)?.unwrap_or_default().to_string()),
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ak_status_item_new(
+    symbol: *const c_char,
+    title: *const c_char,
+    placement: u32,
+    order: u32,
+) -> *mut AKWindow {
+    guard(std::ptr::null_mut(), || {
+        let content = match item_content(symbol, title) {
+            Ok(c) => c,
+            Err(e) => {
+                set_last(e);
+                return std::ptr::null_mut();
+            }
+        };
+        match with_ui(|ui| {
+            if placement == AK_STATUS_ITEM_SYSTEM {
+                ui.add_system_status_item(content, order)
+            } else {
+                ui.add_status_item(content)
+            }
+        }) {
+            Ok(w) => {
+                set_last(AK_OK);
+                window_ptr(w)
+            }
+            Err(e) => {
+                set_last(e);
+                std::ptr::null_mut()
+            }
+        }
+    })
+}
+
+/// Runs `f` on a status item: `AK_ERROR_NO_SUCH_OBJECT` for any other window.
+fn with_item(item: *mut AKWindow, f: impl FnOnce(&mut Ui, WindowId)) -> AKStatus {
+    let r = window_id(item).and_then(|w| {
+        with_ui(|ui| {
+            if ui.status_item_view(w).is_none() {
+                return Err(AK_ERROR_NO_SUCH_OBJECT);
+            }
+            f(ui, w);
+            Ok(())
+        })?
+    });
+    set_last(r.err().unwrap_or(AK_OK))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ak_status_item_set_content(
+    item: *mut AKWindow,
+    symbol: *const c_char,
+    title: *const c_char,
+) -> AKStatus {
+    guard(AK_ERROR_PLATFORM, || match item_content(symbol, title) {
+        Ok(c) => with_item(item, |ui, w| ui.set_status_item_content(w, c)),
+        Err(e) => set_last(e),
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ak_status_item_set_length(item: *mut AKWindow, length: f32) -> AKStatus {
+    guard(AK_ERROR_PLATFORM, || {
+        let length = (length.is_finite() && length >= 0.0).then_some(length);
+        with_item(item, |ui, w| ui.set_status_item_length(w, length))
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ak_status_item_set_menu(
+    item: *mut AKWindow,
+    menu: *mut AKMenu,
+    callback: AKMenuFn,
+    user: *mut c_void,
+    destroy: AKDestroy,
+) -> AKStatus {
+    guard(AK_ERROR_PLATFORM, || {
+        let data = Rc::new(UserData::new(user, destroy));
+        let items = take(menu).map(|mut b| {
+            if let Some(f) = callback {
+                wire(&mut b.menu.items, f, &data);
+            }
+            b.menu.items
+        });
+        with_item(item, |ui, w| ui.set_status_item_menu(w, items))
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ak_status_item_set_action(
+    item: *mut AKWindow,
+    callback: AKCallback,
+    user: *mut c_void,
+    destroy: AKDestroy,
+) -> AKStatus {
+    guard(AK_ERROR_PLATFORM, || {
+        let data = UserData::new(user, destroy);
+        let action: Option<MenuAction> = callback.map(|f| {
+            Rc::new(move |ui: &mut Ui| {
+                let user = data.user;
+                // SAFETY: the caller's callback with its own data.
+                enter(ui, || unsafe { f(user) });
+            }) as MenuAction
+        });
+        with_item(item, |ui, w| ui.set_status_item_action(w, action))
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ak_status_item_set_visible(item: *mut AKWindow, visible: u8) -> AKStatus {
+    guard(AK_ERROR_PLATFORM, || {
+        with_item(item, |ui, w| ui.set_status_item_visible(w, visible != 0))
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn ak_status_item_remove(item: *mut AKWindow) -> AKStatus {
+    guard(AK_ERROR_PLATFORM, || {
+        with_item(item, |ui, w| ui.remove_status_item(w))
     })
 }

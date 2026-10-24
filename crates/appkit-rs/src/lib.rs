@@ -1721,6 +1721,149 @@ pub fn set_menu_bar(menus: Vec<Menu>, chosen: impl FnMut(u32) + 'static) -> Resu
     })
 }
 
+/// Decides, right before a menu shows and before a key equivalent runs, whether the item with
+/// an id is enabled (the `validateMenuItem` equivalent); `None` lets every item through.
+pub fn set_menu_validator(validate: Option<impl Fn(u32) -> bool + 'static>) -> Result<()> {
+    type Cb = Box<dyn Fn(u32) -> bool>;
+    unsafe extern "C" fn call(id: u32, user: *mut c_void) -> u8 {
+        // SAFETY: a boxed `Cb` alive until destroy.
+        let c = unsafe { &*(user.cast::<Cb>()) };
+        u8::from(c(id))
+    }
+    // SAFETY: the data is freed by destroy once (or never made).
+    check(unsafe {
+        match validate {
+            Some(v) => {
+                let data: Cb = Box::new(v);
+                f::ak_app_set_menu_validator(Some(call), boxed(data), Some(destroy::<Cb>))
+            }
+            None => f::ak_app_set_menu_validator(None, std::ptr::null_mut(), None),
+        }
+    })
+}
+
+/// What a status item shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusContent<'a> {
+    /// A Silica Symbols glyph.
+    Symbol(&'a str),
+    /// A title, as wide as its text.
+    Title(&'a str),
+}
+
+impl StatusContent<'_> {
+    fn raw(self) -> Result<(Option<CString>, Option<CString>)> {
+        Ok(match self {
+            StatusContent::Symbol(s) => (Some(cstring(s)?), None),
+            StatusContent::Title(t) => (None, Some(cstring(t)?)),
+        })
+    }
+}
+
+fn opt_ptr(s: &Option<CString>) -> *const c_char {
+    s.as_ref().map_or(std::ptr::null(), |s| s.as_ptr())
+}
+
+/// An item of the menu bar's status area (`NSStatusItem`): a small surface of the app's own,
+/// lined up by the compositor from the right, with a menu or an action.
+#[derive(Debug)]
+pub struct StatusItem {
+    ptr: NonNull<sys::AKWindow>,
+}
+
+impl StatusItem {
+    fn make(content: StatusContent<'_>, placement: u32, order: u32) -> Result<StatusItem> {
+        let (symbol, title) = content.raw()?;
+        // SAFETY: the strings are alive for the call.
+        let p =
+            unsafe { f::ak_status_item_new(opt_ptr(&symbol), opt_ptr(&title), placement, order) };
+        NonNull::new(p)
+            .map(|ptr| StatusItem { ptr })
+            .ok_or_else(last_error)
+    }
+
+    /// An app's item, left of the items before it.
+    pub fn new(content: StatusContent<'_>) -> Result<StatusItem> {
+        StatusItem::make(content, sys::AK_STATUS_ITEM_APP, 0)
+    }
+
+    /// A system item (Control Center's), at `order` from the right (0: rightmost).
+    pub fn system(content: StatusContent<'_>, order: u32) -> Result<StatusItem> {
+        StatusItem::make(content, sys::AK_STATUS_ITEM_SYSTEM, order)
+    }
+
+    /// Shows `content` instead.
+    pub fn set_content(&self, content: StatusContent<'_>) -> Result<()> {
+        let (symbol, title) = content.raw()?;
+        // SAFETY: the handle and the strings are alive for the call.
+        check(unsafe {
+            f::ak_status_item_set_content(self.ptr.as_ptr(), opt_ptr(&symbol), opt_ptr(&title))
+        })
+    }
+
+    /// A fixed length; `None`: as wide as its content.
+    pub fn set_length(&self, length: Option<f32>) -> Result<()> {
+        // SAFETY: plain values.
+        check(unsafe { f::ak_status_item_set_length(self.ptr.as_ptr(), length.unwrap_or(-1.0)) })
+    }
+
+    /// The menu a press opens under the item (`None`: no menu); `chosen` gets the id of an
+    /// activated item.
+    pub fn set_menu(&self, menu: Option<Menu>, chosen: impl FnMut(u32) + 'static) -> Result<()> {
+        type Cb = Box<dyn FnMut(u32)>;
+        unsafe extern "C" fn call(id: u32, user: *mut c_void) {
+            // SAFETY: a boxed `Cb` alive until destroy.
+            let c = unsafe { &mut *(user.cast::<Cb>()) };
+            c(id);
+        }
+        let raw = menu.map_or(std::ptr::null_mut(), Menu::into_raw);
+        let data: Cb = Box::new(chosen);
+        // SAFETY: the menu is consumed; the data freed by destroy once.
+        check(unsafe {
+            f::ak_status_item_set_menu(
+                self.ptr.as_ptr(),
+                raw,
+                Some(call),
+                boxed(data),
+                Some(destroy::<Cb>),
+            )
+        })
+    }
+
+    /// What a press does when the item has no menu (`None`: nothing).
+    pub fn set_action(&self, action: Option<impl FnMut() + 'static>) -> Result<()> {
+        type Cb = Box<dyn FnMut()>;
+        unsafe extern "C" fn call(user: *mut c_void) {
+            // SAFETY: a boxed `Cb` alive until destroy.
+            let c = unsafe { &mut *(user.cast::<Cb>()) };
+            c();
+        }
+        let p = self.ptr.as_ptr();
+        // SAFETY: the data is freed by destroy once (or never made).
+        check(unsafe {
+            match action {
+                Some(a) => {
+                    let data: Cb = Box::new(a);
+                    f::ak_status_item_set_action(p, Some(call), boxed(data), Some(destroy::<Cb>))
+                }
+                None => f::ak_status_item_set_action(p, None, std::ptr::null_mut(), None),
+            }
+        })
+    }
+
+    /// Shows or hides the item; a hidden one leaves no gap.
+    pub fn set_visible(&self, visible: bool) -> Result<()> {
+        // SAFETY: plain values.
+        check(unsafe { f::ak_status_item_set_visible(self.ptr.as_ptr(), u8::from(visible)) })
+    }
+
+    /// Removes the item from the menu bar.
+    pub fn remove(self) -> Result<()> {
+        // SAFETY: the handle is not used again.
+        check(unsafe { f::ak_status_item_remove(self.ptr.as_ptr()) })
+    }
+}
+
 /// A shared, mutable value for closures (a convenience for callbacks).
 pub type Shared<T> = Rc<RefCell<T>>;
 
@@ -1786,6 +1929,19 @@ mod tests {
             .separator()
             .unwrap();
         set_menu_bar(vec![menu], |_| {}).unwrap();
+        set_menu_validator(Some(|id| id != 1)).unwrap();
+        set_menu_validator(None::<fn(u32) -> bool>).unwrap();
+        let item = StatusItem::new(StatusContent::Title("Timer")).unwrap();
+        item.set_content(StatusContent::Symbol("timer")).unwrap();
+        item.set_length(Some(40.0)).unwrap();
+        let menu = Menu::new("", None)
+            .unwrap()
+            .item("Start", None, 1, 0)
+            .unwrap();
+        item.set_menu(Some(menu), |_| {}).unwrap();
+        item.set_action(Some(|| {})).unwrap();
+        item.set_visible(false).unwrap();
+        item.remove().unwrap();
         w.close().unwrap();
         assert_eq!(b.set_bool(Prop::HIDDEN, true), Err(Error::NoSuchObject));
     }

@@ -947,6 +947,8 @@ pub enum Placement {
     At,
     /// Under the anchor, 4 pt away, as wide as it (a combo box's list).
     List,
+    /// Under a title or a status item of the menu bar, 8 pt below the bar.
+    MenuBar,
 }
 
 /// The narrowest cascade (`.s-menu__cascade .s-menu`).
@@ -970,13 +972,19 @@ pub fn present(
         // narrower than 120.
         Placement::PopUp { .. } => (None, anchor.width.max(POP_UP_MIN_WIDTH)),
         Placement::PullDown => (None, (anchor.width - 4.0).max(POP_UP_MIN_WIDTH)),
-        Placement::At => (None, metrics::MIN_WIDTH),
+        Placement::At | Placement::MenuBar => (None, metrics::MIN_WIDTH),
     };
     let _ = ui.set(menu, Prop::MinWidth, Value::from(min));
     let size = ui.measure(menu, Proposal::new(width, None));
     let at = match placement {
         Placement::PullDown => Point::new(anchor.x - 5.0, anchor.bottom() + metrics::PULL_DOWN_GAP),
         Placement::List => Point::new(anchor.x, anchor.bottom() + 4.0),
+        Placement::MenuBar => {
+            use crate::amalfi::menubar::metrics as bar;
+            // The anchor is a title or an item, 2 pt inside the bar.
+            let below = (bar::BAR_HEIGHT - bar::ITEM_HEIGHT) / 2.0 + bar::MENU_GAP;
+            Point::new(anchor.x - bar::MENU_INSET, anchor.bottom() + below)
+        }
         Placement::At => Point::new(anchor.x, anchor.y),
         Placement::PopUp { row } => {
             // The row centred on the control (docs/spec/menus.md, measured), 12 left of it.
@@ -989,7 +997,9 @@ pub fn present(
     };
     // The compositor keeps it on screen (xdg_positioner), as macOS does.
     let place = match placement {
-        Placement::PullDown | Placement::List => PopupPlacement::menu(anchor, PopupSide::Below),
+        Placement::PullDown | Placement::List | Placement::MenuBar => {
+            PopupPlacement::menu(anchor, PopupSide::Below)
+        }
         Placement::PopUp { .. } => PopupPlacement::menu(anchor, PopupSide::Over),
         Placement::At => PopupPlacement::context(anchor.origin()),
     };

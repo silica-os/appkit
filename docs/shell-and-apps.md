@@ -16,7 +16,7 @@ values written next to each component with the spec section in a comment.
 
 | Module | AppKit pieces | Notes |
 |---|---|---|
-| Menu bar | Shell window (Top, anchored top/left/right, exclusive zone), `silica_shell_manager_v1` events `app_menu` (the JSON model, parsed with silica-protocols' types) | the shared Status Bar component (agent family `Status Bar`), auto-hide (#242) |
+| Menu bar | The compositor's strip (silica-menu-bar-v1): each app draws its own titles (`core::menu_bar`) and status items; Control Center's items are system status items | the shared Status Bar component (agent family `Status Bar`), auto-hide (#242) |
 | Dock | Shell window (Bottom anchor, Top layer), custom-drawn tiles (`Recorder::image` for icons from `Thumbnails1`/silica-assets), `GlassProfile::Dock` | magnification and bounce from `dock.md`; stacks (#244) as popups; context menu through the menu service (#248); drag and drop (`Ui::drop_items`) |
 | Faro and Launcher | one Overlay shell window that morphs (Animated<Rect> on a single container), text field, results from the daemon (`services::actions`, `apps`) | `faro.md`, `launcher.md` |
 | Switcher | Overlay window, `GlassProfile::Panel` | `app-switcher.md` |

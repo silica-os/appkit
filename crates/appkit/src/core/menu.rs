@@ -1,11 +1,10 @@
-//! Menus: the app's menu bar, described to the system menu service (`silica-menu-v1`), and
-//! pop-up menus (context menus, pop-up and pull-down buttons), which are the app's own
-//! popups drawn by AppKit, as on macOS. Items carry ids; choosing one runs its action.
+//! Menus: the app's menu bar, whose titles the app draws in the compositor's menu bar
+//! (`core::menu_bar`), and pop-up menus (context menus, pop-up and pull-down buttons). All are
+//! the app's own popups drawn by AppKit, as on macOS. Items carry ids; choosing one runs its action.
 //! Shortcuts of the menu bar's items become app key equivalents.
 
-use crate::core::event::Shortcut;
 use crate::core::tree::ViewId;
-use crate::core::ui::{Request, Ui};
+use crate::core::ui::Ui;
 use crate::core::value::{Prop, Signal, Value};
 use crate::geom::Rect;
 
@@ -143,6 +142,8 @@ pub enum PopupKind {
     Context,
     /// A pop-up button's menu, the selected item over the control.
     PopUp,
+    /// A status item's menu, under the menu bar.
+    MenuBar,
 }
 
 /// The menu state of the runtime.
@@ -150,9 +151,9 @@ pub enum PopupKind {
 pub struct MenuState {
     pub(crate) bar: Vec<Menu>,
     pub(crate) next_id: u32,
-    pub(crate) bar_actions: Vec<(u32, MenuAction)>,
     pub(crate) popups: Vec<PendingPopup>,
     pub(crate) next_token: u64,
+    pub(crate) strip: crate::core::menu_bar::StripState,
 }
 
 /// A pop-up menu shown and not yet answered: token, item actions, completion.
@@ -191,7 +192,7 @@ fn shortcuts(items: &[MenuItem], out: &mut Vec<(String, u32)>) {
 }
 
 /// The rows AppKit draws for `items`.
-fn rows_of(items: &[MenuItem]) -> Vec<crate::amalfi::menus::Row> {
+pub(crate) fn rows_of(items: &[MenuItem]) -> Vec<crate::amalfi::menus::Row> {
     use crate::amalfi::menus::{Row, RowKind};
     items
         .iter()
@@ -216,7 +217,7 @@ fn rows_of(items: &[MenuItem]) -> Vec<crate::amalfi::menus::Row> {
 }
 
 /// The id of the item at `path` (row indices, into submenus).
-fn id_at(items: &[MenuItem], path: &[i64]) -> Option<u32> {
+pub(crate) fn id_at(items: &[MenuItem], path: &[i64]) -> Option<u32> {
     let (first, rest) = path.split_first()?;
     let it = items.get(usize::try_from(*first).ok()?)?;
     match it.submenu.as_deref() {
@@ -226,13 +227,26 @@ fn id_at(items: &[MenuItem], path: &[i64]) -> Option<u32> {
     }
 }
 
+/// The item `id` of the menu bar.
+pub(crate) fn find(menus: &[Menu], id: u32) -> Option<&MenuItem> {
+    fn walk(items: &[MenuItem], id: u32) -> Option<&MenuItem> {
+        items.iter().find_map(|it| {
+            if it.id == id && !it.separator && !it.heading {
+                return Some(it);
+            }
+            it.submenu.as_deref().and_then(|s| walk(s, id))
+        })
+    }
+    menus.iter().find_map(|m| walk(&m.items, id))
+}
+
 impl Ui {
-    /// Sets the app's menu bar (sent to the menu service; key equivalents registered).
+    /// Sets the app's menu bar (its titles in the compositor's menu bar; key equivalents
+    /// registered).
     pub fn set_menu_bar(&mut self, mut menus: Vec<Menu>) {
-        let mut actions = Vec::new();
         let mut next = self.menus.next_id;
         for m in &mut menus {
-            assign(&mut m.items, &mut next, &mut actions);
+            assign(&mut m.items, &mut next, &mut Vec::new());
         }
         self.menus.next_id = next;
         let mut keys = Vec::new();
@@ -243,9 +257,8 @@ impl Ui {
         for (s, id) in keys {
             self.add_menu_shortcut(&s, id);
         }
-        self.menus.bar_actions = actions;
         self.menus.bar = menus;
-        self.request(Request::SetMenuBar);
+        self.sync_menu_titles();
     }
 
     /// The menu bar.
@@ -253,18 +266,10 @@ impl Ui {
         &self.menus.bar
     }
 
-    /// The menu service (or a key equivalent) chose a menu-bar item.
+    /// A menu-bar item was chosen (by its key equivalent): it runs if it validates.
     pub fn menu_activated(&mut self, id: u32) {
-        let action = self
-            .menus
-            .bar_actions
-            .iter()
-            .find(|(i, _)| *i == id)
-            .map(|(_, a)| a.clone());
-        if let Some(a) = action {
-            a(self);
-        }
-        self.flush();
+        let target = self.key_window();
+        self.choose_bar_item(id, target);
     }
 
     /// Shows a pop-up menu for `view` anchored at `anchor` (view coordinates): a popup of the
@@ -299,6 +304,7 @@ impl Ui {
             // A context menu whose anchor has a height is a pull-down (docs/spec/menus.md).
             PopupKind::Context if anchor.height > 0.0 => menus::Placement::PullDown,
             PopupKind::Context => menus::Placement::At,
+            PopupKind::MenuBar => menus::Placement::MenuBar,
         };
         if let (PopupKind::PopUp, Some(r)) = (kind, row) {
             let _ = self.set(m, Prop::SelectedIndex, Value::Int(r as i64));
@@ -346,60 +352,6 @@ impl Ui {
     }
 }
 
-/// The JSON model of `silica-menu-v1` (the protocol carries JSON in a memfd: a format owned
-/// by silica-desktop, built here with its own types).
-pub fn bar_model(menus: &[Menu]) -> silica_protocols::menu::model::Model {
-    use silica_protocols::menu::model as m;
-    fn item(it: &MenuItem) -> m::Item {
-        if it.separator {
-            return m::Item::separator();
-        }
-        let shortcut = it.shortcut.as_deref().and_then(Shortcut::parse).map(|s| {
-            use crate::core::event::Mods;
-            let key = match s.key.as_str() {
-                "enter" => "Return".to_string(),
-                "escape" => "Escape".to_string(),
-                "left" => "Left".to_string(),
-                "right" => "Right".to_string(),
-                "up" => "Up".to_string(),
-                "down" => "Down".to_string(),
-                "backspace" => "BackSpace".to_string(),
-                "delete" => "Delete".to_string(),
-                "tab" => "Tab".to_string(),
-                "space" => "space".to_string(),
-                k => k.to_uppercase(),
-            };
-            m::Shortcut {
-                key,
-                meta: s.mods.contains(Mods::LOGO),
-                ctrl: s.mods.contains(Mods::CTRL),
-                alt: s.mods.contains(Mods::ALT),
-                shift: s.mods.contains(Mods::SHIFT),
-            }
-        });
-        m::Item {
-            separator: false,
-            id: Some(it.id),
-            label: it.title.clone(),
-            enabled: it.enabled && !it.heading,
-            checked: it.checked == Some(true),
-            role: it.role.clone().unwrap_or_default(),
-            shortcut,
-            items: it.submenu.as_ref().map(|s| s.iter().map(item).collect()),
-        }
-    }
-    m::Model {
-        menus: menus
-            .iter()
-            .map(|menu| m::Menu {
-                label: menu.title.clone(),
-                role: menu.role.clone().unwrap_or_default(),
-                items: menu.items.iter().map(item).collect(),
-            })
-            .collect(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -426,17 +378,12 @@ mod tests {
                 MenuItem::submenu("Recent", vec![MenuItem::new("a.txt")]),
             ],
         }]);
-        assert!(ui.take_requests().contains(&Request::SetMenuBar));
         let id = ui.menu_bar()[0].items[0].id;
         assert_ne!(id, 0);
         ui.menu_activated(id);
         assert_eq!(hits.get(), 1);
         ui.key(win, KeyEvent::press(Key::Char('n'), Mods::LOGO));
         assert_eq!(hits.get(), 2);
-        let model = bar_model(ui.menu_bar());
-        assert_eq!(model.menus[0].items.len(), 3);
-        assert_eq!(model.menus[0].items[0].shortcut.as_ref().unwrap().key, "N");
-        assert!(model.menus[0].items[1].separator);
     }
 
     #[test]

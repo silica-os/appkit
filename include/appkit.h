@@ -63,6 +63,7 @@ typedef void (*AKMeasureFn)(float proposed_width, float proposed_height, float *
 typedef uint8_t (*AKEventFn)(AKView *view, const AKEvent *event, void *user);
 typedef void (*AKBytesFn)(const uint8_t *data, size_t len, void *user);
 typedef void (*AKMenuFn)(uint32_t id, void *user);
+typedef uint8_t (*AKMenuValidateFn)(uint32_t id, void *user);
 typedef AKView *(*AKRowFn)(uint64_t index, void *user);
 typedef AKView *(*AKCellFn)(uint64_t key, uint32_t column, void *user);
 typedef uint64_t (*AKTreeCountFn)(uint64_t parent, void *user);
@@ -360,6 +361,8 @@ typedef void (*AKAlertFn)(int64_t response, void *user);
 #define AK_MENU_HEADING 16u
 #define AK_POPUP_CONTEXT 0u
 #define AK_POPUP_POP_UP 1u
+#define AK_STATUS_ITEM_APP 0u
+#define AK_STATUS_ITEM_SYSTEM 1u
 
 /* Table column flags. */
 #define AK_COLUMN_EDITABLE 1u
@@ -486,6 +489,14 @@ AKView *ak_file_panel_new(uint32_t flags, const char *name, const char *const *f
 AKStatus ak_set_appearance_option(uint32_t option, uint32_t value);
 uint32_t ak_appearance_option(uint32_t option);
 AKStatus ak_window_set_autosave(AKWindow *window, const char *name);
+AKStatus ak_app_set_menu_validator(AKMenuValidateFn validate, void *user, AKDestroy destroy);
+AKWindow *ak_status_item_new(const char *symbol, const char *title, uint32_t placement, uint32_t order);
+AKStatus ak_status_item_set_content(AKWindow *item, const char *symbol, const char *title);
+AKStatus ak_status_item_set_length(AKWindow *item, float length);
+AKStatus ak_status_item_set_menu(AKWindow *item, AKMenu *menu, AKMenuFn callback, void *user, AKDestroy destroy);
+AKStatus ak_status_item_set_action(AKWindow *item, AKCallback callback, void *user, AKDestroy destroy);
+AKStatus ak_status_item_set_visible(AKWindow *item, uint8_t visible);
+AKStatus ak_status_item_remove(AKWindow *item);
 
 #ifdef __cplusplus
 }

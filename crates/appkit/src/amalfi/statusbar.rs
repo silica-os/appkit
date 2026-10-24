@@ -45,6 +45,8 @@ pub mod metrics {
 pub enum ItemContent {
     /// A glyph (Wi-Fi, sound …).
     Glyph(String),
+    /// A title (an app's status item), as wide as its text.
+    Title(String),
     /// The date and time.
     Clock(String),
     /// A glyph after a percentage.
@@ -104,7 +106,7 @@ impl StatusItem {
     fn parts(&self) -> (String, String) {
         match &self.content {
             ItemContent::Glyph(g) => (g.clone(), String::new()),
-            ItemContent::Clock(t) => (String::new(), t.clone()),
+            ItemContent::Clock(t) | ItemContent::Title(t) => (String::new(), t.clone()),
             ItemContent::Battery {
                 symbol,
                 percentage: t,
@@ -138,6 +140,7 @@ impl StatusItem {
             ItemContent::Clock(t) => {
                 (pad + self.text_width(theme, &t)).max(metrics::MIN_TEXT_WIDTH)
             }
+            ItemContent::Title(t) => pad + self.text_width(theme, &t),
             ItemContent::Battery { percentage: t, .. }
             | ItemContent::InputSource { label: t, .. } => {
                 pad + self.label_width(theme, &t) + metrics::GAP + metrics::GLYPH
@@ -185,7 +188,7 @@ impl Widget for StatusItem {
                 cx.rec
                     .glyph("Glyph Status", glyph_at(pad), &symbol, 400, ink);
             }
-            ItemContent::Clock(text) => {
+            ItemContent::Clock(text) | ItemContent::Title(text) => {
                 let style = theme.text(&typography::BODY_EMPHASIS, ink);
                 let w = (r.width - 2.0 * pad).max(0.0);
                 let layout = self.text.layout(&text, &style, Align::Center, w, Some(1));
@@ -279,9 +282,9 @@ impl Widget for StatusItem {
                 })
             }
             // The content through the ABI: its kind (`Style`: 0 glyph, 1 clock, 2 battery,
-            // 3 input source), its glyph (`Symbol`) and its text (`Text`).
+            // 3 input source, 4 title), its glyph (`Symbol`) and its text (`Text`).
             Prop::Style => match value.as_int() {
-                Some(k @ 0..=3) => {
+                Some(k @ 0..=4) => {
                     let (symbol, text) = self.parts();
                     self.content = match k {
                         0 => ItemContent::Glyph(symbol),
@@ -290,6 +293,7 @@ impl Widget for StatusItem {
                             symbol,
                             percentage: text,
                         },
+                        4 => ItemContent::Title(text),
                         _ => ItemContent::InputSource {
                             symbol,
                             label: text,
@@ -304,13 +308,14 @@ impl Widget for StatusItem {
                     ItemContent::Glyph(g) => *g = s.to_string(),
                     ItemContent::Battery { symbol, .. }
                     | ItemContent::InputSource { symbol, .. } => *symbol = s.to_string(),
-                    ItemContent::Clock(_) => return PropChange::Nothing,
+                    ItemContent::Clock(_) | ItemContent::Title(_) => return PropChange::Nothing,
                 }
                 PropChange::Paint
             }),
             Prop::Text => value.as_str().map_or(PropChange::Unknown, |s| {
                 match &mut self.content {
                     ItemContent::Clock(t)
+                    | ItemContent::Title(t)
                     | ItemContent::Battery { percentage: t, .. }
                     | ItemContent::InputSource { label: t, .. } => *t = s.to_string(),
                     ItemContent::Glyph(_) => return PropChange::Nothing,
@@ -330,6 +335,7 @@ impl Widget for StatusItem {
                 ItemContent::Clock(_) => 1,
                 ItemContent::Battery { .. } => 2,
                 ItemContent::InputSource { .. } => 3,
+                ItemContent::Title(_) => 4,
             })),
             Prop::Symbol => Some(Value::Str(self.parts().0)),
             Prop::Text => Some(Value::Str(self.parts().1)),

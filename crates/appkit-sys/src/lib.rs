@@ -230,6 +230,8 @@ pub type AKEventFn =
 pub type AKBytesFn = Option<unsafe extern "C" fn(data: *const u8, len: usize, user: *mut c_void)>;
 /// A menu item was chosen (id), or a pop-up menu ended (0: dismissed).
 pub type AKMenuFn = Option<unsafe extern "C" fn(id: u32, user: *mut c_void)>;
+/// Whether the menu item `id` is enabled now (non-zero: yes).
+pub type AKMenuValidateFn = Option<unsafe extern "C" fn(id: u32, user: *mut c_void) -> u8>;
 /// Makes the view of row `index` of a list (a new reference the list takes over), or null.
 pub type AKRowFn = Option<unsafe extern "C" fn(index: u64, user: *mut c_void) -> *mut AKView>;
 /// Makes the view of a table cell: the row's key (its index, or its node in an outline) and
@@ -367,6 +369,7 @@ ids! { MENU_FLAGS,
     AK_MENU_DISABLED = 1, AK_MENU_CHECKED = 2, AK_MENU_MIXED = 4,
     AK_MENU_DESTRUCTIVE = 8, AK_MENU_HEADING = 16,
     AK_POPUP_CONTEXT = 0, AK_POPUP_POP_UP = 1,
+    AK_STATUS_ITEM_APP = 0, AK_STATUS_ITEM_SYSTEM = 1,
 }
 
 /// Calls `$m! { … }` with every function of the ABI, as
@@ -486,6 +489,15 @@ macro_rules! for_each_function {
             fn ak_set_appearance_option(option: u32, value: u32) -> $crate::AKStatus;
             fn ak_appearance_option(option: u32) -> u32;
             fn ak_window_set_autosave(window: *mut $crate::AKWindow, name: *const ::std::ffi::c_char) -> $crate::AKStatus;
+            // Menu bar: validation and status items.
+            fn ak_app_set_menu_validator(validate: $crate::AKMenuValidateFn, user: *mut ::std::ffi::c_void, destroy: $crate::AKDestroy) -> $crate::AKStatus;
+            fn ak_status_item_new(symbol: *const ::std::ffi::c_char, title: *const ::std::ffi::c_char, placement: u32, order: u32) -> *mut $crate::AKWindow;
+            fn ak_status_item_set_content(item: *mut $crate::AKWindow, symbol: *const ::std::ffi::c_char, title: *const ::std::ffi::c_char) -> $crate::AKStatus;
+            fn ak_status_item_set_length(item: *mut $crate::AKWindow, length: f32) -> $crate::AKStatus;
+            fn ak_status_item_set_menu(item: *mut $crate::AKWindow, menu: *mut $crate::AKMenu, callback: $crate::AKMenuFn, user: *mut ::std::ffi::c_void, destroy: $crate::AKDestroy) -> $crate::AKStatus;
+            fn ak_status_item_set_action(item: *mut $crate::AKWindow, callback: $crate::AKCallback, user: *mut ::std::ffi::c_void, destroy: $crate::AKDestroy) -> $crate::AKStatus;
+            fn ak_status_item_set_visible(item: *mut $crate::AKWindow, visible: u8) -> $crate::AKStatus;
+            fn ak_status_item_remove(item: *mut $crate::AKWindow) -> $crate::AKStatus;
         }
     };
 }

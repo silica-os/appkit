@@ -46,8 +46,9 @@ Gallery from this checkout and merges them into the running dev VM (`tools/run-v
   AmalfiInteraction semantics), `state_changed` notifications, key view loop with Full
   Keyboard Access, default/cancel buttons, menu key equivalents, app shortcuts; signals with
   deferred re-entrant-safe handlers; timers; animations; damage tracking; snapshots;
-  accessibility descriptions/tree and actions (`Ui::perform`); menus (`core::menu`: menu bar,
-  pop-up menus through the menu service).
+  accessibility descriptions/tree and actions (`Ui::perform`); menus (`core::menu`: pop-up
+  menus; `core::menu_bar`: the app's menu titles drawn and tracked in the app, autoenabling
+  with a validator before showing and before key equivalents, status items).
 - **Components**: every kit family (table under "Components"), plus `TextView` (documents:
   line index with Fenwick sums, layout per visible line, 0.8 ms per key on a 10 MB document in
   release) and the collections (`amalfi::collections`, one provider model: items are made
@@ -81,8 +82,8 @@ Gallery from this checkout and merges them into the running dev VM (`tools/run-v
   Settings1 rate/delay), pointer + axis (value120), text-input-v3 (preedit/commit/delete,
   surrounding text clipped to 4000 bytes), clipboard (copy/paste text), silica-window-v1
   (full-size content, appearance), silica-glass-v1 (compositor glass regions with profiles),
-  silica-menu-v1 (menu bar JSON model in a sealed memfd, pop-up menus), frame pacing by frame
-  callbacks.
+  silica-menu-bar-v1 (the menu-title surface and status-item surfaces, menus as popups of
+  them), frame pacing by frame callbacks.
 - **Renderer** (`render`): `Canvas` on vello_cpu (single-threaded) with curves flattened at
   0.1 device px, region rendering (`begin_region`: a frame rasterizes only its damage rows),
   whole-pixel copies of cached images, a glyph-outline cache (`render::glyphs`, skrifa) and
@@ -145,8 +146,7 @@ kit's popover for `.popover`; `toolbar` (`toolbar_button`, `toolbar_group`, `too
   Sketch antialiases small controls ~¼ pt wider, measured by silica_ui on the same masters),
   `WITH_TEXT` (mean 2.5); glass refraction bands are masked when a comparison fails (as
   silica_ui).
-- **Fonts embedded**; **no runtime JSON** except the silica-menu-v1 model (a format owned by
-  silica-desktop; candidate for a typed protocol there).
+- **Fonts embedded**; **no runtime JSON**.
 - **Core never calls the platform**: it queues `Request`s; signal handlers run after dispatch.
 - **Window content** is offered the window size and centred at the size it takes; fill with
   an infinite max width/height. Normal windows are opaque (`Surface/Window`), popups and shell
@@ -192,7 +192,8 @@ deviations they cause are in [kit-issues.md](kit-issues.md).
 | Popovers | `PopoverShape`, `Popover`, `popovers::present` (flips sides) | 84 | done; in the C ABI (`ak_view_present_popover`) |
 | Alerts | `Alert`, `alert()` (title, message, accessories, buttons, badge) | 26 | done (icons are bitmaps: masked); in the C ABI (`ak_alert_*`, presented as a sheet or a panel) |
 | Dialogs | `Dialog`, `Pane`, `browser`, `dialog_footer` | 12 | done |
-| Status Bar | `StatusItem`, `StatusBar` (plates of Increase Contrast and Reduce Transparency) | 22 | done; `STATUS_ITEM` kind (content kind, glyph, text) |
+| Status Bar | `StatusItem`, `StatusBar` (plates of Increase Contrast and Reduce Transparency) | 22 | done; `STATUS_ITEM` kind (content kind, glyph, text); status items in the C ABI (`ak_status_item_*`) |
+| Menu Bar | `MenuTitle` (mark, bold app name, menus), `MenuBar` | 12 | done (Menu Open: the menu is compared by `Menus`); the Silica mark's system menu is silica-os/appkit#25 |
 | Windows | `WindowFrame`, `Block` | 40 | done for the window's own layers; nested components of other families (group boxes, segments, checkbox group, search field, menu bar) are placeholders there |
 | Collections (`Apps/Mustache` file list) | `TableHeader`, `TableView` rows, `ListView` rows, `GridView` tile | 16 | done (two kit quirks in kit-issues.md) |
 
@@ -204,7 +205,7 @@ ticking; the tooltip presenter is part of `Ui`; `Text` has a wrapping paragraph 
 also has `ignore_aspects` (a kit defect on every layer, e.g. the dark glass blur) and
 `skip_trees` (nested components replaced by placeholders); kit-driven builders shared by the
 tests live in `tests/common/mod.rs`. Open problems: app icons (Item/App, Pop-up/App, alert
-icons), the `Open` masters of buttons, the menu bar family, Windows with
+icons), the `Open` masters of buttons, Windows with
 the real nested components. Window buttons are at the 23 pt pitch (windows.md and every kit
 render since silica-design fb5f9f10, compared unmasked); alerts follow the binding
 anatomy of components.md (280 wide, centred text, buttons one per row 240 × 28, default

@@ -158,6 +158,7 @@ typedef void (*AKMeasureFn)(float proposed_width, float proposed_height, float *
 typedef uint8_t (*AKEventFn)(AKView *view, const AKEvent *event, void *user);
 typedef void (*AKBytesFn)(const uint8_t *data, size_t len, void *user);
 typedef void (*AKMenuFn)(uint32_t id, void *user);
+typedef uint8_t (*AKMenuValidateFn)(uint32_t id, void *user);
 typedef AKView *(*AKRowFn)(uint64_t index, void *user);
 typedef AKView *(*AKCellFn)(uint64_t key, uint32_t column, void *user);
 typedef uint64_t (*AKTreeCountFn)(uint64_t parent, void *user);

@@ -13,6 +13,7 @@ pub mod foundation;
 pub mod group_box;
 pub mod label;
 pub mod materials;
+pub mod menubar;
 pub mod menus;
 pub mod panels;
 pub mod popovers;

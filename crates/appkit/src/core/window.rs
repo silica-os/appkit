@@ -202,6 +202,16 @@ pub enum WindowKind {
         /// Output name.
         output: Option<String>,
     },
+    /// The app's menu titles in the compositor's menu bar (silica-menu-bar-v1), shown while
+    /// the app is frontmost. The compositor gives it the room before the status items.
+    MenuTitles,
+    /// A status item in the compositor's menu bar (silica-menu-bar-v1).
+    StatusItem {
+        /// A system item (Control Center's), right of the apps' items.
+        system: bool,
+        /// Among the system items, from the right.
+        order: u32,
+    },
 }
 
 impl Window {
@@ -359,5 +369,18 @@ impl Window {
 /// Whether windows of `kind` float over something they do not draw (their glass is the
 /// compositor's).
 fn kind_glass(kind: &WindowKind) -> bool {
-    matches!(kind, WindowKind::Popup { .. } | WindowKind::Shell { .. })
+    matches!(
+        kind,
+        WindowKind::Popup { .. }
+            | WindowKind::Shell { .. }
+            | WindowKind::MenuTitles
+            | WindowKind::StatusItem { .. }
+    )
+}
+
+impl WindowKind {
+    /// A surface of the compositor's menu bar.
+    pub fn in_menu_bar(&self) -> bool {
+        matches!(self, WindowKind::MenuTitles | WindowKind::StatusItem { .. })
+    }
 }

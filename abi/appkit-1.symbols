@@ -99,3 +99,11 @@ ak_color_panel_new
 ak_file_panel_new
 ak_set_appearance_option
 ak_appearance_option
+ak_app_set_menu_validator
+ak_status_item_new
+ak_status_item_set_content
+ak_status_item_set_length
+ak_status_item_set_menu
+ak_status_item_set_action
+ak_status_item_set_visible
+ak_status_item_remove

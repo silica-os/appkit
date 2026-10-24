@@ -133,8 +133,10 @@ pub enum Request {
     StartMove(WindowId),
     /// The accessibility tree changed.
     AccessibilityChanged(WindowId),
-    /// The menu bar changed ([`Ui::menu_bar`]).
-    SetMenuBar,
+    /// Minimize a window (the Window menu's Minimize).
+    Minimize(WindowId),
+    /// Show or hide a status item in the menu bar.
+    SetStatusItemVisible(WindowId, bool),
     /// Keep the screen awake while the window is shown (video, presentations).
     InhibitIdle(WindowId, bool),
 }

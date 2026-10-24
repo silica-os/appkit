@@ -84,8 +84,11 @@ use wayland_protocols::xdg::shell::client::xdg_positioner;
 
 use silica_protocols::glass::client::silica_glass_manager_v1::SilicaGlassManagerV1;
 use silica_protocols::glass::client::silica_glass_v1::{self, SilicaGlassV1};
-use silica_protocols::menu::client::silica_menu_manager_v1::SilicaMenuManagerV1;
-use silica_protocols::menu::client::silica_menu_v1::{self, SilicaMenuV1};
+use silica_protocols::menu_bar::client::silica_menu_bar_manager_v1::{
+    self, SilicaMenuBarManagerV1,
+};
+use silica_protocols::menu_bar::client::silica_menu_titles_v1::{self, SilicaMenuTitlesV1};
+use silica_protocols::menu_bar::client::silica_status_item_v1::{self, SilicaStatusItemV1};
 use silica_protocols::shell::client::silica_shell_manager_v1::{self, SilicaShellManagerV1};
 use silica_protocols::window::client::silica_window_manager_v1::SilicaWindowManagerV1;
 use silica_protocols::window::client::silica_window_v1::{self, SilicaWindowV1};
@@ -112,6 +115,29 @@ enum Role {
     Popup(Popup),
     Layer(LayerSurface),
     Lock(SessionLockSurface),
+    /// A surface of the compositor's menu bar (silica-menu-bar-v1).
+    Strip(Strip),
+}
+
+/// A surface in the compositor's menu bar: the app's titles or a status item.
+struct Strip {
+    surface: wl_surface::WlSurface,
+    part: StripPart,
+}
+
+enum StripPart {
+    Titles(SilicaMenuTitlesV1),
+    Item(SilicaStatusItemV1),
+}
+
+impl Drop for Strip {
+    fn drop(&mut self) {
+        match &self.part {
+            StripPart::Titles(t) => t.destroy(),
+            StripPart::Item(i) => i.destroy(),
+        }
+        self.surface.destroy();
+    }
 }
 
 impl Role {
@@ -121,6 +147,7 @@ impl Role {
             Role::Popup(p) => p.wl_surface(),
             Role::Layer(l) => l.wl_surface(),
             Role::Lock(l) => l.wl_surface(),
+            Role::Strip(s) => &s.surface,
         }
     }
 }
@@ -309,7 +336,8 @@ pub struct Platform {
     launch_token: Option<String>,
     glass_manager: Option<SilicaGlassManagerV1>,
     window_manager: Option<SilicaWindowManagerV1>,
-    menu_manager: Option<SilicaMenuManagerV1>,
+    /// The compositor's menu bar.
+    menu_bar: Option<SilicaMenuBarManagerV1>,
     /// Ossido's shell channel (the shell process only, [`Ui::connect_shell`]).
     shell: Option<SilicaShellManagerV1>,
     /// Thumbnails asked for and not arrived yet: the window and the file Ossido writes into.
@@ -321,7 +349,6 @@ pub struct Platform {
     /// What each window handle said so far: identifier, app id, title.
     toplevel_info:
         std::collections::HashMap<wayland_client::backend::ObjectId, (String, String, String)>,
-    menu: Option<SilicaMenuV1>,
     surfaces: Vec<Surface>,
     seat: Option<wl_seat::WlSeat>,
     keyboard: Option<wl_keyboard::WlKeyboard>,
@@ -626,6 +653,9 @@ pub fn run_with(
     platform
         .ui
         .set_state_dir(crate::core::restore::state_dir(app_id));
+    // The app's titles and status items go in the compositor's menu bar.
+    let menu_bar = platform.menu_bar.is_some();
+    platform.ui.set_menu_bar_available(menu_bar);
     setup(&mut platform.ui);
     stage("setup");
     platform.process();
@@ -686,11 +716,10 @@ impl Platform {
                 .filter(|t| !t.is_empty()),
             glass_manager,
             window_manager: globals.bind(&qh, 1..=4, ()).ok(),
-            menu_manager: globals.bind(&qh, 1..=2, ()).ok(),
+            menu_bar: globals.bind(&qh, 1..=1, ()).ok(),
             shell: None,
             toplevels: None,
             toplevel_info: std::collections::HashMap::new(),
-            menu: None,
             compositor,
             shm,
             surfaces: Vec::new(),
@@ -854,7 +883,7 @@ impl Platform {
                 if self.shell.is_none() {
                     match self
                         .registry
-                        .bind_one::<SilicaShellManagerV1, _, _>(&self.qh, 1..=10, ())
+                        .bind_one::<SilicaShellManagerV1, _, _>(&self.qh, 1..=11, ())
                     {
                         Ok(m) => self.shell = Some(m),
                         Err(e) => tracing::warn!("no shell channel: {e}"),
@@ -952,7 +981,20 @@ impl Platform {
                 }
             }
             Request::AccessibilityChanged(_) => {}
-            Request::SetMenuBar => self.send_menu_bar(),
+            Request::Minimize(id) => {
+                if let Some(Role::Toplevel(w)) = self.surface(id).map(|s| &s.role) {
+                    w.set_minimized();
+                }
+            }
+            Request::SetStatusItemVisible(id, visible) => {
+                if let Some(Role::Strip(Strip {
+                    part: StripPart::Item(i),
+                    ..
+                })) = self.surface(id).map(|s| &s.role)
+                {
+                    i.set_visible(u32::from(visible));
+                }
+            }
             Request::InhibitIdle(id, on) => {
                 self.inhibitors.retain(|(w, i)| {
                     let keep = *w != id;
@@ -1043,12 +1085,25 @@ impl Platform {
                 let Some(xdg) = &self.xdg else {
                     return;
                 };
-                // The parent: an xdg surface, or a layer surface (a shell's menu bar) whose
-                // popup has no xdg parent and is attached with `get_popup`.
-                let (parent_xdg, parent_layer) = match self.surface(*parent).map(|s| &s.role) {
+                // The parent: an xdg surface, or a layer surface or a part of the menu bar,
+                // whose popup has no xdg parent and is attached with `get_popup`.
+                enum Attach {
+                    Layer(LayerSurface),
+                    Titles(SilicaMenuTitlesV1),
+                    Item(SilicaStatusItemV1),
+                }
+                let (parent_xdg, attach) = match self.surface(*parent).map(|s| &s.role) {
                     Some(Role::Toplevel(w)) => (Some(w.xdg_surface().clone()), None),
                     Some(Role::Popup(p)) => (Some(p.xdg_surface().clone()), None),
-                    Some(Role::Layer(l)) => (None, Some(l.clone())),
+                    Some(Role::Layer(l)) => (None, Some(Attach::Layer(l.clone()))),
+                    Some(Role::Strip(Strip {
+                        part: StripPart::Titles(t),
+                        ..
+                    })) => (None, Some(Attach::Titles(t.clone()))),
+                    Some(Role::Strip(Strip {
+                        part: StripPart::Item(i),
+                        ..
+                    })) => (None, Some(Attach::Item(i.clone()))),
                     _ => {
                         tracing::warn!("popup without a parent surface");
                         return;
@@ -1061,8 +1116,11 @@ impl Platform {
                 position(&pos, *anchor, place);
                 match Popup::from_surface(parent_xdg.as_ref(), &pos, &self.qh, wl, xdg) {
                     Ok(p) => {
-                        if let Some(l) = &parent_layer {
-                            l.get_popup(p.xdg_popup());
+                        match &attach {
+                            Some(Attach::Layer(l)) => l.get_popup(p.xdg_popup()),
+                            Some(Attach::Titles(t)) => t.get_popup(p.xdg_popup()),
+                            Some(Attach::Item(i)) => i.get_popup(p.xdg_popup()),
+                            None => {}
                         }
                         // A grabbing popup closes on a click outside (the press that
                         // opened it gives the serial).
@@ -1119,6 +1177,32 @@ impl Platform {
                 l.set_size(size.width.max(0.0) as u32, size.height.max(0.0) as u32);
                 l.commit();
                 Role::Layer(l)
+            }
+            WindowKind::MenuTitles | WindowKind::StatusItem { .. } => {
+                let Some(mgr) = &self.menu_bar else {
+                    tracing::warn!("no silica-menu-bar-v1: the menu bar is not shown");
+                    return;
+                };
+                let part = match &win.kind {
+                    WindowKind::StatusItem { system, order } => {
+                        StripPart::Item(mgr.get_status_item(
+                            &wl,
+                            if *system {
+                                silica_menu_bar_manager_v1::Placement::System
+                            } else {
+                                silica_menu_bar_manager_v1::Placement::App
+                            },
+                            *order,
+                            &self.qh,
+                            (),
+                        ))
+                    }
+                    _ => StripPart::Titles(mgr.get_menu_titles(&wl, &self.qh, ())),
+                };
+                Role::Strip(Strip {
+                    surface: wl.clone(),
+                    part,
+                })
             }
             WindowKind::Lock { .. } => {
                 if self.lock.is_none() {
@@ -1599,31 +1683,6 @@ impl Platform {
         }
     }
 
-    fn send_menu_bar(&mut self) {
-        let Some(mgr) = &self.menu_manager else {
-            return;
-        };
-        let menu = self
-            .menu
-            .get_or_insert_with(|| mgr.get_menu(&self.qh, ()))
-            .clone();
-        let model = crate::core::menu::bar_model(self.ui.menu_bar());
-        let Ok(json) = serde_json::to_vec(&model) else {
-            return;
-        };
-        if json.is_empty() || json.len() > silica_protocols::menu::MAX_MODEL_SIZE {
-            tracing::warn!("menu model of {} bytes not sent", json.len());
-            return;
-        }
-        match memfd_with(&json) {
-            Ok(fd) => {
-                use std::os::fd::AsFd;
-                menu.set_model(fd.as_fd(), json.len() as u32);
-            }
-            Err(e) => tracing::warn!("menu model: {e}"),
-        }
-    }
-
     fn apply_cursor(&self) {
         let (Some(dev), true) = (&self.cursor_device, self.pointer_focus.is_some()) else {
             return;
@@ -1761,28 +1820,6 @@ impl Platform {
             self.loop_handle.remove(t);
         }
     }
-}
-
-/// A sealed memfd holding `data`.
-fn memfd_with(data: &[u8]) -> std::io::Result<std::os::fd::OwnedFd> {
-    use rustix::fs::{MemfdFlags, SealFlags};
-    let fd = rustix::fs::memfd_create(
-        "appkit-menu",
-        MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING,
-    )?;
-    let mut written = 0;
-    while written < data.len() {
-        let n = rustix::io::write(&fd, data.get(written..).unwrap_or_default())?;
-        if n == 0 {
-            break;
-        }
-        written += n;
-    }
-    let _ = rustix::fs::fcntl_add_seals(
-        &fd,
-        SealFlags::SHRINK | SealFlags::GROW | SealFlags::WRITE | SealFlags::SEAL,
-    );
-    Ok(fd)
 }
 
 /// Sends the window's glass regions when they changed (double-buffered: applied by the next
@@ -2015,11 +2052,6 @@ impl Platform {
                     m.broadcast(topic, value);
                 }
             }
-            R::ActivateMenuItem(serial, id) => {
-                if m.version() >= 8 {
-                    m.activate_menu_item(serial, id);
-                }
-            }
             R::Thumbnail(identifier) => {
                 if m.version() < 2 || identifier.is_empty() {
                     return;
@@ -2106,24 +2138,6 @@ impl Dispatch<SilicaShellManagerV1, ()> for Platform {
                 identifier,
                 at: crate::geom::Point::new(x as f32, y as f32),
             },
-            W::AppMenu {
-                app_id,
-                serial,
-                fd,
-                size,
-            } => {
-                use std::io::Read;
-                let mut json = String::new();
-                let mut file = std::fs::File::from(fd);
-                let _ = (&mut file)
-                    .take(u64::from(size).min(16 << 20))
-                    .read_to_string(&mut json);
-                E::AppMenu {
-                    app_id,
-                    serial,
-                    json,
-                }
-            }
             _ => return,
         };
         state.ui.shell_event(e);
@@ -3012,20 +3026,57 @@ no_events!(
     SilicaGlassV1,
     SilicaWindowManagerV1,
     SilicaWindowV1,
-    SilicaMenuManagerV1
+    SilicaMenuBarManagerV1
 );
 
-impl Dispatch<SilicaMenuV1, ()> for Platform {
+impl Dispatch<SilicaMenuTitlesV1, ()> for Platform {
     fn event(
         state: &mut Self,
-        _: &SilicaMenuV1,
-        event: silica_menu_v1::Event,
+        titles: &SilicaMenuTitlesV1,
+        event: silica_menu_titles_v1::Event,
         _: &(),
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let silica_menu_v1::Event::Activated { id } = event {
-            state.ui.menu_activated(id);
+        if let silica_menu_titles_v1::Event::Configure {
+            serial,
+            width,
+            height,
+        } = event
+        {
+            titles.ack_configure(serial);
+            let Some(id) = state.ui.menu_titles_window() else {
+                return;
+            };
+            let size = state.ui.menu_titles_configured(width as f32, height as f32);
+            state.configured(id, Some(size));
+        }
+    }
+}
+
+impl Dispatch<SilicaStatusItemV1, ()> for Platform {
+    fn event(
+        state: &mut Self,
+        item: &SilicaStatusItemV1,
+        event: silica_status_item_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let silica_status_item_v1::Event::Configure { serial, height } = event {
+            item.ack_configure(serial);
+            let id = state.surfaces.iter().find_map(|s| match &s.role {
+                Role::Strip(Strip {
+                    part: StripPart::Item(i),
+                    ..
+                }) if i == item => Some(s.id),
+                _ => None,
+            });
+            let Some(id) = id else {
+                return;
+            };
+            let width = state.ui.window(id).map_or(1.0, |w| w.size.width);
+            state.configured(id, Some(Size::new(width, height as f32)));
         }
     }
 }

@@ -71,15 +71,6 @@ pub enum ShellEvent {
     },
     /// A window closed.
     ToplevelClosed(String),
-    /// An app's menu bar model (silica-menu-v1 JSON).
-    AppMenu {
-        /// The app.
-        app_id: String,
-        /// Serial to answer with ([`ShellRequest::ActivateMenuItem`]).
-        serial: u32,
-        /// The model.
-        json: String,
-    },
 }
 
 /// A request on Ossido's shell channel.
@@ -97,8 +88,6 @@ pub enum ShellRequest {
     Launch(String),
     /// Announces a state to the shell components.
     Broadcast(String, String),
-    /// Chooses an item of an app's menu.
-    ActivateMenuItem(u32, u32),
     /// Asks for the thumbnail of a minimized window (answered by [`ShellEvent::Thumbnail`]).
     Thumbnail(String),
 }

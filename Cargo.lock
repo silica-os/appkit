@@ -93,7 +93,6 @@ dependencies = [
  "png",
  "pollster",
  "raw-window-handle",
- "rustix",
  "serde",
  "serde_json",
  "silica-protocols",
@@ -1844,10 +1843,9 @@ name = "silica-protocols"
 version = "0.1.0"
 dependencies = [
  "bitflags",
- "serde",
- "serde_json",
  "wayland-backend",
  "wayland-client",
+ "wayland-protocols",
  "wayland-scanner",
  "wayland-server",
 ]
@@ -2289,6 +2287,7 @@ dependencies = [
  "wayland-backend",
  "wayland-client",
  "wayland-scanner",
+ "wayland-server",
 ]
 
 [[package]]
