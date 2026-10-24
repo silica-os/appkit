@@ -85,6 +85,47 @@ pub enum Cursor {
     NotAllowed,
 }
 
+/// An item of the system menu, under the Silica mark: the compositor runs it, as it acts on
+/// the whole session (`silica_menu_titles_v1.system_action`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SystemAction {
+    /// About This Computer: Settings, at About.
+    AboutThisComputer,
+    /// Settings…: the Settings app.
+    Settings,
+    /// Force Quit…: the Force Quit panel.
+    ForceQuit,
+    /// Sleep.
+    Sleep,
+    /// Restart…, once confirmed.
+    Restart,
+    /// Shut Down…, once confirmed.
+    ShutDown,
+    /// Lock Screen.
+    LockScreen,
+    /// Log Out…, once confirmed.
+    LogOut,
+}
+
+impl SystemAction {
+    /// Every action, in the protocol's order.
+    pub const ALL: [SystemAction; 8] = [
+        SystemAction::AboutThisComputer,
+        SystemAction::Settings,
+        SystemAction::ForceQuit,
+        SystemAction::Sleep,
+        SystemAction::Restart,
+        SystemAction::ShutDown,
+        SystemAction::LockScreen,
+        SystemAction::LogOut,
+    ];
+
+    /// Its bit in `silica_menu_titles_v1.system_actions`.
+    pub fn bit(self) -> u32 {
+        1 << self as u32
+    }
+}
+
 /// An item of the app menu that the compositor runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppAction {
@@ -155,6 +196,8 @@ pub enum Request {
     /// An item of the App or Window menu that the compositor runs, as it acts on other apps
     /// or on the stacking (`silica_menu_titles_v1.app_action`).
     AppAction(AppAction),
+    /// An item of the system menu (`silica_menu_titles_v1.system_action`).
+    SystemAction(SystemAction),
     /// Show or hide a status item in the menu bar.
     SetStatusItemVisible(WindowId, bool),
     /// Keep the screen awake while the window is shown (video, presentations).

@@ -3,13 +3,15 @@
 //! menus as its own popups, and draws its status items, each on a surface of its own. A hung
 //! app's titles stay on screen; its menus need the app.
 
+use crate::amalfi::alerts::{self, AlertButton, AlertSpec, ButtonKind};
 use crate::amalfi::menubar::{self, TitleKind};
 use crate::amalfi::menus;
 use crate::amalfi::statusbar::{self, ItemContent, StatusItem};
 use crate::core::event::{Event, Key, KeyEvent, Shortcut};
+use crate::core::layout::Proposal;
 use crate::core::menu::{MenuAction, MenuItem, PopupKind, id_at, rows_of};
 use crate::core::tree::ViewId;
-use crate::core::ui::{AppAction, Request, Ui};
+use crate::core::ui::{AppAction, Request, SystemAction, Ui};
 use crate::core::value::{Prop, Signal, Value};
 use crate::core::window::{WindowId, WindowKind};
 use crate::geom::{Rect, Size};
@@ -48,6 +50,8 @@ pub(crate) struct StripState {
     /// The compositor runs the App menu's Hide, Hide Others and Show All, and Bring All to
     /// Front (`silica_menu_titles_v1.app_action`).
     app_actions: bool,
+    /// The system menu's items the compositor runs now (`system_actions` bits).
+    system_actions: u32,
     titles: Option<Titles>,
     /// The room the compositor gives the titles.
     room: Option<f32>,
@@ -76,6 +80,15 @@ fn app_action(role: &str) -> Option<AppAction> {
     }
 }
 
+/// The ids of the system menu's items: out of the way of the app's.
+const SYSTEM_ITEM: u32 = 0xFFFF_FF00;
+
+fn system_item(id: u32) -> Option<SystemAction> {
+    SystemAction::ALL
+        .into_iter()
+        .find(|a| SYSTEM_ITEM + *a as u32 == id)
+}
+
 /// The standard items that act through their key equivalent in the key window.
 const EDIT_ROLES: [&str; 6] = ["undo", "redo", "cut", "copy", "paste", "select_all"];
 
@@ -92,6 +105,16 @@ impl Ui {
     /// [`Request::AppAction`].
     pub fn set_app_actions_available(&mut self, available: bool) {
         self.menus.strip.app_actions = available;
+    }
+
+    /// The system menu's items the compositor runs now, as `system_actions` bits: the Silica
+    /// mark is enabled while there is any.
+    pub fn set_system_actions_available(&mut self, bits: u32) {
+        let was = self.menus.strip.system_actions;
+        self.menus.strip.system_actions = bits;
+        if (was == 0) != (bits == 0) {
+            self.sync_menu_titles();
+        }
     }
 
     /// Sets what decides, right before a menu shows, which of its items are enabled.
@@ -142,9 +165,10 @@ impl Ui {
             return;
         }
         let (bar, views) = menubar::menu_bar(self, &titles);
-        // The system menu is not there yet (silica-os/appkit#25): the mark shows, disabled.
+        // The system menu needs a compositor that runs it.
         if let Some(mark) = views.first() {
-            let _ = self.set(*mark, Prop::Disabled, Value::Bool(true));
+            let off = self.menus.strip.system_actions == 0;
+            let _ = self.set(*mark, Prop::Disabled, Value::Bool(off));
         }
         for (i, v) in views.iter().enumerate() {
             self.connect(*v, Signal::Activated, move |ui, _, _| {
@@ -200,12 +224,12 @@ impl Ui {
         if self.is_disabled(view) {
             return;
         }
-        let Some(menu) = index
-            .checked_sub(1)
-            .and_then(|i| self.menus.bar.get(i))
-            .cloned()
-        else {
-            return;
+        let menu = match index.checked_sub(1) {
+            None => None,
+            Some(i) => match self.menus.bar.get(i) {
+                Some(m) => Some(m.clone()),
+                None => return,
+            },
         };
         let target = self
             .menus
@@ -215,7 +239,10 @@ impl Ui {
             .map(|o| o.target)
             .unwrap_or_else(|| self.key_window());
         self.close_title_menu();
-        let items = self.validated(&menu.items, target);
+        let items = match &menu {
+            Some(m) => self.validated(&m.items, target),
+            None => self.system_menu(),
+        };
         let (m, _) = menus::menu(self, &rows_of(&items));
         let anchor = self.tree.window_rect(view);
         let popup = menus::present(self, window, anchor, m, menus::Placement::MenuBar);
@@ -233,8 +260,10 @@ impl Ui {
             };
             let chosen = id_at(&items, &path);
             ui.close_title_menu();
-            if let Some(id) = chosen {
-                ui.choose_bar_item(id, target);
+            match chosen {
+                Some(id) if index == 0 => ui.choose_system_item(id),
+                Some(id) => ui.choose_bar_item(id, target),
+                None => {}
             }
         });
         self.connect(m, Signal::CloseRequested, |ui, _, _| ui.close_title_menu());
@@ -376,6 +405,110 @@ impl Ui {
             };
         let validator = self.menus.strip.validator.clone();
         acts && validator.is_none_or(|v| v(self, item))
+    }
+
+    /// The system menu, under the Silica mark: its items work while the compositor runs them.
+    /// The key equivalents are the compositor's shortcuts.
+    pub(crate) fn system_menu(&self) -> Vec<MenuItem> {
+        let bits = self.menus.strip.system_actions;
+        let item = |action: SystemAction, title: &str| {
+            let mut it = MenuItem::new(title).enabled(bits & action.bit() != 0);
+            it.id = SYSTEM_ITEM + action as u32;
+            it
+        };
+        let user = std::env::var("USER").unwrap_or_default();
+        let log_out = if user.is_empty() {
+            "Log Out…".to_owned()
+        } else {
+            format!("Log Out {user}…")
+        };
+        vec![
+            item(SystemAction::AboutThisComputer, "About This Computer"),
+            MenuItem::separator(),
+            item(SystemAction::Settings, "Settings…"),
+            // Silica has no app store and no recent items yet (silica-os/appkit#29).
+            MenuItem::new("App Store…").enabled(false),
+            MenuItem::separator(),
+            MenuItem::submenu("Recent Items", Vec::new()).enabled(false),
+            MenuItem::separator(),
+            item(SystemAction::ForceQuit, "Force Quit…").shortcut("cmd+alt+escape"),
+            MenuItem::separator(),
+            item(SystemAction::Sleep, "Sleep"),
+            item(SystemAction::Restart, "Restart…"),
+            item(SystemAction::ShutDown, "Shut Down…"),
+            MenuItem::separator(),
+            item(SystemAction::LockScreen, "Lock Screen").shortcut("ctrl+cmd+q"),
+            item(SystemAction::LogOut, &log_out).shortcut("shift+cmd+q"),
+        ]
+    }
+
+    /// An item of the system menu was chosen: Restart, Shut Down and Log Out ask first.
+    pub(crate) fn choose_system_item(&mut self, id: u32) {
+        let Some(action) = system_item(id) else {
+            return;
+        };
+        if self.menus.strip.system_actions & action.bit() == 0 {
+            return;
+        }
+        match action {
+            SystemAction::Restart | SystemAction::ShutDown | SystemAction::LogOut => {
+                self.confirm_system_action(action);
+            }
+            _ => self.request(Request::SystemAction(action)),
+        }
+        self.flush();
+    }
+
+    /// The alert that confirms Restart, Shut Down or Log Out, on its own in the screen's
+    /// centre.
+    fn confirm_system_action(&mut self, action: SystemAction) {
+        let (title, message, button) = match action {
+            SystemAction::Restart => (
+                "Restart now?",
+                "All apps quit and the computer restarts.",
+                "Restart",
+            ),
+            SystemAction::ShutDown => (
+                "Shut down now?",
+                "All apps quit and the computer turns off.",
+                "Shut Down",
+            ),
+            _ => (
+                "Log out now?",
+                "All apps quit and the session ends.",
+                "Log Out",
+            ),
+        };
+        let a = alerts::alert(
+            self,
+            AlertSpec {
+                title: title.to_owned(),
+                message: Some(message.to_owned()),
+                buttons: vec![
+                    AlertButton::new(button, ButtonKind::Primary),
+                    AlertButton::new("Cancel", ButtonKind::Secondary),
+                ],
+                ..AlertSpec::default()
+            },
+        );
+        let size = self.measure(a, Proposal::new(None, None));
+        let w = self.create_window(WindowKind::Panel, size);
+        if let Some(win) = self.window_mut(w) {
+            // The alert draws its own panel, with no title bar.
+            win.opaque = false;
+            win.decorated = false;
+        }
+        self.set_content(w, a);
+        self.show_window(w);
+        self.connect(a, Signal::Activated, move |ui, _, v| {
+            if v.as_int() == Some(0) {
+                ui.request(Request::SystemAction(action));
+            }
+            ui.dismiss_window(w);
+        });
+        self.connect(a, Signal::CloseRequested, move |ui, _, _| {
+            ui.dismiss_window(w)
+        });
     }
 
     /// The bar item `id` was chosen (from its menu or by its key equivalent).
@@ -634,7 +767,7 @@ mod tests {
         assert_eq!(ui.window(window).unwrap().kind, WindowKind::MenuTitles);
         let views = titles(&ui);
         assert_eq!(views.len(), 4);
-        // The mark waits for the system menu (#25).
+        // The mark waits for a compositor that runs the system menu.
         assert!(ui.is_disabled(views[0]));
         // 8 before the mark (36), the bold name and the menus, each its text on the grid + 16.
         let full = ui.window(window).unwrap().size;
@@ -801,6 +934,57 @@ mod tests {
         // A window of fixed size cannot.
         ui.window_mut(win).unwrap().resizable = false;
         assert!(!enabled(&mut ui, &items, "fullscreen"));
+    }
+
+    #[test]
+    fn the_mark_opens_the_system_menu_and_asks_before_restarting() {
+        let mut ui = Ui::new_headless();
+        ui.set_menu_bar(menus(&Rc::new(Cell::new(0))));
+        ui.set_menu_bar_available(true);
+        let bits = SystemAction::Sleep.bit() | SystemAction::Restart.bit();
+        ui.set_system_actions_available(bits);
+        assert!(!ui.is_disabled(titles(&ui)[0]));
+        ui.open_title_menu(0);
+        assert_eq!(ui.open_title(), Some(0));
+        let menu = ui.system_menu();
+        let on = |a: SystemAction| {
+            menu.iter()
+                .find(|i| i.id == SYSTEM_ITEM + a as u32)
+                .is_some_and(|i| i.enabled)
+        };
+        assert!(on(SystemAction::Sleep) && on(SystemAction::Restart));
+        assert!(!on(SystemAction::LockScreen) && !on(SystemAction::ShutDown));
+        // Sleep goes at once; what is not available does nothing.
+        ui.take_requests();
+        ui.choose_system_item(SYSTEM_ITEM + SystemAction::Sleep as u32);
+        ui.choose_system_item(SYSTEM_ITEM + SystemAction::ShutDown as u32);
+        assert_eq!(
+            ui.take_requests()
+                .into_iter()
+                .filter(|r| matches!(r, Request::SystemAction(_)))
+                .collect::<Vec<_>>(),
+            vec![Request::SystemAction(SystemAction::Sleep)]
+        );
+        // Restart asks first, in an alert of its own.
+        let before = ui.windows().count();
+        ui.choose_system_item(SYSTEM_ITEM + SystemAction::Restart as u32);
+        let w = ui
+            .windows()
+            .find(|w| w.kind == WindowKind::Panel && !w.decorated)
+            .map(|w| (w.id, w.root));
+        let (_, root) = w.expect("the confirmation");
+        assert_eq!(ui.windows().count(), before + 1);
+        assert!(
+            !ui.take_requests()
+                .contains(&Request::SystemAction(SystemAction::Restart))
+        );
+        let alert = ui.tree.children(root).first().copied().unwrap_or(root);
+        ui.emit(alert, Signal::Activated, Value::Int(0));
+        ui.flush();
+        assert!(
+            ui.take_requests()
+                .contains(&Request::SystemAction(SystemAction::Restart))
+        );
     }
 
     #[test]

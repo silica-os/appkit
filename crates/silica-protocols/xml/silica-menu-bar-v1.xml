@@ -23,7 +23,7 @@
     is that of their buffer, and they get the strip's height in configure.
   </description>
 
-  <interface name="silica_menu_bar_manager_v1" version="2">
+  <interface name="silica_menu_bar_manager_v1" version="3">
     <description summary="gives surfaces a place in the menu bar"/>
 
     <request name="destroy" type="destructor">
@@ -61,7 +61,7 @@
     </request>
   </interface>
 
-  <interface name="silica_menu_titles_v1" version="2">
+  <interface name="silica_menu_titles_v1" version="3">
     <description summary="an app's menu titles in the menu bar"/>
 
     <request name="destroy" type="destructor">
@@ -112,6 +112,35 @@
         otherwise the request is ignored.
       </description>
       <arg name="action" type="uint" enum="app_action"/>
+    </request>
+
+    <enum name="system_action" since="3">
+      <entry name="about_this_computer" value="0" summary="About This Computer: Settings, at About"/>
+      <entry name="settings" value="1" summary="Settings…: the Settings app"/>
+      <entry name="force_quit" value="2" summary="Force Quit…: the Force Quit panel"/>
+      <entry name="sleep" value="3" summary="Sleep: the computer sleeps"/>
+      <entry name="restart" value="4" summary="Restart…: the computer restarts"/>
+      <entry name="shut_down" value="5" summary="Shut Down…: the computer turns off"/>
+      <entry name="lock_screen" value="6" summary="Lock Screen: the session locks"/>
+      <entry name="log_out" value="7" summary="Log Out…: the session ends"/>
+    </enum>
+
+    <event name="system_actions" since="3">
+      <description summary="the items of the system menu that work now">
+        A bit per system_action (1 shifted left by its value). Sent on creation and
+        whenever the set changes; the items whose bit is not set show disabled.
+      </description>
+      <arg name="available" type="uint" summary="the available actions, as bits"/>
+    </event>
+
+    <request name="system_action" since="3">
+      <description summary="run an item of the system menu">
+        The client draws the system menu under the Silica mark; the compositor runs its
+        items, which act on the whole session. Restart, Shut Down and Log Out run at once:
+        the client asks for a confirmation first. Only while the titles are shown and the
+        action is available; otherwise the request is ignored.
+      </description>
+      <arg name="action" type="uint" enum="system_action"/>
     </request>
   </interface>
 

@@ -100,7 +100,7 @@ use wayland_protocols::ext::foreign_toplevel_list::v1::client::{
 use crate::core::display::TipSide;
 use crate::core::event::{Button, Key, KeyEvent, Mods, Phase};
 use crate::core::ui::GlassRegion;
-use crate::core::ui::{AppAction, Cursor, Request, Ui};
+use crate::core::ui::{AppAction, Cursor, Request, SystemAction, Ui};
 use crate::core::window::{
     Edges, KeyboardMode, Layer, PopupPlacement, PopupSide, WindowId, WindowKind,
 };
@@ -720,7 +720,7 @@ impl Platform {
                 .filter(|t| !t.is_empty()),
             glass_manager,
             window_manager: globals.bind(&qh, 1..=4, ()).ok(),
-            menu_bar: globals.bind(&qh, 1..=2, ()).ok(),
+            menu_bar: globals.bind(&qh, 1..=3, ()).ok(),
             shell: None,
             toplevels: None,
             toplevel_info: std::collections::HashMap::new(),
@@ -1024,6 +1024,27 @@ impl Platform {
                         AppAction::BringAllToFront => {
                             silica_menu_titles_v1::AppAction::BringAllToFront
                         }
+                    });
+                }
+            }
+            Request::SystemAction(action) => {
+                let titles = self.ui.menu_titles_window().and_then(|id| self.surface(id));
+                if let Some(Role::Strip(Strip {
+                    part: StripPart::Titles(t),
+                    ..
+                })) = titles.map(|s| &s.role)
+                    && t.version() >= 3
+                {
+                    use silica_menu_titles_v1::SystemAction as S;
+                    t.system_action(match action {
+                        SystemAction::AboutThisComputer => S::AboutThisComputer,
+                        SystemAction::Settings => S::Settings,
+                        SystemAction::ForceQuit => S::ForceQuit,
+                        SystemAction::Sleep => S::Sleep,
+                        SystemAction::Restart => S::Restart,
+                        SystemAction::ShutDown => S::ShutDown,
+                        SystemAction::LockScreen => S::LockScreen,
+                        SystemAction::LogOut => S::LogOut,
                     });
                 }
             }
@@ -3089,18 +3110,23 @@ impl Dispatch<SilicaMenuTitlesV1, ()> for Platform {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let silica_menu_titles_v1::Event::Configure {
-            serial,
-            width,
-            height,
-        } = event
-        {
-            titles.ack_configure(serial);
-            let Some(id) = state.ui.menu_titles_window() else {
-                return;
-            };
-            let size = state.ui.menu_titles_configured(width as f32, height as f32);
-            state.configured(id, Some(size));
+        match event {
+            silica_menu_titles_v1::Event::Configure {
+                serial,
+                width,
+                height,
+            } => {
+                titles.ack_configure(serial);
+                let Some(id) = state.ui.menu_titles_window() else {
+                    return;
+                };
+                let size = state.ui.menu_titles_configured(width as f32, height as f32);
+                state.configured(id, Some(size));
+            }
+            silica_menu_titles_v1::Event::SystemActions { available } => {
+                state.ui.set_system_actions_available(available);
+            }
+            _ => {}
         }
     }
 }
