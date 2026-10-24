@@ -2331,7 +2331,7 @@ impl Ui {
         }
         let theme_root = self.theme_of(root);
         self.frame_counter += 1;
-        self.record_subtree(root, Point::ZERO, theme_root, &mut damage);
+        self.record_subtree(root, Transform::IDENTITY, theme_root, &mut damage);
         let size = self.window(window).map(|w| w.size).unwrap_or_default();
         let damage = damage.intersect(Rect::from_size(size));
         if let Some(w) = self.window_mut(window) {
@@ -2347,7 +2347,7 @@ impl Ui {
     fn record_subtree(
         &mut self,
         id: ViewId,
-        parent_origin: Point,
+        parent: Transform,
         parent_theme: Theme,
         damage: &mut Rect,
     ) -> bool {
@@ -2363,7 +2363,22 @@ impl Ui {
             }
             return was;
         }
-        let origin = parent_origin + n.frame.origin() + n.modifiers.offset;
+        // Where the view is presented, animation included, exactly as `paint_view` places it:
+        // damage covers what is on screen, not the layout frame the animation heads to.
+        let (aoff, ascale, pivot) = n.anim.as_ref().map_or((Point::ZERO, 1.0, None), |a| {
+            (a.offset.get(), a.scale.get(), a.origin)
+        });
+        let at = n.frame.origin() + n.modifiers.offset + aoff;
+        let mut placed = Transform::translate(at.x, at.y);
+        let s = n.modifiers.scale * ascale;
+        if (s - 1.0).abs() > 1e-6 {
+            let c = pivot.unwrap_or(Point::new(n.frame.width / 2.0, n.frame.height / 2.0));
+            placed = Transform::translate(-c.x, -c.y)
+                .then(Transform::scale(s, s))
+                .then(Transform::translate(c.x, c.y))
+                .then(placed);
+        }
+        let to_window = placed.then(parent);
         let mut theme = match n.dark_override {
             Some(d) if d != parent_theme.dark() => {
                 let mut a = parent_theme.appearance;
@@ -2394,17 +2409,7 @@ impl Ui {
                 Rect::ZERO
             },
         );
-        let s = n.modifiers.scale;
-        let scaled = if (s - 1.0).abs() > 1e-6 {
-            let c = Point::new(n.frame.width / 2.0, n.frame.height / 2.0);
-            Transform::translate(-c.x, -c.y)
-                .then(Transform::scale(s, s))
-                .then(Transform::translate(c.x, c.y))
-                .map_rect(local)
-        } else {
-            local
-        };
-        let now_bounds = scaled.translate(origin);
+        let now_bounds = to_window.map_rect(local);
         let old = n.painted_bounds;
         if needs_paint || old != now_bounds {
             *damage = damage.union(old).union(now_bounds);
@@ -2462,7 +2467,7 @@ impl Ui {
         let mut i = 0;
         while let Some(c) = self.tree.children(id).get(i).copied() {
             i += 1;
-            if self.record_subtree(c, origin, theme, damage) {
+            if self.record_subtree(c, to_window, theme, damage) {
                 content_changed = true;
             }
             if let Some(cn) = self.tree.get(c)
@@ -3134,6 +3139,46 @@ mod tests {
         ui.set(a, Prop::Hidden, Value::Bool(true)).unwrap();
         let d = ui.prepare_frame(win);
         assert!(d.contains(Point::new(60.0, 45.0)));
+    }
+
+    #[test]
+    fn an_animated_move_damages_where_the_view_is_presented() {
+        let (mut ui, win, a, _b, _count) = setup();
+        let present = |ui: &mut Ui, dx: f32| {
+            if let Some(n) = ui.tree.get_mut(a) {
+                n.anim
+                    .get_or_insert_with(Box::default)
+                    .offset
+                    .jump(Point::new(dx, 0.0));
+            }
+            ui.prepare_frame(win)
+        };
+        // Laid out at (55, 40), presented 100 points to the right.
+        let d = present(&mut ui, 100.0);
+        assert!(d.contains(Point::new(160.0, 45.0)), "{d:?}");
+        // The next step clears the old presentation and draws the new one.
+        let d = present(&mut ui, 60.0);
+        assert!(d.contains(Point::new(190.0, 45.0)), "{d:?}");
+        assert!(d.contains(Point::new(120.0, 45.0)), "{d:?}");
+        // Back home: the last presented rect is cleared too.
+        let d = present(&mut ui, 0.0);
+        assert!(d.contains(Point::new(150.0, 45.0)), "{d:?}");
+        assert!(d.contains(Point::new(60.0, 45.0)), "{d:?}");
+    }
+
+    #[test]
+    fn a_scaled_parent_damages_its_children_where_they_are_presented() {
+        let (mut ui, win, a, _b, _count) = setup();
+        let row = ui.tree.parent(a).unwrap_or(a);
+        if let Some(n) = ui.tree.get_mut(row) {
+            let anim = n.anim.get_or_insert_with(Box::default);
+            anim.scale.jump(2.0);
+            anim.origin = Some(Point::ZERO);
+        }
+        let d = ui.prepare_frame(win);
+        // The row is laid out at (55, 40); scaled 2× about its top-left corner, `a` (at its
+        // origin, 40×20) covers (55, 40)–(135, 80).
+        assert!(d.contains(Point::new(130.0, 75.0)), "{d:?}");
     }
 
     #[test]
