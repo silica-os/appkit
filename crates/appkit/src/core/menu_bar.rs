@@ -321,7 +321,7 @@ impl Ui {
     /// `items` as they show now: an item is enabled when it is, when it does something (an
     /// action, a submenu, a standard role AppKit runs) and when the validator agrees; without
     /// that it shows disabled, as AppKit's autoenabling menus do (the standard items AppKit
-    /// does not run yet, About and Services: silica-os/appkit#26).
+    /// does not run yet, Services: silica-os/appkit#26).
     pub(crate) fn validated(
         &mut self,
         items: &[MenuItem],
@@ -357,6 +357,7 @@ impl Ui {
             || item.submenu.is_some()
             || match item.role.as_deref() {
                 Some("close" | "minimize") => target.is_some(),
+                Some("about") => true,
                 // A window that can be resized can fill the screen.
                 Some("fullscreen") => target
                     .and_then(|w| self.window(w))
@@ -389,6 +390,8 @@ impl Ui {
             a(self);
         } else if let Some(action) = item.role.as_deref().and_then(app_action) {
             self.request(Request::AppAction(action));
+        } else if item.role.as_deref() == Some("about") {
+            self.show_about();
         } else if let Some(w) = target {
             match item.role.as_deref() {
                 Some("close") => self.request_window_close(w),

@@ -281,6 +281,8 @@ pub struct Ui {
     menu_shortcuts: Vec<(crate::core::event::Shortcut, u32)>,
     pub(crate) menus: crate::core::menu::MenuState,
     pub(crate) app_info: crate::core::app::AppInfo,
+    /// The open About panel (`show_about`).
+    pub(crate) about: Option<WindowId>,
     pub(crate) app_handler: Option<crate::core::app::AppHandler>,
     /// The tooltip presenter.
     pub(crate) tooltips: crate::amalfi::tooltips::Presenter,
@@ -339,6 +341,7 @@ impl Ui {
             menu_shortcuts: Vec::new(),
             menus: crate::core::menu::MenuState::default(),
             app_info: crate::core::app::AppInfo::default(),
+            about: None,
             app_handler: None,
             tooltips: crate::amalfi::tooltips::Presenter::default(),
             state_dir: None,

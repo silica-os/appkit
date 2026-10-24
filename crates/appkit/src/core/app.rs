@@ -18,6 +18,8 @@ pub struct AppInfo {
     pub copyright: String,
     /// The app has a Quit item (a file manager may have none).
     pub quit_enabled: bool,
+    /// The icon file the About panel shows (empty: the app id's icon in the hicolor theme).
+    pub icon: String,
 }
 
 /// A lifecycle event.

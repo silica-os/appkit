@@ -641,6 +641,7 @@ pub fn run_with(
         version: String::new(),
         copyright: String::new(),
         quit_enabled: true,
+        icon: String::new(),
     });
     stage("platform");
     platform.a11y = Some(crate::platform::a11y::Accessibility::new(ping));
