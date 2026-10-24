@@ -18,7 +18,7 @@ use crate::core::layout::{Alignment, Axis, Proposal};
 use crate::core::tree::{NodeFlags, Tree, ViewId};
 use crate::core::value::{Prop, Signal, Value};
 use crate::core::widget::{Empty, EventCx, FocusKind, Interaction, PaintCx, PropChange, Widget};
-use crate::core::window::{Window, WindowId, WindowKind};
+use crate::core::window::{PopupPlacement, Window, WindowId, WindowKind};
 use crate::geom::{Point, Rect, Size, Transform};
 use crate::shape::Shape;
 use crate::style::{PaintOptions, Style};
@@ -1111,6 +1111,33 @@ impl Ui {
             self.request_paint_subtree(root);
         }
         self.request_layout(root);
+    }
+
+    /// Where the compositor put a popup (its frame in the parent's coordinates, from the
+    /// popup's configure): the popup lays out again from there (arrow side, scrolling).
+    pub fn popup_placed(&mut self, window: WindowId, frame: Rect) {
+        let Some(w) = self.window_mut(window) else {
+            return;
+        };
+        let WindowKind::Popup { anchor, .. } = &mut w.kind else {
+            return;
+        };
+        if *anchor == frame {
+            return;
+        }
+        *anchor = frame;
+        w.needs_layout = true;
+        w.damage = Rect::from_size(w.size);
+        let root = w.root;
+        self.request_layout(root);
+    }
+
+    /// The final frame and placement of the popup `view` is in, if it is in one.
+    pub fn popup_frame_of(&self, view: ViewId) -> Option<(Rect, PopupPlacement)> {
+        match self.window(self.window_of(view)?)?.kind {
+            WindowKind::Popup { anchor, place, .. } => Some((anchor, place)),
+            _ => None,
+        }
     }
 
     /// Sets the minimum and maximum size.

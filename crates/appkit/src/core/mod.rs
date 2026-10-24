@@ -28,4 +28,4 @@ pub use tree::{NodeFlags, ViewId};
 pub use ui::{Cursor, Error, Request, Ui};
 pub use value::{Prop, Signal, Value};
 pub use widget::{Empty, EventCx, FocusKind, Interaction, LayoutCx, PaintCx, PropChange, Widget};
-pub use window::{Window, WindowId, WindowKind};
+pub use window::{PopupPlacement, PopupSide, Window, WindowId, WindowKind};

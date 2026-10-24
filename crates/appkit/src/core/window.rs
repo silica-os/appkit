@@ -60,6 +60,101 @@ pub enum KeyboardMode {
     OnDemand,
 }
 
+/// The side of its target a popup goes on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PopupSide {
+    /// Under it (menus, popovers, tooltips).
+    #[default]
+    Below,
+    /// Over it.
+    Above,
+    /// Trailing (submenus).
+    After,
+    /// Leading.
+    Before,
+    /// On it (a pop-up button's menu, its selected item over the button).
+    Over,
+}
+
+/// How a popup hangs off its target. A Wayland client does not know where it is on screen:
+/// the compositor keeps the popup on screen with these adjustments (`xdg_positioner`), as
+/// macOS AppKit does itself, and the popup lays out from where it landed.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct PopupPlacement {
+    /// What it hangs off (a control, a menu title, the pointer), in the parent's coordinates.
+    pub target: Rect,
+    /// The side of `target` it goes on.
+    pub side: PopupSide,
+    /// May move to the opposite side across (context menus).
+    pub flip_x: bool,
+    /// May move to the opposite side down (popovers, context menus).
+    pub flip_y: bool,
+    /// May slide across along the screen's edge.
+    pub slide_x: bool,
+    /// May slide down or up along the screen's edge.
+    pub slide_y: bool,
+    /// May get shorter (long menus, which then scroll).
+    pub resize: bool,
+}
+
+impl PopupPlacement {
+    /// A menu (from the menu bar, a pop-up button, a pull-down): slid across, never down,
+    /// and shortened to fit, keeping its rows aligned by scrolling (docs/spec/menus.md).
+    pub fn menu(target: Rect, side: PopupSide) -> Self {
+        Self {
+            target,
+            side,
+            flip_x: false,
+            flip_y: false,
+            slide_x: true,
+            slide_y: false,
+            resize: true,
+        }
+    }
+
+    /// A context menu at `point`: down and to the right of it; past the right edge it opens
+    /// to the left, past the bottom it slides up (docs/spec/menus.md).
+    pub fn context(point: Point) -> Self {
+        Self {
+            target: Rect::from_origin_size(point, Size::ZERO),
+            side: PopupSide::Over,
+            flip_x: true,
+            flip_y: false,
+            slide_x: false,
+            slide_y: true,
+            resize: true,
+        }
+    }
+
+    /// A popover, submenu or tooltip: flipped to the other side when it does not fit, then
+    /// slid.
+    pub fn flipping(target: Rect, side: PopupSide, resize: bool) -> Self {
+        let across = matches!(side, PopupSide::After | PopupSide::Before);
+        Self {
+            target,
+            side,
+            flip_x: across,
+            flip_y: !across && side != PopupSide::Over,
+            slide_x: !across,
+            slide_y: across,
+            resize,
+        }
+    }
+
+    /// The side `frame` ended up on: flipped by the compositor, or the asked one.
+    pub fn landed(&self, frame: Rect) -> PopupSide {
+        let t = self.target;
+        let eps = 0.5;
+        match self.side {
+            PopupSide::Below if frame.bottom() <= t.y + eps => PopupSide::Above,
+            PopupSide::Above if frame.y >= t.bottom() - eps => PopupSide::Below,
+            PopupSide::After if frame.right() <= t.x + eps => PopupSide::Before,
+            PopupSide::Before if frame.x >= t.right() - eps => PopupSide::After,
+            s => s,
+        }
+    }
+}
+
 /// What kind of surface a window is.
 #[derive(Debug, Clone, PartialEq)]
 pub enum WindowKind {
@@ -77,11 +172,13 @@ pub enum WindowKind {
     Popup {
         /// The parent.
         parent: WindowId,
-        /// Where the popup goes: its own frame in the parent's coordinates (placed by the
-        /// widget that opens it, arrow and clamping included).
+        /// Where the popup goes: its own frame in the parent's coordinates, as the widget that
+        /// opens it wants it; once the compositor has kept it on screen, where it landed.
         anchor: Rect,
         /// Takes a grab (closes on a click outside).
         grab: bool,
+        /// What it hangs off and how the compositor may move it (`xdg_positioner`).
+        place: PopupPlacement,
     },
     /// A shell surface (wlr-layer-shell).
     Shell {

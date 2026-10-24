@@ -258,6 +258,11 @@ impl LayoutCx<'_> {
         self.ui.tree.get(child).map(|n| n.kind()) == Some("Spacer")
     }
 
+    /// The frame the popup the view is in landed at and how it hangs off its target.
+    pub fn popup_frame(&self) -> Option<(Rect, crate::core::PopupPlacement)> {
+        self.ui.popup_frame_of(self.id)
+    }
+
     /// The theme of the view.
     pub fn theme(&self) -> Theme {
         self.ui.theme_of(self.id)

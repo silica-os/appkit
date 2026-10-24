@@ -10,7 +10,7 @@ use crate::core::tree::ViewId;
 use crate::core::ui::Ui;
 use crate::core::value::{Prop, Signal, Value};
 use crate::core::widget::{EventCx, FocusKind, Interaction, LayoutCx, PaintCx, PropChange, Widget};
-use crate::core::window::{WindowId, WindowKind};
+use crate::core::window::{PopupPlacement, PopupSide, WindowId, WindowKind};
 use crate::geom::{Point, Rect, Size};
 use crate::shape::Shape;
 use crate::style::Style;
@@ -423,6 +423,18 @@ pub struct Menu {
     sub: Option<(WindowId, usize)>,
     /// This menu is a cascade: Left closes it.
     nested: bool,
+    /// How far the rows are scrolled up: a menu the compositor shortened to fit on screen
+    /// scrolls, with a strip with an arrow at each end that has more (docs/spec/menus.md).
+    scroll: f32,
+    /// The most it scrolls.
+    max_scroll: f32,
+    /// The arrow strip the pointer rests on: -1 the top one, 1 the bottom one.
+    scrolling: i8,
+    /// Where it asked to go (its popup's frame in the parent): a menu shortened from the top
+    /// scrolls by what was cut, so its rows stay where they were asked to be.
+    asked: Option<Rect>,
+    /// The frame its popup landed at, when it last laid out.
+    landed: Option<Rect>,
 }
 
 impl Menu {
@@ -447,7 +459,7 @@ impl Menu {
     fn row_at(&self, cx: &EventCx<'_>, p: Point) -> Option<usize> {
         let id = cx.id();
         let frame = cx.size();
-        if p.x < 0.0 || p.x > frame.width || p.y < 0.0 {
+        if p.x < 0.0 || p.x > frame.width || p.y < 0.0 || self.strip_at(frame, p) != 0 {
             return None;
         }
         let kids = cx.ui.tree.children(id);
@@ -457,6 +469,30 @@ impl Menu {
                 .get(*c)
                 .is_some_and(|n| n.frame.y <= p.y && p.y < n.frame.bottom())
         })
+    }
+
+    /// The arrow strip at `p`: -1 the top one, 1 the bottom one, 0 none.
+    fn strip_at(&self, size: Size, p: Point) -> i8 {
+        let strip = metrics::ITEM_HEIGHT;
+        if self.scroll > 0.0 && p.y < strip {
+            -1
+        } else if self.scroll < self.max_scroll && p.y >= size.height - strip {
+            1
+        } else {
+            0
+        }
+    }
+
+    /// Scrolls by `dy`; returns whether it moved.
+    fn scroll_by(&mut self, cx: &mut EventCx<'_>, dy: f32) -> bool {
+        let s = (self.scroll + dy).clamp(0.0, self.max_scroll);
+        if s == self.scroll {
+            return false;
+        }
+        self.scroll = s;
+        cx.request_layout();
+        cx.request_paint();
+        true
     }
 
     fn move_highlight(&mut self, cx: &mut EventCx<'_>, step: isize) {
@@ -577,6 +613,7 @@ impl Menu {
                 parent,
                 anchor: Rect::from_origin_size(at, size),
                 grab: false,
+                place: PopupPlacement::flipping(frame, PopupSide::After, true),
             },
             size,
         );
@@ -622,18 +659,81 @@ impl Widget for Menu {
             Some(w) if w.is_finite() => w,
             _ => width + 2.0 * pad,
         };
-        Size::new(w, height + 2.0 * pad)
+        let mut h = height + 2.0 * pad;
+        // A popup the compositor shortened to fit on screen: the menu scrolls in it.
+        if let Some(ph) = p.height.filter(|h| h.is_finite())
+            && cx.popup_frame().is_some()
+        {
+            h = h.min(ph);
+        }
+        Size::new(w, h)
     }
 
     fn place(&mut self, cx: &mut LayoutCx<'_>, size: Size) {
         let pad = metrics::PADDING;
         let w = (size.width - 2.0 * pad).max(0.0);
-        let mut y = pad;
-        for c in cx.children() {
-            let s = cx.measure(c, Proposal::new(Some(w), None));
-            cx.place(c, Rect::new(pad, y, w, s.height));
-            y += s.height;
+        let kids = cx.children();
+        let heights: Vec<f32> = kids
+            .iter()
+            .map(|c| cx.measure(*c, Proposal::new(Some(w), None)).height)
+            .collect();
+        let natural = heights.iter().sum::<f32>() + 2.0 * pad;
+        self.max_scroll = (natural - size.height).max(0.0);
+        if let Some((frame, _)) = cx.popup_frame()
+            && self.landed != Some(frame)
+        {
+            self.landed = Some(frame);
+            self.scroll = self.asked.map_or(0.0, |a| frame.y - a.y);
         }
+        self.scroll = self.scroll.clamp(0.0, self.max_scroll);
+        // Rows under an arrow strip are out of view.
+        let strip = metrics::ITEM_HEIGHT;
+        let top = if self.scroll > 0.0 { strip } else { 0.0 };
+        let bottom = if self.scroll < self.max_scroll {
+            size.height - strip
+        } else {
+            size.height
+        };
+        let mut y = pad - self.scroll;
+        for (c, h) in kids.into_iter().zip(heights) {
+            let r = Rect::new(pad, y, w, h);
+            let shown = self.max_scroll == 0.0 || (r.y >= top - 0.5 && r.bottom() <= bottom + 0.5);
+            cx.place(
+                c,
+                if shown {
+                    r
+                } else {
+                    Rect::new(pad, -1.0e4, w, h)
+                },
+            );
+            y += h;
+        }
+    }
+
+    fn paint_over(&mut self, cx: &mut PaintCx<'_>) {
+        if self.max_scroll == 0.0 {
+            return;
+        }
+        let b = cx.bounds();
+        let colour = cx.theme().colors.text_secondary;
+        let strip = metrics::ITEM_HEIGHT;
+        let c = metrics::CHEVRON;
+        let mut arrow = |y: f32, name: &str, symbol: &str| {
+            let r = Rect::new(b.x + (b.width - c) / 2.0, y + (strip - c) / 2.0, c, c);
+            cx.rec.glyph(name, r, symbol, 400, colour);
+        };
+        if self.scroll > 0.0 {
+            arrow(b.y, "Scroll Up", "chevron-up");
+        }
+        if self.scroll < self.max_scroll {
+            arrow(b.bottom() - strip, "Scroll Down", "chevron-down");
+        }
+    }
+
+    fn tick(&mut self, cx: &mut EventCx<'_>, dt: f32) -> bool {
+        // Not measured: a row every 50 ms while the pointer rests on an arrow.
+        let speed = metrics::ITEM_HEIGHT / 0.05;
+        self.scrolling != 0 && self.scroll_by(cx, f32::from(self.scrolling) * speed * dt)
     }
 
     fn paint(&mut self, cx: &mut PaintCx<'_>) {
@@ -652,6 +752,13 @@ impl Widget for Menu {
         let local = |p: &Point| Point::new(p.x - origin.x, p.y - origin.y);
         match event {
             Event::PointerMove { pos, .. } => {
+                let strip = self.strip_at(cx.size(), local(pos));
+                if strip != self.scrolling {
+                    self.scrolling = strip;
+                    if strip != 0 {
+                        cx.animate();
+                    }
+                }
                 let id = cx.id();
                 let kids = cx.ui().tree.children(id).to_vec();
                 let rows = Menu::rows(&kids, cx.ui());
@@ -669,7 +776,12 @@ impl Widget for Menu {
                 }
                 Handled::Yes
             }
+            Event::Scroll { dy, .. } if self.max_scroll > 0.0 => {
+                self.scroll_by(cx, *dy);
+                Handled::Yes
+            }
             Event::PointerLeave => {
+                self.scrolling = 0;
                 // The pointer in the cascade keeps its row lit.
                 if self.sub.is_none() && self.highlight.take().is_some() {
                     cx.request_paint();
@@ -843,8 +955,8 @@ const SUB_MIN_WIDTH: f32 = 180.0;
 /// The narrowest menu of a pop-up or pull-down button.
 const POP_UP_MIN_WIDTH: f32 = 120.0;
 
-/// Shows `menu` as a popup of `parent`: sized, placed against `anchor` (window coordinates),
-/// kept inside the parent window. Returns the popup.
+/// Shows `menu` as a popup of `parent`: sized and placed against `anchor` (window
+/// coordinates); the compositor keeps it on screen. Returns the popup.
 pub fn present(
     ui: &mut Ui,
     parent: WindowId,
@@ -852,7 +964,6 @@ pub fn present(
     menu: ViewId,
     placement: Placement,
 ) -> WindowId {
-    let bounds = ui.window(parent).map(|w| w.size).unwrap_or_default();
     let (width, min) = match placement {
         Placement::List => (Some(anchor.width), anchor.width),
         // SPopUpButton: the menu is as wide as the button, 4 less for a pull-down, and never
@@ -863,8 +974,7 @@ pub fn present(
     };
     let _ = ui.set(menu, Prop::MinWidth, Value::from(min));
     let size = ui.measure(menu, Proposal::new(width, None));
-    let margin = 6.0;
-    let mut at = match placement {
+    let at = match placement {
         Placement::PullDown => Point::new(anchor.x - 5.0, anchor.bottom() + metrics::PULL_DOWN_GAP),
         Placement::List => Point::new(anchor.x, anchor.bottom() + 4.0),
         Placement::At => Point::new(anchor.x, anchor.y),
@@ -877,13 +987,19 @@ pub fn present(
             )
         }
     };
-    at.x = at.x.min(bounds.width - margin - size.width).max(margin);
-    at.y = at.y.min(bounds.height - margin - size.height).max(margin);
+    // The compositor keeps it on screen (xdg_positioner), as macOS does.
+    let place = match placement {
+        Placement::PullDown | Placement::List => PopupPlacement::menu(anchor, PopupSide::Below),
+        Placement::PopUp { .. } => PopupPlacement::menu(anchor, PopupSide::Over),
+        Placement::At => PopupPlacement::context(anchor.origin()),
+    };
+    let _ = ui.with_widget::<Menu, _>(menu, |m| m.asked = Some(Rect::from_origin_size(at, size)));
     let window = ui.create_window(
         WindowKind::Popup {
             parent,
             anchor: Rect::from_origin_size(at, size),
             grab: true,
+            place,
         },
         size,
     );
@@ -1086,5 +1202,36 @@ mod tests {
             vec![3, 0],
             "Fig is the last row that can be chosen"
         );
+    }
+
+    #[test]
+    fn a_menu_shortened_from_the_top_scrolls_and_keeps_its_rows_in_place() {
+        let mut ui = Ui::new_headless();
+        let win = ui.create_window(WindowKind::Normal, Size::new(300.0, 300.0));
+        ui.show_window(win);
+        let many: Vec<Row> = (0..30).map(|i| Row::item(&format!("Item {i}"))).collect();
+        let (m, items) = menu(&mut ui, &many);
+        let button = Rect::new(40.0, 100.0, 120.0, 22.0);
+        let popup = present(&mut ui, win, button, m, Placement::PopUp { row: 20 });
+        let Some(WindowKind::Popup { anchor: asked, .. }) =
+            ui.window(popup).map(|w| w.kind.clone())
+        else {
+            panic!("not a popup");
+        };
+        // No room above: the compositor cut the top of the menu off.
+        let cut = 200.0;
+        let landed = Rect::new(asked.x, asked.y + cut, asked.width, asked.height - cut);
+        ui.popup_placed(popup, landed);
+        ui.resize_window(popup, landed.size(), 1.0);
+        ui.layout_window(popup);
+        let at = |ui: &Ui, v: ViewId| ui.tree.get(v).map(|n| n.frame).unwrap_or_default();
+        // The selected row stays over the button.
+        let row = at(&ui, items[20]);
+        let asked_row = asked.y + metrics::PADDING + 20.0 * metrics::ITEM_HEIGHT;
+        assert!((landed.y + row.y - asked_row).abs() < 0.5, "{row:?}");
+        // The rows above are scrolled out, under the top arrow strip.
+        assert!(at(&ui, items[0]).y < 0.0);
+        let first_shown = items.iter().map(|v| at(&ui, *v)).find(|r| r.y >= 0.0);
+        assert!(first_shown.is_some_and(|r| r.y >= metrics::ITEM_HEIGHT - 0.5));
     }
 }

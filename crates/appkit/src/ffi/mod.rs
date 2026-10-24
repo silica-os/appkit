@@ -34,7 +34,9 @@ use crate::core::layout::Proposal;
 use crate::core::ui::{Error, Ui};
 use crate::core::value::{Prop, Signal, Value};
 use crate::core::widget::{EventCx, FocusKind, LayoutCx, PaintCx, Widget};
-use crate::core::window::{Edges, KeyboardMode, Layer, WindowId, WindowKind};
+use crate::core::window::{
+    Edges, KeyboardMode, Layer, PopupPlacement, PopupSide, WindowId, WindowKind,
+};
 use crate::geom::{Insets, Point, Rect, Size};
 
 thread_local! {
@@ -1209,6 +1211,14 @@ pub extern "C" fn ak_window_new_popup(
                 parent: p,
                 anchor: rect_of(anchor),
                 grab: true,
+                // Placed where asked, slid back on screen.
+                place: PopupPlacement {
+                    target: rect_of(anchor),
+                    side: PopupSide::Over,
+                    slide_x: true,
+                    slide_y: true,
+                    ..PopupPlacement::default()
+                },
             },
             Size::new(width, height),
         ),

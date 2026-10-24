@@ -100,7 +100,9 @@ use crate::core::event::{Button, Key, KeyEvent, Mods, Phase};
 use crate::core::menu::{MenuItem, PopupKind, PopupMenuRequest};
 use crate::core::ui::GlassRegion;
 use crate::core::ui::{Cursor, Request, Ui};
-use crate::core::window::{Edges, KeyboardMode, Layer, WindowId, WindowKind};
+use crate::core::window::{
+    Edges, KeyboardMode, Layer, PopupPlacement, PopupSide, WindowId, WindowKind,
+};
 use crate::geom::{Point, Rect, Size};
 use crate::platform::keys::{key_of, mods_of};
 use crate::render::Painter;
@@ -1039,6 +1041,7 @@ impl Platform {
                 parent,
                 anchor,
                 grab,
+                place,
             } => {
                 let Some(xdg) = &self.xdg else {
                     return;
@@ -1057,22 +1060,8 @@ impl Platform {
                 let Ok(pos) = XdgPositioner::new(xdg) else {
                     return;
                 };
-                // `anchor` is where AppKit placed the popup itself (arrow, gap and clamping
-                // done): its top-left corner goes on the rectangle's top-left corner. A flip
-                // would move it off its trigger; the compositor only slides it on screen.
                 pos.set_size(size.width.max(1.0) as i32, size.height.max(1.0) as i32);
-                pos.set_anchor_rect(
-                    anchor.x.round() as i32,
-                    anchor.y.round() as i32,
-                    anchor.width.max(1.0) as i32,
-                    anchor.height.max(1.0) as i32,
-                );
-                pos.set_anchor(xdg_positioner::Anchor::TopLeft);
-                pos.set_gravity(xdg_positioner::Gravity::BottomRight);
-                pos.set_constraint_adjustment(
-                    xdg_positioner::ConstraintAdjustment::SlideX
-                        | xdg_positioner::ConstraintAdjustment::SlideY,
-                );
+                position(&pos, *anchor, place);
                 match Popup::from_surface(parent_xdg.as_ref(), &pos, &self.qh, wl, xdg) {
                     Ok(p) => {
                         if let Some(l) = &parent_layer {
@@ -2256,6 +2245,12 @@ impl PopupHandler for Platform {
             return;
         };
         let size = Size::new(config.width as f32, config.height as f32);
+        // Where the compositor put it, kept on screen: the popup lays out from there.
+        let (x, y) = config.position;
+        self.ui.popup_placed(
+            id,
+            Rect::from_origin_size(Point::new(x as f32, y as f32), size),
+        );
         self.configured(id, Some(size));
     }
 
@@ -3125,6 +3120,83 @@ impl smithay_client_toolkit::activation::ActivationHandler for Platform {
 }
 
 smithay_client_toolkit::delegate_activation!(Platform);
+
+/// Sets up `pos` so the popup lands at `frame` when nothing constrains it, and the
+/// compositor keeps it on screen as `place` allows. The gap between the target and the
+/// popup goes into the anchor rectangle on both sides, so a flip keeps it.
+fn position(pos: &XdgPositioner, frame: Rect, place: &PopupPlacement) {
+    use xdg_positioner::{Anchor, ConstraintAdjustment as C, Gravity};
+    let t = place.target;
+    let (rect, anchor, gravity, offset) = match place.side {
+        PopupSide::Below => {
+            let gap = frame.y - t.bottom();
+            let r = Rect::new(t.x, t.y - gap, t.width, t.height + 2.0 * gap);
+            (
+                r,
+                Anchor::BottomLeft,
+                Gravity::BottomRight,
+                (frame.x - t.x, 0.0),
+            )
+        }
+        PopupSide::Above => {
+            let gap = t.y - frame.bottom();
+            let r = Rect::new(t.x, t.y - gap, t.width, t.height + 2.0 * gap);
+            (r, Anchor::TopLeft, Gravity::TopRight, (frame.x - t.x, 0.0))
+        }
+        PopupSide::After => {
+            let gap = frame.x - t.right();
+            let r = Rect::new(t.x - gap, t.y, t.width + 2.0 * gap, t.height);
+            (
+                r,
+                Anchor::TopRight,
+                Gravity::BottomRight,
+                (0.0, frame.y - t.y),
+            )
+        }
+        PopupSide::Before => {
+            let gap = t.x - frame.right();
+            let r = Rect::new(t.x - gap, t.y, t.width + 2.0 * gap, t.height);
+            (
+                r,
+                Anchor::TopLeft,
+                Gravity::BottomLeft,
+                (0.0, frame.y - t.y),
+            )
+        }
+        PopupSide::Over => (
+            t,
+            Anchor::TopLeft,
+            Gravity::BottomRight,
+            (frame.x - t.x, frame.y - t.y),
+        ),
+    };
+    pos.set_anchor_rect(
+        rect.x.round() as i32,
+        rect.y.round() as i32,
+        rect.width.round().max(1.0) as i32,
+        rect.height.round().max(1.0) as i32,
+    );
+    pos.set_anchor(anchor);
+    pos.set_gravity(gravity);
+    pos.set_offset(offset.0.round() as i32, offset.1.round() as i32);
+    let mut adjust = C::empty();
+    if place.flip_x {
+        adjust |= C::FlipX;
+    }
+    if place.flip_y {
+        adjust |= C::FlipY;
+    }
+    if place.slide_x {
+        adjust |= C::SlideX;
+    }
+    if place.slide_y {
+        adjust |= C::SlideY;
+    }
+    if place.resize {
+        adjust |= C::ResizeY;
+    }
+    pos.set_constraint_adjustment(adjust);
+}
 
 delegate_compositor!(Platform);
 delegate_output!(Platform);

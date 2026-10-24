@@ -11,7 +11,7 @@ use crate::core::tree::{NodeFlags, ViewId};
 use crate::core::ui::Ui;
 use crate::core::value::{Prop, Signal, Value};
 use crate::core::widget::{EventCx, FocusKind, Interaction, LayoutCx, PaintCx, PropChange, Widget};
-use crate::core::window::{WindowId, WindowKind};
+use crate::core::window::{PopupPlacement, PopupSide, WindowId, WindowKind};
 use crate::geom::{Insets, Point, Rect, Size};
 use crate::motion::{Animated, Timing};
 use crate::shape::Shape;
@@ -658,6 +658,7 @@ fn open_panel(
             parent,
             anchor: Rect::from_origin_size(at, size),
             grab: true,
+            place: PopupPlacement::flipping(anchor, PopupSide::Below, false),
         },
         size,
     );

@@ -12,7 +12,7 @@ use crate::core::tree::ViewId;
 use crate::core::ui::{TimerId, Ui};
 use crate::core::value::{Prop, Value};
 use crate::core::widget::{LayoutCx, PaintCx, PropChange, Widget};
-use crate::core::window::{WindowId, WindowKind};
+use crate::core::window::{PopupPlacement, PopupSide, WindowId, WindowKind};
 use crate::geom::{Point, Rect, Size};
 use crate::motion::{Animated, Timing};
 use crate::shape::Shape;
@@ -434,6 +434,7 @@ fn show(ui: &mut Ui, parent: WindowId, target: ViewId) {
             parent,
             anchor: Rect::from_origin_size(at, size),
             grab: false,
+            place: PopupPlacement::flipping(rect, PopupSide::Below, false),
         },
         size,
     );

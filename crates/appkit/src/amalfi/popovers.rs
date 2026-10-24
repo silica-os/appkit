@@ -15,7 +15,7 @@ use crate::core::tree::ViewId;
 use crate::core::ui::Ui;
 use crate::core::value::{Prop, Value};
 use crate::core::widget::{LayoutCx, PaintCx, PropChange, Widget};
-use crate::core::window::{WindowId, WindowKind};
+use crate::core::window::{PopupPlacement, PopupSide, WindowId, WindowKind};
 use crate::geom::{Corners, Insets, Point, Rect, Size};
 use crate::render::path::Path;
 use crate::shape::{AMALFI_SMOOTHING, Shape, smooth_rect_path};
@@ -254,6 +254,26 @@ impl Widget for Popover {
     }
 
     fn place(&mut self, cx: &mut LayoutCx<'_>, size: Size) {
+        // In a popup the compositor kept on screen, the arrow goes on the side it landed on
+        // and points at the target's centre from where it is.
+        if self.shape.edge.is_some()
+            && let Some((frame, place)) = cx.popup_frame()
+            && !place.target.is_empty()
+        {
+            let edge = match place.landed(frame) {
+                PopupSide::Below | PopupSide::Over => Edge::Top,
+                PopupSide::Above => Edge::Bottom,
+                PopupSide::After => Edge::Leading,
+                PopupSide::Before => Edge::Trailing,
+            };
+            self.shape.edge = Some(edge);
+            let body = self.shape.body(Rect::from_size(size));
+            let centre = place.target.center();
+            self.shape.offset = Some(match edge {
+                Edge::Top | Edge::Bottom => centre.x - frame.x - body.x,
+                Edge::Leading | Edge::Trailing => centre.y - frame.y - body.y,
+            });
+        }
         let body = self.shape.body(Rect::from_size(size));
         let pad = self.padding;
         if let Some(c) = cx.children().first().copied() {
@@ -336,9 +356,9 @@ pub enum Side {
     Before,
 }
 
-/// Shows `content` as a popover popup of `parent` against `anchor` (window coordinates): on
-/// `side` when it fits, on the opposite side when it does not; the arrow points at the anchor's
-/// centre and the popover is kept inside the window. Returns the popup.
+/// Shows `content` as a popover popup of `parent` against `anchor` (window coordinates) on
+/// `side`, the arrow pointing at the anchor's centre. The compositor keeps it on screen,
+/// flipping it to the opposite side when it does not fit. Returns the popup.
 pub fn present(
     ui: &mut Ui,
     parent: WindowId,
@@ -347,7 +367,6 @@ pub fn present(
     side: Side,
     padding: f32,
 ) -> WindowId {
-    let bounds = ui.window(parent).map(|w| w.size).unwrap_or_default();
     let natural = ui.measure(content, Proposal::new(None, None));
     let measure = |_: &mut Ui, shape: PopoverShape, _: ViewId| -> Size {
         let [l, t, r, b] = shape.insets();
@@ -356,43 +375,24 @@ pub fn present(
             natural.height + t + b + 2.0 * padding,
         )
     };
-    let fits = |side: Side, size: Size| match side {
-        Side::Below => anchor.bottom() + size.height <= bounds.height,
-        Side::Above => anchor.y - size.height >= 0.0,
-        Side::After => anchor.right() + size.width <= bounds.width,
-        Side::Before => anchor.x - size.width >= 0.0,
-    };
     let edge_of = |side: Side| match side {
         Side::Below => Edge::Top,
         Side::Above => Edge::Bottom,
         Side::After => Edge::Leading,
         Side::Before => Edge::Trailing,
     };
-    let opposite = |side: Side| match side {
-        Side::Below => Side::Above,
-        Side::Above => Side::Below,
-        Side::After => Side::Before,
-        Side::Before => Side::After,
-    };
-    let mut side = side;
-    let mut shape = PopoverShape::arrow(edge_of(side), Align::Center);
-    let mut size = measure(ui, shape, content);
-    if !fits(side, size) && fits(opposite(side), size) {
-        side = opposite(side);
-        shape = PopoverShape::arrow(edge_of(side), Align::Center);
-        size = measure(ui, shape, content);
-    }
-    let margin = 6.0;
+    let shape = PopoverShape::arrow(edge_of(side), Align::Center);
+    let size = measure(ui, shape, content);
     let centre = anchor.center();
-    let mut at = match side {
+    let at = match side {
         Side::Below => Point::new(centre.x - size.width / 2.0, anchor.bottom()),
         Side::Above => Point::new(centre.x - size.width / 2.0, anchor.y - size.height),
         Side::After => Point::new(anchor.right(), centre.y - size.height / 2.0),
         Side::Before => Point::new(anchor.x - size.width, centre.y - size.height / 2.0),
     };
-    at.x = at.x.min(bounds.width - margin - size.width).max(margin);
-    at.y = at.y.min(bounds.height - margin - size.height).max(margin);
-    // The arrow points at the anchor's centre.
+    // The arrow points at the anchor's centre; the compositor flips the popover when it
+    // does not fit on screen, and `place` moves the arrow.
+    let mut shape = shape;
     let offset = match side {
         Side::Below | Side::Above => centre.x - at.x - shape.body(Rect::from_size(size)).x,
         Side::After | Side::Before => centre.y - at.y - shape.body(Rect::from_size(size)).y,
@@ -405,6 +405,16 @@ pub fn present(
             parent,
             anchor: Rect::from_origin_size(at, size),
             grab: true,
+            place: PopupPlacement::flipping(
+                anchor,
+                match side {
+                    Side::Below => PopupSide::Below,
+                    Side::Above => PopupSide::Above,
+                    Side::After => PopupSide::After,
+                    Side::Before => PopupSide::Before,
+                },
+                false,
+            ),
         },
         size,
     );
@@ -487,19 +497,32 @@ mod tests {
     }
 
     #[test]
-    fn present_flips_to_the_other_side_when_it_does_not_fit() {
+    fn a_popover_the_compositor_flips_moves_its_arrow() {
         let (mut ui, win) = parent();
         let content = ui.create(Text::new("Hello"));
         let anchor = Rect::new(100.0, 280.0, 40.0, 20.0);
         let popup = present(&mut ui, win, anchor, content, Side::Below, 16.0);
-        let WindowKind::Popup { anchor: at, .. } = ui
-            .window(popup)
-            .map(|w| w.kind.clone())
-            .unwrap_or(WindowKind::Normal)
+        let Some(WindowKind::Popup { anchor: at, .. }) = ui.window(popup).map(|w| w.kind.clone())
         else {
             panic!("not a popup");
         };
-        assert!(at.bottom() <= anchor.y + 0.01);
+        // The compositor found no room below and flipped it over the anchor, 30 to the left.
+        let flipped = Rect::new(at.x - 30.0, anchor.y - at.height, at.width, at.height);
+        ui.popup_placed(popup, flipped);
+        ui.layout_window(popup);
+        let shape = ui
+            .window(popup)
+            .and_then(|w| ui.tree.children(w.root).first())
+            .and_then(|p| ui.tree.widget(*p))
+            .and_then(|w| w.as_any().downcast_ref::<Popover>())
+            .map(|p| p.shape);
+        let Some(shape) = shape else {
+            panic!("no popover");
+        };
+        assert_eq!(shape.edge, Some(Edge::Bottom));
+        let body = shape.body(Rect::from_size(at.size()));
+        let offset = shape.offset.unwrap_or_default();
+        assert!((flipped.x + body.x + offset - anchor.center().x).abs() < 0.01);
     }
 
     #[test]
