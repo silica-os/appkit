@@ -48,10 +48,12 @@ A GPU backend on wgpu (`render::gpu`: Vulkan, GLES as the fallback) implements t
 `render::Painter` trait with the same formulas: stencil-and-cover paths on a 4x multisampled
 frame, shaders for gradients, images, analytic shadows and the backdrop (blur, saturation,
 refraction), clip masks rendered for the region of each draw, and a retained frame texture with
-damage tracking. `GpuContext::new()` is `None` without an adapter; the CPU canvas then stays,
-and it always makes the snapshots and previews. Not done yet: presenting through a wgpu
-surface on Wayland, caching unchanged layers as textures, a glyph atlas (glyphs are filled as
-outlines).
+damage tracking. Glyphs, path coverages, clips and shadows are cached in atlases, and static
+subtrees and layers are kept as textures. On Wayland a window presents through a wgpu surface
+(`render::gpu::present`); `APPKIT_RENDERER=cpu` keeps the CPU canvas, `gl` or `vulkan` picks
+the backend, and Venus comes after the other adapters. `GpuContext::new()` is `None` without an
+adapter; the CPU canvas then stays, and it always makes the snapshots and previews. The
+agreement tests (`render/gpu/tests.rs`) render the same scenes on both canvases.
 
 ## Sources of truth
 

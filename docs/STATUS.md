@@ -90,8 +90,10 @@ Gallery from this checkout and merges them into the running dev VM (`tools/run-v
   backdrops (blur, saturation, refraction) filtered in bands on threads. Presented through
   wl_shm with `damage_buffer`. Raster caches of static subtrees (`core::raster`: stable for 3
   frames, ≥ 24 items, no backdrop/glass/custom drawing; drawn at whole device pixels; 96 MB
-  cap; `APPKIT_RASTER_CACHE=0` turns it off; off in headless tests). The GPU backend (wgpu)
-  is not written yet.
+  cap; `APPKIT_RASTER_CACHE=0` turns it off; off in headless tests). The GPU backend
+  (`render::gpu`, wgpu: Vulkan, GLES fallback) has the CPU canvas's formulas, a retained frame
+  texture, atlases for glyphs and paths, layer textures and presents through a wgpu surface;
+  agreement tests against the CPU canvas (docs/architecture.md).
 - **Start-up**: bundled fonts registered at once; the system fonts (fontconfig) are loaded on a
   thread, the collection is warmed there and joins the fallback when ready (text laid out
   again); `APPKIT_STARTUP_TIMING` prints the start-up stages and the first frame.
@@ -223,11 +225,9 @@ costs the rows it covers; backdrops dominate glass scenes.
 
 ## Next
 
-1. GPU backend (`render::gpu`, wgpu: Vulkan, GLES fallback) with the same formulas as the CPU
-   canvas and a GPU-vs-CPU agreement test.
-2. Behaviour with no ui-kit source yet: collections (selection, keyboard, type-select),
+1. Behaviour with no ui-kit source yet: collections (selection, keyboard, type-select),
    tooltips' enter fade.
-3. Touchpad tuning on real hardware (kinetic decay, navigation swipe distance); the VM only
+2. Touchpad tuning on real hardware (kinetic decay, navigation swipe distance); the VM only
    has a mouse.
 
 Scope: AppKit is the public toolkit only. The Dock, Control Centre, Notification Centre,
