@@ -17,6 +17,7 @@ parley = { version = "0.12", default-features = false, features = ["std", "syste
 fontique = { version = "0.12", default-features = false, features = ["std", "system", "fontconfig-dlopen", "bytemuck"] }
 wgpu = { version = "30", default-features = false, features = ["vulkan", "gles", "wgsl", "std"] }
 png = "0.18"
+resvg = { version = "0.49", default-features = false }
 
 [workspace.lints.rust]
 # "deny" and not "forbid": the FFI surface and the GPU surface re-enable it, only there, each

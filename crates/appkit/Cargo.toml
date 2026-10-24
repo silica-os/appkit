@@ -21,6 +21,7 @@ fontique.workspace = true
 skrifa = "0.44"
 wgpu.workspace = true
 png.workspace = true
+resvg.workspace = true
 raw-window-handle = "0.6"
 pollster = "0.4"
 bytemuck = { version = "1", features = ["derive"] }

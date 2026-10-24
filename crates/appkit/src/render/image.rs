@@ -67,6 +67,27 @@ impl Image {
             .map(Image::from_pixmap)
     }
 
+    /// Renders an SVG fitted in `size` × `size` pixels, its aspect kept (app and file icons
+    /// often ship as SVG). No text: icons draw none.
+    pub fn from_svg(data: &[u8], size: u32) -> Option<Image> {
+        use resvg::{tiny_skia, usvg};
+        let tree = usvg::Tree::from_data(data, &usvg::Options::default()).ok()?;
+        let s = tree.size();
+        let k = size.min(4096) as f32 / s.width().max(s.height());
+        if !k.is_finite() || k <= 0.0 {
+            return None;
+        }
+        let w = (s.width() * k).round().max(1.0) as u32;
+        let h = (s.height() * k).round().max(1.0) as u32;
+        let mut pixmap = tiny_skia::Pixmap::new(w, h)?;
+        resvg::render(
+            &tree,
+            tiny_skia::Transform::from_scale(k, k),
+            &mut pixmap.as_mut(),
+        );
+        Image::from_premul_rgba(w, h, pixmap.data())
+    }
+
     /// Encodes as PNG (straight alpha).
     pub fn encode_png(&self) -> Option<Vec<u8>> {
         Pixmap::clone(&self.pixmap).into_png().ok()
@@ -123,5 +144,16 @@ mod tests {
         assert_eq!(back.pixel(0, 0), [255, 0, 0, 255]);
         assert_eq!(back.pixel(1, 0)[3], 128);
         assert!(Image::from_premul_rgba(3, 3, &[0; 4]).is_none());
+    }
+
+    #[test]
+    fn svg_renders_fitted_in_its_size() {
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+            <rect width="8" height="8" fill="red"/></svg>"#;
+        let img = Image::from_svg(svg, 64).unwrap();
+        assert_eq!((img.width(), img.height()), (64, 32));
+        assert_eq!(img.pixel(10, 10), [255, 0, 0, 255]);
+        assert_eq!(img.pixel(50, 10), [0; 4]);
+        assert!(Image::from_svg(b"not svg", 64).is_none());
     }
 }
