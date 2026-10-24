@@ -1,6 +1,7 @@
-//! Table columns and their header (kit: `Apps/Mustache/List Header`): titles in `Label`
-//! type on `Text/Tertiary`, a separator under them, click to sort (the indicator toggles),
-//! drag a column's edge to resize it.
+//! Table columns and their header (kit: `Tables/Header`, ui-kit `STable`): titles in
+//! `Caption` type on `Text/Secondary`, a short divider before each column after the first, a
+//! rule under them, click to sort (the chevron after the sorted column's title toggles), drag
+//! a column's edge to resize it.
 
 use super::metrics;
 use crate::amalfi::foundation::Label;
@@ -248,7 +249,7 @@ impl Header {
         let theme = *cx.theme();
         let c = theme.colors;
         cx.rec.layer(
-            "Separator",
+            "Bottom rule",
             Rect::new(rect.x, rect.bottom() - 1.0, rect.width, 1.0),
             Shape::RECT,
             Style::fill(c.line_separator),
@@ -256,47 +257,80 @@ impl Header {
         if self.labels.len() != self.columns.len() {
             self.labels = self.columns.iter().map(|_| Label::default()).collect();
         }
-        let style: TextStyle = theme.text(&tokens::typography::LABEL, c.text_tertiary);
+        let token = &tokens::typography::CAPTION;
+        let ink = c.text_secondary;
+        let style: TextStyle = theme.text(token, ink);
         let frames = column_frames(&self.columns, rect.width);
+        let y = rect.y + metrics::HEADER_TITLE_Y;
+        let single = self.columns.len() == 2;
         for (i, (col, (x, w))) in self.columns.iter().zip(frames).enumerate() {
+            // Between two columns, a short rule 8 before the column (kit: `Divider 1` …, or
+            // `Divider` when there is one).
+            if i > 0 {
+                let name = if single {
+                    "Divider".to_string()
+                } else {
+                    format!("Divider {i}")
+                };
+                cx.rec.layer(
+                    &name,
+                    Rect::new(
+                        rect.x + x - metrics::DIVIDER_OFFSET,
+                        y,
+                        1.0,
+                        metrics::HEADER_TITLE_HEIGHT,
+                    ),
+                    Shape::RECT,
+                    Style::fill(c.line_separator),
+                );
+            }
             let sorted = self.sort.filter(|(s, _)| *s == i);
             let indicator = if sorted.is_some() {
-                metrics::DISCLOSURE
+                metrics::SORT_GAP + metrics::SORT_BOX
             } else {
                 0.0
             };
-            let tw = (w - col.title_inset - indicator).max(1.0);
-            if let Some(label) = self.labels.get_mut(i) {
-                let layout = label.layout(&col.title, &style, col.align, tw, Some(1));
-                let lh = layout.size().height;
-                // The layer is named after the column (kit: `Name`, `Size` …).
-                cx.rec.text(
-                    &col.title,
-                    Rect::new(
-                        rect.x + x + col.title_inset,
-                        rect.y + metrics::HEADER_TITLE_Y,
-                        tw,
-                        lh,
-                    ),
-                    layout,
-                    Some(tokens::typography::LABEL.name),
-                    c.text_tertiary,
-                );
-            }
+            let room = (w - col.title_inset - indicator).max(1.0);
+            let Some(label) = self.labels.get_mut(i) else {
+                continue;
+            };
+            // A leading title's box is its text; a trailing or centred one spans the column,
+            // short of the end inset (ui-kit `STable` `.is-end`).
+            let (tx, tw, align) = match col.align {
+                Align::End | Align::Center => (
+                    rect.x + x + col.title_inset,
+                    (room - metrics::END_INSET).max(1.0),
+                    col.align,
+                ),
+                _ => (
+                    rect.x + x + col.title_inset,
+                    label.width(&col.title, &style).ceil().min(room),
+                    Align::Start,
+                ),
+            };
+            let layout = label.layout(&col.title, &style, align, tw, Some(1));
+            // The layer is named after the column (kit: `Column Name`, `Column Kind` …).
+            cx.rec.text(
+                &format!("Column {}", col.title),
+                Rect::new(tx, y, tw, metrics::HEADER_TITLE_HEIGHT),
+                layout,
+                Some(token.name),
+                ink,
+            );
             if let Some((_, asc)) = sorted {
-                let g = metrics::DISCLOSURE_GLYPH;
                 let sym = if asc { "chevron-up" } else { "chevron-down" };
-                cx.rec.glyph(
+                cx.rec.glyph_sized(
                     "Sort",
                     Rect::new(
-                        rect.x + x + w - g,
-                        rect.y + (metrics::HEADER_HEIGHT - g) / 2.0,
-                        g,
-                        g,
+                        tx + tw + metrics::SORT_GAP,
+                        y,
+                        metrics::SORT_BOX,
+                        metrics::SORT_BOX,
                     ),
+                    metrics::DISCLOSURE_GLYPH,
                     sym,
                     500,
-                    c.text_tertiary,
+                    ink,
                 );
             }
         }

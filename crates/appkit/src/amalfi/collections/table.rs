@@ -12,10 +12,11 @@ use super::header::{
     Header, HeaderHit, TableColumn, column_frames, natural_width, sort_from, sort_value,
 };
 use super::{
-    Body, ListLook, Rows, drop_view, emphasized, make_body, metrics, paint_box, paint_box_border,
-    paint_scroller, selection_fill,
+    Body, ListLook, Rows, SelectionFade, drop_view, emphasized, make_body, metrics, paint_box,
+    paint_box_border, paint_scroller, selection_fill, selection_shape,
 };
 use crate::amalfi::fields::{FieldKind, TextField};
+use crate::amalfi::tokens::motion;
 use crate::core::a11y::{A11y, Action, Role};
 use crate::core::event::{Button, Event, Handled, Key, Mods};
 use crate::core::layout::Proposal;
@@ -24,8 +25,10 @@ use crate::core::ui::Ui;
 use crate::core::value::{Prop, Signal, Value};
 use crate::core::widget::{EventCx, FocusKind, LayoutCx, PaintCx, PropChange, Widget};
 use crate::geom::{Insets, Point, Rect, Size, Transform};
+use crate::motion::{Animated, Timing};
 use crate::shape::Shape;
 use crate::style::Style;
+use crate::text::Align;
 
 /// Makes the view of a cell: (row key, column).
 pub type CellProvider = Box<dyn FnMut(&mut Ui, u64, usize) -> Option<ViewId>>;
@@ -136,6 +139,10 @@ pub struct TableView {
     dirty: bool,
     hovered: bool,
     emphasis: bool,
+    /// The selection's fade.
+    fade: SelectionFade,
+    /// The disclosure chevrons turning (0 closed, 1 open), by node.
+    turns: BTreeMap<u64, Animated<f32>>,
     editing: Option<Editing>,
     /// An edit asked for before its row was made (Return on a row out of sight).
     pending_edit: Option<(usize, usize)>,
@@ -172,6 +179,8 @@ impl TableView {
             dirty: false,
             hovered: false,
             emphasis: false,
+            fade: SelectionFade::default(),
+            turns: BTreeMap::new(),
             editing: None,
             pending_edit: None,
             me: None,
@@ -384,14 +393,9 @@ impl TableView {
     fn chevron_rect(&self, i: usize, width: f32) -> Rect {
         let frames = column_frames(&self.header.columns, width);
         let x0 = frames.first().map_or(metrics::LEADING, |f| f.0);
-        let x = x0 + self.level_of(i) as f32 * metrics::INDENT;
-        let g = metrics::DISCLOSURE_GLYPH;
-        Rect::new(
-            x + (metrics::DISCLOSURE - g) / 2.0 - 2.0,
-            self.rows.y(i) + (self.rows.height - g) / 2.0,
-            g,
-            g,
-        )
+        let x = x0 + self.level_of(i) as f32 * metrics::INDENT - metrics::DIVIDER_OFFSET;
+        let g = metrics::DISCLOSURE_BOX;
+        Rect::new(x, self.rows.y(i) + (self.rows.height - g) / 2.0, g, g)
     }
 
     fn rebuild_outline(&mut self, ui: &mut Ui) {
@@ -563,6 +567,12 @@ impl TableView {
     fn selection_changed(&mut self, cx: &mut EventCx<'_>) {
         cx.emit(Signal::SelectionChanged, self.selection_value());
         self.sync_emphasis(cx.ui());
+        if self
+            .fade
+            .sync(&self.rows.selected, cx.theme().appearance.reduce_motion)
+        {
+            cx.animate();
+        }
         cx.request_paint();
     }
 
@@ -727,13 +737,23 @@ impl TableView {
         self.rows.current()
     }
 
-    fn expanded_changed(&self, cx: &mut EventCx<'_>, i: usize) {
+    fn expanded_changed(&mut self, cx: &mut EventCx<'_>, i: usize) {
         if let (Some(key), Some(o)) = (self.key_of(i), self.outline.as_ref()) {
             let open = o.expanded.contains(&key);
             cx.emit(
                 Signal::ExpandedChanged,
                 Value::IntList(vec![key as i64, i64::from(open)]),
             );
+            // The chevron turns on `spring.snappy` (ui-kit `SOutline`).
+            if !cx.theme().appearance.reduce_motion {
+                let target = f32::from(u8::from(open));
+                let turn = self
+                    .turns
+                    .entry(key)
+                    .or_insert_with(|| Animated::new(1.0 - target));
+                turn.animate_to(target, Timing::Spring(motion::SPRING_SNAPPY));
+                cx.animate();
+            }
         }
     }
 }
@@ -830,6 +850,10 @@ impl Widget for TableView {
                 } else {
                     (x, w)
                 };
+                let w = match self.header.columns.get(c).map(|col| col.align) {
+                    Some(Align::End) => (w - metrics::END_INSET).max(0.0),
+                    _ => w,
+                };
                 let s = cx.ui.measure(cell, Proposal::new(Some(w), Some(rh)));
                 let h = s.height.min(rh);
                 cx.ui
@@ -878,20 +902,17 @@ impl Widget for TableView {
                     "Stripe",
                     Rect::new(area.x, y, area.width, self.rows.height),
                     Shape::RECT,
-                    Style::fill(c.surface_sidebar),
+                    Style::fill(c.line_separator),
                 );
             }
         }
         let fill = selection_fill(cx, self.emphasis);
-        let (inset, shape) = match self.look {
-            ListLook::Plain => (0.0, Shape::RECT),
-            _ => (
-                metrics::SELECTION_INSET,
-                Shape::rounded(metrics::SELECTION_RADIUS),
-            ),
+        let (inset, radius) = match self.look {
+            ListLook::Plain => (0.0, 0.0),
+            _ => (metrics::SELECTION_INSET, metrics::SELECTION_RADIUS),
         };
-        for i in &self.rows.selected {
-            let y = self.rows.y(*i);
+        for (i, alpha) in self.fade.rows(&self.rows.selected) {
+            let y = self.rows.y(i);
             if y + self.rows.height < 0.0 || y > area.height {
                 continue;
             }
@@ -903,8 +924,8 @@ impl Widget for TableView {
                     (area.width - 2.0 * inset).max(0.0),
                     self.rows.height,
                 ),
-                shape.clone(),
-                Style::fill(fill),
+                selection_shape(&self.rows.selected, i, radius),
+                Style::fill(fill.with_opacity(alpha)),
             );
         }
         if let Some(o) = &self.outline {
@@ -921,26 +942,28 @@ impl Widget for TableView {
                 } else {
                     c.text_secondary
                 };
+                let turn = self
+                    .turns
+                    .get(&f.node)
+                    .map_or(f32::from(u8::from(open)), Animated::get);
                 let centre = g.center();
-                if open {
+                let turned = turn.abs() > f32::EPSILON;
+                if turned {
                     cx.rec.push_transform(
                         Transform::translate(-centre.x, -centre.y)
-                            .then(Transform::rotate(std::f32::consts::FRAC_PI_2))
+                            .then(Transform::rotate(turn * std::f32::consts::FRAC_PI_2))
                             .then(Transform::translate(centre.x, centre.y)),
                     );
                 }
-                cx.rec.glyph(
-                    if open {
-                        "Disclosure Expanded"
-                    } else {
-                        "Disclosure"
-                    },
+                cx.rec.glyph_sized(
+                    "Disclosure",
                     g,
+                    metrics::DISCLOSURE_GLYPH,
                     "chevron-right",
                     500,
                     color,
                 );
-                if open {
+                if turned {
                     cx.rec.pop();
                 }
             }
@@ -950,6 +973,15 @@ impl Widget for TableView {
             let h = self.header_rect(size).translate(r.origin());
             self.header.paint(cx, h);
         }
+    }
+
+    fn tick(&mut self, _cx: &mut EventCx<'_>, dt: f32) -> bool {
+        let mut any = self.fade.tick(dt);
+        for a in self.turns.values_mut() {
+            any |= a.tick(dt);
+        }
+        self.turns.retain(|_, a| a.is_animating());
+        any
     }
 
     fn paint_over(&mut self, cx: &mut PaintCx<'_>) {

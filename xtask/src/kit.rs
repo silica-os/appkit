@@ -11,9 +11,11 @@ use serde_json::Value;
 
 use crate::{Result, flag, root, sibling};
 
-/// `--ui-kit DIR`: lays the layer trees of ui-kit's `kit/` (newer than silica-design's export)
-/// over the fixtures that exist; the PNGs stay as exported. Returns how many trees changed.
-fn overlay_ui_kit(dir: &Path, kit: &Path) -> Result<usize> {
+/// `--ui-kit DIR [PREFIX …]`: lays the layer trees of ui-kit's `kit/` (newer than
+/// silica-design's export) over the fixtures that exist; the PNGs stay as exported. The masters
+/// under each `PREFIX` that only ui-kit has are added (no PNG: their geometry is compared).
+/// Returns how many trees changed.
+fn overlay_ui_kit(dir: &Path, kit: &Path, prefixes: &[String]) -> Result<usize> {
     let mut changed = 0;
     let stale_path = kit.join("_stale");
     let mut stale: std::collections::BTreeSet<String> = std::fs::read_to_string(&stale_path)
@@ -22,6 +24,35 @@ fn overlay_ui_kit(dir: &Path, kit: &Path) -> Result<usize> {
         .map(str::to_string)
         .collect();
     let mut cache: std::collections::HashMap<String, Value> = std::collections::HashMap::new();
+    for prefix in prefixes {
+        let Some(category) = prefix.split('/').next() else {
+            continue;
+        };
+        let path = dir.join("kit").join(format!("{category}.json"));
+        let text =
+            std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let all: Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+        let Some(masters) = all.as_object() else {
+            return Err(format!("{}: not a map of masters", path.display()));
+        };
+        for (name, tree) in masters {
+            if !(name == prefix || name.starts_with(&format!("{prefix}/"))) {
+                continue;
+            }
+            let file = kit.join(format!("{name}.json"));
+            if file.exists() {
+                continue;
+            }
+            if let Some(parent) = file.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            let text = serde_json::to_string(tree).map_err(|e| e.to_string())?;
+            std::fs::write(&file, text).map_err(|e| format!("{}: {e}", file.display()))?;
+            stale.insert(name.clone());
+            changed += 1;
+        }
+        cache.insert(category.to_string(), all);
+    }
     let mut files = Vec::new();
     collect_json(kit, &mut files);
     for file in files {
@@ -138,8 +169,14 @@ fn collect_json(dir: &Path, out: &mut Vec<PathBuf>) {
 pub fn sync(args: &[String]) -> Result<()> {
     if let Some(i) = args.iter().position(|a| a == "--ui-kit") {
         let dir = args.get(i + 1).ok_or("--ui-kit needs a directory")?;
+        let prefixes: Vec<String> = args
+            .iter()
+            .enumerate()
+            .filter(|(j, _)| *j != i && *j != i + 1)
+            .map(|(_, a)| a.trim_end_matches('/').to_string())
+            .collect();
         let kit = root().join("crates/appkit-test/kit");
-        let n = overlay_ui_kit(Path::new(dir), &kit)?;
+        let n = overlay_ui_kit(Path::new(dir), &kit, &prefixes)?;
         println!("{n} layer trees updated from ui-kit");
         return Ok(());
     }

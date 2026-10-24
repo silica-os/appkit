@@ -2,7 +2,8 @@
 //!
 //! ```text
 //! cargo xtask sync-kit [--design DIR] [PREFIX ...]   copy kit masters into the fixtures
-//! cargo xtask sync-kit --ui-kit DIR                  lay ui-kit's newer layer trees over them
+//! cargo xtask sync-kit --ui-kit DIR [PREFIX ...]    lay ui-kit's newer layer trees over them
+//!                                                    (and add PREFIX's ui-kit-only masters)
 //! cargo xtask sync-sources                          copy tokens, symbols and protocols in
 //! cargo xtask check-sources                         compare those copies with the checkouts
 //! cargo xtask header                                 regenerate include/appkit.h

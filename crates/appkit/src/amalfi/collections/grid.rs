@@ -1,11 +1,13 @@
 //! The grid view: tiles in rows that reflow with the width (icon views), made by a provider
-//! when their row comes into sight. Selection as the kit's `Apps/Mustache/Tile Selected`:
-//! a `Surface/Sunken` plate behind the icon and an accent capsule behind the label.
+//! when their row comes into sight. It draws the selection by its [`GridLook`]: the kit's
+//! `Grids/Item/Icon` (a plate behind the icon, an accent pill behind the name),
+//! `Grids/Item/Thumbnail` (an accent ring and a check badge) or the file manager's tiles.
 
 use std::collections::BTreeMap;
 
 use super::{
-    RowProvider, Rows, drop_view, emphasized, make_body, metrics, paint_scroller, selection_fill,
+    RowProvider, Rows, SelectionFade, drop_view, emphasized, make_body, metrics, paint_scroller,
+    selection_fill,
 };
 use crate::core::a11y::{A11y, Action, Role};
 use crate::core::event::{Button, Event, Handled, Key, Mods};
@@ -16,7 +18,22 @@ use crate::core::value::{Prop, Signal, Value};
 use crate::core::widget::{EventCx, FocusKind, LayoutCx, PaintCx, PropChange, Widget};
 use crate::geom::{Point, Rect, Size};
 use crate::shape::Shape;
-use crate::style::Style;
+use crate::style::{Border, Style};
+
+/// How a grid draws its items and their selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GridLook {
+    /// The file manager's tiles (kit `Apps/Mustache/Tile Selected`): a plate behind the icon,
+    /// a capsule behind the label.
+    #[default]
+    Tiles,
+    /// Icons (kit `Grids/Item/Icon`, ui-kit `SGrid` icons): 96 × 116 items side by side, a
+    /// plate behind the icon and a pill behind the name when selected.
+    Icons,
+    /// Thumbnails (kit `Grids/Item/Thumbnail`): 112 pt images, ringed and badged when
+    /// selected.
+    Thumbnails,
+}
 
 /// A virtualised grid of tiles.
 pub struct GridView {
@@ -24,7 +41,11 @@ pub struct GridView {
     tile: Size,
     /// The icon's height in a tile (the selection plate covers it).
     icon: f32,
+    look: GridLook,
+    /// The gap between columns.
     gap: f32,
+    /// The gap between rows.
+    row_gap: f32,
     padding: f32,
     columns: usize,
     /// Scrolling by rows of tiles.
@@ -37,6 +58,8 @@ pub struct GridView {
     dirty: bool,
     hovered: bool,
     emphasis: bool,
+    /// The selection's fade.
+    fade: SelectionFade,
 }
 
 impl std::fmt::Debug for GridView {
@@ -57,7 +80,9 @@ impl GridView {
             count,
             tile,
             icon: metrics::TILE_ICON,
+            look: GridLook::Tiles,
             gap: metrics::TILE_GAP,
+            row_gap: metrics::TILE_GAP,
             padding: metrics::TILE_GAP,
             columns: 1,
             lines: Rows::new(0, tile.height + metrics::TILE_GAP),
@@ -68,7 +93,29 @@ impl GridView {
             dirty: false,
             hovered: false,
             emphasis: false,
+            fade: SelectionFade::default(),
         }
+    }
+
+    /// The look, with its item size and spacing (kit `Grids/Panel`: padding 16; icons
+    /// side by side with 8 between rows, thumbnails 8 apart).
+    pub fn look(mut self, look: GridLook) -> Self {
+        self.look = look;
+        match look {
+            GridLook::Tiles => {}
+            GridLook::Icons => {
+                self.icon = metrics::GRID_PLATE + metrics::GRID_PLATE_TOP;
+                self.set_tile(Size::new(metrics::GRID_ICON.0, metrics::GRID_ICON.1));
+                self = self.spacing(metrics::GRID_PADDING, 0.0);
+                self.row_gap = metrics::GRID_GAP;
+            }
+            GridLook::Thumbnails => {
+                self.set_tile(Size::new(metrics::GRID_THUMBNAIL, metrics::GRID_THUMBNAIL));
+                self = self.spacing(metrics::GRID_PADDING, metrics::GRID_GAP);
+            }
+        }
+        self.lines.height = self.tile.height + self.row_gap;
+        self
     }
 
     /// The tile size and the icon's height in it.
@@ -78,18 +125,20 @@ impl GridView {
         self
     }
 
-    /// The padding around the tiles and the gap between them (the kit's: 16 and 16).
+    /// The padding around the tiles and the gap between them, across and down (the kit's:
+    /// 16 and 16).
     pub fn spacing(mut self, padding: f32, gap: f32) -> Self {
         self.padding = padding.max(0.0);
         self.gap = gap.max(0.0);
-        self.lines.height = self.tile.height + self.gap;
+        self.row_gap = self.gap;
+        self.lines.height = self.tile.height + self.row_gap;
         self
     }
 
     fn set_tile(&mut self, tile: Size) {
         self.tile = Size::new(tile.width.max(1.0), tile.height.max(1.0));
         self.icon = self.icon.min(self.tile.height);
-        self.lines.height = self.tile.height + self.gap;
+        self.lines.height = self.tile.height + self.row_gap;
         self.dirty = true;
     }
 
@@ -205,6 +254,12 @@ impl GridView {
     fn selection_changed(&mut self, cx: &mut EventCx<'_>) {
         cx.emit(Signal::SelectionChanged, self.items.selection_value());
         self.sync_emphasis(cx.ui());
+        if self
+            .fade
+            .sync(&self.items.selected, cx.theme().appearance.reduce_motion)
+        {
+            cx.animate();
+        }
         cx.request_paint();
     }
 
@@ -256,7 +311,8 @@ impl Widget for GridView {
             .columns_for(p.width.filter(|w| w.is_finite()).unwrap_or(w))
             .max(1);
         let lines = self.count.div_ceil(c);
-        let h = lines as f32 * (self.tile.height + self.gap) - self.gap + 2.0 * self.padding;
+        let h =
+            lines as f32 * (self.tile.height + self.row_gap) - self.row_gap + 2.0 * self.padding;
         p.replacing_unspecified(Size::new(w, h.clamp(0.0, 480.0)))
     }
 
@@ -291,35 +347,118 @@ impl Widget for GridView {
     fn paint(&mut self, cx: &mut PaintCx<'_>) {
         let b = cx.bounds();
         let c = cx.theme().colors;
-        let capsule = selection_fill(cx, self.emphasis);
+        let fill = selection_fill(cx, self.emphasis);
         let inset = metrics::SELECTION_INSET;
-        for i in &self.items.selected {
-            let t = self.tile_rect(*i).translate(b.origin());
+        let items: Vec<(usize, f32)> = self.fade.rows(&self.items.selected).collect();
+        for (i, alpha) in items {
+            let t = self.tile_rect(i).translate(b.origin());
             if t.bottom() < b.y || t.y > b.bottom() {
                 continue;
             }
-            cx.rec.layer(
-                "Selection",
-                Rect::new(t.x + inset, t.y, t.width - 2.0 * inset, self.icon + 4.0),
-                Shape::rounded(metrics::SELECTION_RADIUS),
-                Style::fill(c.surface_sunken),
-            );
-            cx.rec.layer(
-                "Label capsule",
-                Rect::new(
-                    t.x + inset,
-                    t.y + self.icon + 8.0,
-                    t.width - 2.0 * inset,
-                    metrics::TILE_LABEL_HEIGHT,
-                ),
-                Shape::rounded(metrics::TILE_LABEL_HEIGHT / 2.0),
-                Style::fill(capsule),
-            );
+            match self.look {
+                GridLook::Tiles => {
+                    cx.rec.layer(
+                        "Selection",
+                        Rect::new(t.x + inset, t.y, t.width - 2.0 * inset, self.icon + 4.0),
+                        Shape::rounded(metrics::SELECTION_RADIUS),
+                        Style::fill(c.surface_sunken.with_opacity(alpha)),
+                    );
+                    cx.rec.layer(
+                        "Label capsule",
+                        Rect::new(
+                            t.x + inset,
+                            t.y + self.icon + 8.0,
+                            t.width - 2.0 * inset,
+                            metrics::TILE_LABEL_HEIGHT,
+                        ),
+                        Shape::rounded(metrics::TILE_LABEL_HEIGHT / 2.0),
+                        Style::fill(fill.with_opacity(alpha)),
+                    );
+                }
+                GridLook::Icons => {
+                    let plate = metrics::GRID_PLATE;
+                    cx.rec.layer(
+                        "Plate",
+                        Rect::new(
+                            t.x + (t.width - plate) / 2.0,
+                            t.y + metrics::GRID_PLATE_TOP,
+                            plate,
+                            plate,
+                        ),
+                        Shape::rounded(metrics::GRID_PLATE_RADIUS),
+                        Style::fill(c.line_separator.with_opacity(alpha)),
+                    );
+                    cx.rec.layer(
+                        "Label Pill",
+                        Rect::new(
+                            t.x + metrics::GRID_PILL_INSET,
+                            t.y + metrics::GRID_PILL_TOP,
+                            (t.width - 2.0 * metrics::GRID_PILL_INSET).max(0.0),
+                            metrics::GRID_PILL_HEIGHT,
+                        ),
+                        Shape::rounded(metrics::GRID_PILL_RADIUS),
+                        Style::fill(fill.with_opacity(alpha)),
+                    );
+                }
+                // Drawn over the images.
+                GridLook::Thumbnails => {}
+            }
         }
+    }
+
+    fn tick(&mut self, _cx: &mut EventCx<'_>, dt: f32) -> bool {
+        self.fade.tick(dt)
     }
 
     fn paint_over(&mut self, cx: &mut PaintCx<'_>) {
         let b = cx.bounds();
+        if self.look == GridLook::Thumbnails {
+            let c = cx.theme().colors;
+            // The ring and the badge go grey in the background (ui-kit `SGrid`).
+            let mark = if self.emphasis {
+                c.accent_amalfi
+            } else {
+                c.text_tertiary
+            };
+            let items: Vec<(usize, f32)> = self.fade.rows(&self.items.selected).collect();
+            cx.rec.push_clip(b, Shape::RECT);
+            for (i, alpha) in items {
+                let t = self.tile_rect(i).translate(b.origin());
+                if t.bottom() < b.y || t.y > b.bottom() {
+                    continue;
+                }
+                cx.rec.layer(
+                    "Selection Ring",
+                    t,
+                    Shape::rounded(metrics::GRID_PLATE_RADIUS),
+                    Style::default()
+                        .with_border(Border::inside(mark.with_opacity(alpha), metrics::GRID_RING)),
+                );
+                let badge = metrics::GRID_BADGE;
+                let at = Rect::new(
+                    t.right() - metrics::GRID_BADGE_INSET - badge,
+                    t.bottom() - metrics::GRID_BADGE_INSET - badge,
+                    badge,
+                    badge,
+                );
+                cx.rec.layer(
+                    "Check Badge",
+                    at,
+                    Shape::Ellipse,
+                    Style::fill(mark.with_opacity(alpha)),
+                );
+                let g = metrics::GRID_CHECK;
+                cx.rec.glyph_sized(
+                    "Check",
+                    Rect::new(at.x + (badge - g) / 2.0, at.y + (badge - g) / 2.0, g, g),
+                    metrics::GRID_CHECK_GLYPH,
+                    "checkmark",
+                    500,
+                    c.text_on_accent.with_opacity(alpha),
+                );
+            }
+            cx.rec.pop();
+        }
         paint_scroller(cx, b, &self.lines, self.hovered);
         super::paint_focus_ring(cx, b);
     }

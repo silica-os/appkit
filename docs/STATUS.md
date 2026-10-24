@@ -53,13 +53,17 @@ Gallery from this checkout and merges them into the running dev VM (`tools/run-v
   line index with Fenwick sums, layout per visible line, 0.8 ms per key on a 10 MB document in
   release) and the collections (`amalfi::collections`, one provider model: items are made
   when they come into sight and dropped when they leave; a million rows cost what is shown):
-  `ListView` (inset, plain and bordered list-box looks), `TableView` (columns, header with
-  sort and column resizing, cells per row and column, in-place editing of editable columns,
-  alternating rows; outline mode over a `TreeSource` with chevrons, indentation, ←/→ and ⌥
-  deep expansion), `GridView` (reflowing tiles, 2-D keyboard), `TableHeader`; shared
+  `ListView` (inset, plain, bordered and separated looks; `ListRow` and `ListHeader` for
+  plain lists, 44/60 pt rows), `TableView` (columns, header with sort and column resizing,
+  cells per row and column, end-aligned columns, in-place editing of editable columns,
+  alternating rows; outline mode over a `TreeSource` with chevrons turning on the snappy
+  spring, indentation 20, ←/→ and ⌥ deep expansion), `GridView` (tiles, icons 96 × 116 and
+  thumbnails 112 with ring and check badge; reflowing, 2-D keyboard), `TableHeader`; shared
   selection (⌘/⇧, anchor and cursor), keyboard, double click/Return, overlay scroller;
+  selection pills fade in and out (`fade.quick`) and adjacent ones merge into one block;
   selected rows are emphasized (`NodeFlags::EMPHASIZED`, `Theme::emphasize`) while focused
-  in an active window. `TabView` (window tabs on the kit's tab bar), `Toolbar` (kit unified
+  in an active window, grey otherwise. Kit parity against the ui-kit masters (`Tables`,
+  `Outlines`, `Lists`, `Grids`, synced with `cargo xtask sync-kit --ui-kit`). `TabView` (window tabs on the kit's tab bar), `Toolbar` (kit unified
   bar pieces after the window controls), form pieces as kinds (value, footer, box surface).
 - **Windows**: size limits honoured (#245: sizes clamped from the compositor, the app and
   restoration); sheets are xdg-dialog modal dialogs with client-side decorations (Ossido on

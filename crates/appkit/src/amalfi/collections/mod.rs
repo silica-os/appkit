@@ -11,15 +11,17 @@
 //! They share selection (click, ⌘ toggles, ⇧ extends), the keyboard (arrows, Home/End,
 //! Page Up/Down, ⌘A, Return), double click and the overlay scroller. Selected rows are
 //! drawn on the accent with their content emphasized (`Text/On Accent`) while the
-//! collection has the focus, and on `Line/Separator` without it (kit: `Apps/Mustache/List
-//! Row`, `Column Row`, `Tile Selected`).
+//! collection has the focus, and grey without it; adjacent selected rows make one block, and
+//! the selection fades in and out (kit `Tables`, `Outlines`, `Lists`, `Grids`).
 
 mod grid;
 mod header;
+mod row;
 mod table;
 
-pub use grid::GridView;
+pub use grid::{GridLook, GridView};
 pub use header::{Column, TableColumn, TableHeader};
+pub use row::{ListHeader, ListRow};
 pub use table::{CellProvider, TableView, TreeSource};
 
 use std::collections::BTreeMap;
@@ -27,6 +29,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use crate::amalfi::scrollbars::{BarLook, ScrollbarStyle, paint_bar};
+use crate::amalfi::tokens::motion;
 use crate::core::a11y::{A11y, Action, Role};
 use crate::core::event::{Button, Event, Handled, Key, KeyEvent, Mods};
 use crate::core::layout::{Axis, Proposal};
@@ -35,6 +38,7 @@ use crate::core::ui::Ui;
 use crate::core::value::{Prop, Signal, Value};
 use crate::core::widget::{EventCx, FocusKind, LayoutCx, PaintCx, PropChange, Widget};
 use crate::geom::{Insets, Point, Rect, Size};
+use crate::motion::{Animated, Timing};
 use crate::shape::Shape;
 use crate::style::{Border, Style};
 
@@ -56,14 +60,25 @@ pub mod metrics {
     pub const SELECTION_RADIUS: f32 = crate::amalfi::tokens::spacing::S;
     /// Table header height.
     pub const HEADER_HEIGHT: f32 = crate::amalfi::tokens::control_heights::REGULAR;
-    /// Header titles' top.
-    pub const HEADER_TITLE_Y: f32 = 6.0;
+    /// Header titles' top (kit `Tables/Header`).
+    pub const HEADER_TITLE_Y: f32 = 7.0;
+    /// Header titles' height, and the dividers'.
+    pub const HEADER_TITLE_HEIGHT: f32 = 14.0;
+    /// A header divider's distance before its column.
+    pub const DIVIDER_OFFSET: f32 = crate::amalfi::tokens::spacing::S;
+    /// The sort chevron's box, after the title.
+    pub const SORT_BOX: f32 = 14.0;
+    /// The space between the title and the sort chevron.
+    pub const SORT_GAP: f32 = 3.0;
     /// The first column's left edge in a table.
     pub const LEADING: f32 = crate::amalfi::tokens::spacing::XL;
-    /// Space between columns.
-    pub const COLUMN_SPACING: f32 = crate::amalfi::tokens::spacing::M;
-    /// Space after the last column.
-    pub const TRAILING: f32 = crate::amalfi::tokens::spacing::M;
+    /// Space between columns (kit `Tables/Row`: Kind ends 8 before Date).
+    pub const COLUMN_SPACING: f32 = crate::amalfi::tokens::spacing::S;
+    /// Space after the last column (kit `Tables/Row`).
+    pub const TRAILING: f32 = crate::amalfi::tokens::spacing::L;
+    /// The inset of a trailing-aligned column's title and cells from its end (ui-kit
+    /// `STable` `.is-end`).
+    pub const END_INSET: f32 = crate::amalfi::tokens::spacing::S;
     /// The narrowest a column gets by resizing.
     pub const MIN_COLUMN: f32 = 32.0;
     /// Half the width of the zone where a column edge is grabbed.
@@ -72,10 +87,13 @@ pub mod metrics {
     pub const BOX_RADIUS: f32 = crate::amalfi::tokens::radii::MENU;
     /// A list box's padding around the rows.
     pub const BOX_PADDING: f32 = crate::amalfi::tokens::spacing::XS;
-    /// Indentation per outline level (token: nothing measured).
-    pub const INDENT: f32 = crate::amalfi::tokens::spacing::L;
-    /// The disclosure chevron's slot in an outline row.
-    pub const DISCLOSURE: f32 = 16.0;
+    /// Indentation per outline level (kit `Outlines/Row`, ui-kit `STable` tree).
+    pub const INDENT: f32 = 20.0;
+    /// Where an outline row's content starts after its column's edge: the chevron's slot
+    /// (12) and a gap of 8, the chevron starting 8 before the column.
+    pub const DISCLOSURE: f32 = 12.0;
+    /// The disclosure chevron's box (kit `Disclosure`), 8 before the column.
+    pub const DISCLOSURE_BOX: f32 = 14.0;
     /// The disclosure chevron's glyph size.
     pub const DISCLOSURE_GLYPH: f32 = 12.0;
     /// Icon-view tile (`components.md` "Icon grids").
@@ -86,6 +104,38 @@ pub mod metrics {
     pub const TILE_GAP: f32 = crate::amalfi::tokens::spacing::L;
     /// The label capsule's height under a selected tile's icon.
     pub const TILE_LABEL_HEIGHT: f32 = 20.0;
+    /// An icon grid's item (kit `Grids/Item/Icon`).
+    pub const GRID_ICON: (f32, f32) = (96.0, 116.0);
+    /// A thumbnail (kit `Grids/Item/Thumbnail`).
+    pub const GRID_THUMBNAIL: f32 = 112.0;
+    /// The padding around a grid's items (kit `Grids/Panel`).
+    pub const GRID_PADDING: f32 = crate::amalfi::tokens::spacing::L;
+    /// The gap between a grid's rows (and between thumbnails).
+    pub const GRID_GAP: f32 = crate::amalfi::tokens::spacing::S;
+    /// The plate behind a selected icon, and its top in the item.
+    pub const GRID_PLATE: f32 = 80.0;
+    /// The plate's top in the item.
+    pub const GRID_PLATE_TOP: f32 = 4.0;
+    /// The plate's radius, and a thumbnail's.
+    pub const GRID_PLATE_RADIUS: f32 = 10.0;
+    /// The name's pill: inset from the item's sides, top, height and radius.
+    pub const GRID_PILL_INSET: f32 = 4.0;
+    /// The pill's top in the item.
+    pub const GRID_PILL_TOP: f32 = 90.0;
+    /// The pill's height.
+    pub const GRID_PILL_HEIGHT: f32 = 20.0;
+    /// The pill's radius.
+    pub const GRID_PILL_RADIUS: f32 = 6.0;
+    /// A selected thumbnail's ring.
+    pub const GRID_RING: f32 = 3.0;
+    /// A selected thumbnail's check badge, and its inset from the corner.
+    pub const GRID_BADGE: f32 = 20.0;
+    /// The badge's inset from the thumbnail's corner.
+    pub const GRID_BADGE_INSET: f32 = crate::amalfi::tokens::spacing::S;
+    /// The check's box in the badge, and its glyph size.
+    pub const GRID_CHECK: f32 = 14.0;
+    /// The check's glyph size.
+    pub const GRID_CHECK_GLYPH: f32 = 12.0;
 }
 
 /// Rows made beyond each edge of the viewport (smooth scrolling).
@@ -101,6 +151,10 @@ pub enum ListLook {
     Plain,
     /// A list box: rows in a bordered, raised box (as a group box).
     Bordered,
+    /// A plain list (kit `Lists`, ui-kit `SList`): full-width rows over separators that
+    /// start under the text, with inset rounded selections that hide the separators around
+    /// them.
+    Separated,
 }
 
 impl ListLook {
@@ -108,6 +162,7 @@ impl ListLook {
         match s {
             1 => ListLook::Plain,
             2 => ListLook::Bordered,
+            3 => ListLook::Separated,
             _ => ListLook::Inset,
         }
     }
@@ -117,6 +172,7 @@ impl ListLook {
             ListLook::Inset => 0,
             ListLook::Plain => 1,
             ListLook::Bordered => 2,
+            ListLook::Separated => 3,
         }
     }
 
@@ -124,7 +180,7 @@ impl ListLook {
     fn insets(self) -> (f32, f32) {
         match self {
             ListLook::Inset => (metrics::SELECTION_INSET, 0.0),
-            ListLook::Plain => (0.0, 0.0),
+            ListLook::Plain | ListLook::Separated => (0.0, 0.0),
             ListLook::Bordered => (metrics::BOX_PADDING, metrics::BOX_PADDING),
         }
     }
@@ -496,14 +552,17 @@ impl Rows {
 }
 
 /// The colour a selection is drawn with: the accent while the collection is emphasized
-/// (it has the focus in an active window), `Line/Separator` otherwise (kit: `Column
-/// Row/Dimmed`).
+/// (it has the focus in an active window), grey otherwise (kit `Tables/Row/Selected
+/// Inactive`: `Surface/Control Pressed` in light, `Surface/Control` in dark).
 pub(crate) fn selection_fill(cx: &PaintCx<'_>, emphasis: bool) -> crate::color::Color {
-    let c = cx.theme().colors;
+    let theme = cx.theme();
+    let c = theme.colors;
     if emphasis {
         c.accent_amalfi
+    } else if theme.dark() {
+        c.surface_control
     } else {
-        c.line_separator
+        c.surface_control_pressed
     }
 }
 
@@ -524,6 +583,84 @@ pub(crate) fn paint_focus_ring(cx: &mut PaintCx<'_>, rect: Rect) {
 /// Whether selected rows are drawn emphasized.
 pub(crate) fn emphasized(focused: bool, active: bool) -> bool {
     focused && active
+}
+
+/// The shape of selected row `i`: adjacent selected rows make one block, rounded only at its
+/// ends (ui-kit `useSelection`, merged blocks).
+pub(crate) fn selection_shape(selected: &[usize], i: usize, radius: f32) -> Shape {
+    let above = i > 0 && selected.binary_search(&(i - 1)).is_ok();
+    let below = selected.binary_search(&(i + 1)).is_ok();
+    let top = if above { 0.0 } else { radius };
+    let bottom = if below { 0.0 } else { radius };
+    Shape::rounded_corners(crate::geom::Corners {
+        top_left: top,
+        top_right: top,
+        bottom_right: bottom,
+        bottom_left: bottom,
+    })
+}
+
+/// The selection's fade (ui-kit `useSelection`, `fade.quick`): rows that join it fade in,
+/// rows that leave it fade out.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SelectionFade {
+    /// The selection the fades started from.
+    shown: Vec<usize>,
+    /// The rows fading and their opacity.
+    fading: BTreeMap<usize, Animated<f32>>,
+}
+
+impl SelectionFade {
+    /// Starts fades for the rows that joined or left `selected`; returns whether any runs.
+    pub(crate) fn sync(&mut self, selected: &[usize], reduce: bool) -> bool {
+        if reduce {
+            self.fading.clear();
+        } else {
+            let timing = Timing::curve(motion::FADE_QUICK_CURVE, motion::FADE_QUICK);
+            for &i in selected {
+                if self.shown.binary_search(&i).is_err() {
+                    let from = self.fading.get(&i).map_or(0.0, Animated::get);
+                    let mut a = Animated::new(from);
+                    a.animate_to(1.0, timing);
+                    self.fading.insert(i, a);
+                }
+            }
+            for &i in &self.shown {
+                if selected.binary_search(&i).is_err() {
+                    let from = self.fading.get(&i).map_or(1.0, Animated::get);
+                    let mut a = Animated::new(from);
+                    a.animate_to(0.0, timing);
+                    self.fading.insert(i, a);
+                }
+            }
+        }
+        self.shown = selected.to_vec();
+        !self.fading.is_empty()
+    }
+
+    /// Advances the fades; returns whether any still runs.
+    pub(crate) fn tick(&mut self, dt: f32) -> bool {
+        for a in self.fading.values_mut() {
+            a.tick(dt);
+        }
+        self.fading.retain(|_, a| a.is_animating());
+        !self.fading.is_empty()
+    }
+
+    /// The rows to draw a selection under, with their opacity: the selected ones and the ones
+    /// fading out.
+    pub(crate) fn rows<'a>(
+        &'a self,
+        selected: &'a [usize],
+    ) -> impl Iterator<Item = (usize, f32)> + 'a {
+        let alpha = |i: usize| self.fading.get(&i).map_or(1.0, Animated::get);
+        selected.iter().map(move |&i| (i, alpha(i))).chain(
+            self.fading
+                .iter()
+                .filter(|(i, _)| selected.binary_search(i).is_err())
+                .map(|(i, a)| (*i, a.get())),
+        )
+    }
 }
 
 /// Draws the overlay scroller of a vertical run of rows in `area` (paint coordinates).
@@ -651,6 +788,8 @@ pub struct ListView {
     dirty: bool,
     /// The pointer is over the list (the overlay scroller shows).
     hovered: bool,
+    /// The selection's fade.
+    fade: SelectionFade,
     /// Selected rows are drawn emphasized.
     emphasis: bool,
 }
@@ -676,6 +815,7 @@ impl ListView {
             live: BTreeMap::new(),
             dirty: false,
             hovered: false,
+            fade: SelectionFade::default(),
             emphasis: false,
         }
     }
@@ -773,6 +913,12 @@ impl ListView {
     fn selection_changed(&mut self, cx: &mut EventCx<'_>) {
         cx.emit(Signal::SelectionChanged, self.rows.selection_value());
         self.sync_emphasis(cx.ui());
+        if self
+            .fade
+            .sync(&self.rows.selected, cx.theme().appearance.reduce_motion)
+        {
+            cx.animate();
+        }
         cx.request_paint();
     }
 
@@ -835,29 +981,58 @@ impl Widget for ListView {
             paint_box(cx, self.box_rect(r.size()).translate(r.origin()));
         }
         let area = self.viewport(r.size()).translate(r.origin());
-        let inset = self.look.insets().0;
+        let inset = match self.look {
+            ListLook::Separated => metrics::SELECTION_INSET,
+            look => look.insets().0,
+        };
         let color = selection_fill(cx, self.emphasis);
-        let shape = if self.look == ListLook::Plain {
-            Shape::RECT
+        let radius = if self.look == ListLook::Plain {
+            0.0
         } else {
-            Shape::rounded(metrics::SELECTION_RADIUS)
+            metrics::SELECTION_RADIUS
         };
         cx.rec.push_clip(area, Shape::RECT);
-        for i in &self.rows.selected {
-            let y = self.rows.y(*i);
+        if self.look == ListLook::Separated {
+            // Under every row from its text to 8 before the end, but around the selection.
+            let ink = cx.theme().colors.line_separator;
+            for i in self.rows.visible() {
+                if self.rows.is_selected(i) || self.rows.is_selected(i + 1) {
+                    continue;
+                }
+                let y = area.y + self.rows.y(i) + self.rows.height - 1.0;
+                cx.rec.layer(
+                    "Separator",
+                    Rect::new(
+                        area.x + row::metrics::TEXT_X,
+                        y,
+                        (area.width - row::metrics::TEXT_X - metrics::SELECTION_INSET).max(0.0),
+                        1.0,
+                    ),
+                    Shape::RECT,
+                    Style::fill(ink),
+                );
+            }
+        }
+        for (i, alpha) in self.fade.rows(&self.rows.selected) {
+            let y = self.rows.y(i);
             if y + self.rows.height < 0.0 || y > area.height {
                 continue;
             }
+            let shape = selection_shape(&self.rows.selected, i, radius);
+            let color = color.with_opacity(alpha);
             let rect = Rect::new(
                 area.x + inset,
                 area.y + y,
                 (area.width - 2.0 * inset).max(0.0),
                 self.rows.height,
             );
-            cx.rec
-                .layer("Selection", rect, shape.clone(), Style::fill(color));
+            cx.rec.layer("Selection", rect, shape, Style::fill(color));
         }
         cx.rec.pop();
+    }
+
+    fn tick(&mut self, _cx: &mut EventCx<'_>, dt: f32) -> bool {
+        self.fade.tick(dt)
     }
 
     fn paint_over(&mut self, cx: &mut PaintCx<'_>) {

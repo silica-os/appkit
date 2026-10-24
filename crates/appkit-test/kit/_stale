@@ -150,6 +150,44 @@ Fields/Search Field/Small/Focused/Dark
 Fields/Search Field/Small/Focused/Light
 Fields/Search Field/Small/Typing/Dark
 Fields/Search Field/Small/Typing/Light
+Grids/Item/Icon/Rest/Dark
+Grids/Item/Icon/Rest/Light
+Grids/Item/Icon/Selected Inactive/Dark
+Grids/Item/Icon/Selected Inactive/Light
+Grids/Item/Icon/Selected/Dark
+Grids/Item/Icon/Selected/Light
+Grids/Item/Thumbnail/Rest/Dark
+Grids/Item/Thumbnail/Rest/Light
+Grids/Item/Thumbnail/Selected Inactive/Dark
+Grids/Item/Thumbnail/Selected Inactive/Light
+Grids/Item/Thumbnail/Selected/Dark
+Grids/Item/Thumbnail/Selected/Light
+Grids/Panel/Icons/Dark
+Grids/Panel/Icons/Light
+Grids/Panel/Thumbnails/Dark
+Grids/Panel/Thumbnails/Light
+Lists/Header/Rest/Dark
+Lists/Header/Rest/Light
+Lists/Panel/Single/Dark
+Lists/Panel/Single/Light
+Lists/Panel/Two Line/Dark
+Lists/Panel/Two Line/Light
+Lists/Row/Single/Disabled/Dark
+Lists/Row/Single/Disabled/Light
+Lists/Row/Single/Rest/Dark
+Lists/Row/Single/Rest/Light
+Lists/Row/Single/Selected Inactive/Dark
+Lists/Row/Single/Selected Inactive/Light
+Lists/Row/Single/Selected/Dark
+Lists/Row/Single/Selected/Light
+Lists/Row/Two Line/Disabled/Dark
+Lists/Row/Two Line/Disabled/Light
+Lists/Row/Two Line/Rest/Dark
+Lists/Row/Two Line/Rest/Light
+Lists/Row/Two Line/Selected Inactive/Dark
+Lists/Row/Two Line/Selected Inactive/Light
+Lists/Row/Two Line/Selected/Dark
+Lists/Row/Two Line/Selected/Light
 Menu Bar/Bar/Closed/Rest/Dark
 Menu Bar/Bar/Closed/Rest/Light
 Menu Bar/Item/Silica/Rest/Dark
@@ -170,6 +208,34 @@ Notifications/Centre/Panel/Rest/Dark
 Notifications/Centre/Panel/Rest/Light
 Notifications/Stack/Grouped/Rest/Dark
 Notifications/Stack/Grouped/Rest/Light
+Outlines/Header/Rest/Dark
+Outlines/Header/Rest/Light
+Outlines/Panel/Rest/Dark
+Outlines/Panel/Rest/Light
+Outlines/Row/Closed/Rest/Dark
+Outlines/Row/Closed/Rest/Light
+Outlines/Row/Closed/Selected Inactive/Dark
+Outlines/Row/Closed/Selected Inactive/Light
+Outlines/Row/Closed/Selected/Dark
+Outlines/Row/Closed/Selected/Light
+Outlines/Row/Leaf Deep/Rest/Dark
+Outlines/Row/Leaf Deep/Rest/Light
+Outlines/Row/Leaf Deep/Selected Inactive/Dark
+Outlines/Row/Leaf Deep/Selected Inactive/Light
+Outlines/Row/Leaf Deep/Selected/Dark
+Outlines/Row/Leaf Deep/Selected/Light
+Outlines/Row/Leaf/Rest/Dark
+Outlines/Row/Leaf/Rest/Light
+Outlines/Row/Leaf/Selected Inactive/Dark
+Outlines/Row/Leaf/Selected Inactive/Light
+Outlines/Row/Leaf/Selected/Dark
+Outlines/Row/Leaf/Selected/Light
+Outlines/Row/Open/Rest/Dark
+Outlines/Row/Open/Rest/Light
+Outlines/Row/Open/Selected Inactive/Dark
+Outlines/Row/Open/Selected Inactive/Light
+Outlines/Row/Open/Selected/Dark
+Outlines/Row/Open/Selected/Light
 Popovers/Popover/Form/Bottom Center/Dark
 Popovers/Popover/Form/Bottom Center/Light
 Popovers/Popover/Form/Bottom End/Dark
@@ -762,6 +828,24 @@ Steppers/Stepper/Small/Pressed Up/Dark
 Steppers/Stepper/Small/Pressed Up/Light
 Steppers/Stepper/Small/Rest/Dark
 Steppers/Stepper/Small/Rest/Light
+Tables/Header/Ascending/Dark
+Tables/Header/Ascending/Light
+Tables/Header/Descending/Dark
+Tables/Header/Descending/Light
+Tables/Header/Rest/Dark
+Tables/Header/Rest/Light
+Tables/Panel/Plain/Dark
+Tables/Panel/Plain/Light
+Tables/Panel/Striped/Dark
+Tables/Panel/Striped/Light
+Tables/Row/Even/Rest/Dark
+Tables/Row/Even/Rest/Light
+Tables/Row/Odd/Rest/Dark
+Tables/Row/Odd/Rest/Light
+Tables/Row/Selected Inactive/Dark
+Tables/Row/Selected Inactive/Light
+Tables/Row/Selected/Dark
+Tables/Row/Selected/Light
 Titlebars/Bar/Compact/Active/Dark
 Titlebars/Bar/Compact/Active/Light
 Titlebars/Bar/Compact/Inactive/Dark

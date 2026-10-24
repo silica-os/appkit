@@ -250,14 +250,17 @@ fn a_table_places_cells_in_columns() {
         .iter()
         .map(|c| ui.tree.window_rect(*c).x - f.x)
         .collect();
-    assert_eq!(xs, vec![20.0, 232.0, 324.0]);
+    assert_eq!(xs, vec![20.0, 228.0, 316.0]);
     // The last column takes the rest.
-    assert_eq!(ui.tree.window_rect(cells[2]).width, 500.0 - 324.0 - 12.0);
+    assert_eq!(ui.tree.window_rect(cells[2]).width, 500.0 - 316.0 - 16.0);
     assert_eq!(text(&ui, cells[1]), "r0 c1");
     let layers = ui.inspect_layers(t);
     assert!(layers.iter().any(|l| l.name == "Stripe"));
     for t in ["Name", "Size", "Kind"] {
-        assert!(layers.iter().any(|l| l.name == t), "{t}");
+        assert!(
+            layers.iter().any(|l| l.name == format!("Column {t}")),
+            "{t}"
+        );
     }
     // Selection by keyboard, ⇧ extends.
     ui.set_focus(t, true);
@@ -464,7 +467,8 @@ fn a_grid_reflows_and_selects_in_two_dimensions() {
         ui.get(g, Prop::SelectedRows),
         Some(Value::IntList(vec![9, 10]))
     );
-    ui.prepare_frame(w);
+    // The selection fades in (`fade.quick`).
+    ui.settle_animations(w);
     let layers = ui.inspect_layers(g);
     assert_eq!(
         layers.iter().filter(|l| l.name == "Label capsule").count(),
@@ -655,6 +659,7 @@ fn a_focused_collection_draws_a_focus_ring_and_dims_in_an_inactive_window() {
     ui.set_appearance(a);
     ui.set_focus(list, true);
     key(&mut ui, w, Key::Down, Mods::empty());
+    ui.settle_animations(w);
     let has = |ui: &mut Ui, name: &str| {
         ui.inspect_layers(list)
             .iter()
