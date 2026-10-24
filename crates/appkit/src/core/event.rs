@@ -310,6 +310,9 @@ pub enum Event {
     },
     /// A key.
     Key(KeyEvent),
+    /// The modifiers held changed (a modifier key's own press comes before its bit is set):
+    /// the new set.
+    Modifiers(Mods),
     /// Committed text from the input method or the keyboard.
     Text(String),
     /// The input method's pre-edit (composition) text and caret.

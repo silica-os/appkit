@@ -1997,6 +1997,19 @@ impl Ui {
         self.flush();
     }
 
+    /// The modifiers held changed: [`Event::Modifiers`] goes to the focused view (or the
+    /// window's key anchor) and its ancestors.
+    pub fn modifiers(&mut self, window: WindowId, mods: Mods) {
+        let anchor = self
+            .window(window)
+            .and_then(|w| w.key_anchor)
+            .filter(|a| self.tree.contains(*a) && self.is_visible(*a));
+        if let Some(f) = self.focus(window).or(anchor) {
+            self.send_bubbling(f, &Event::Modifiers(mods));
+        }
+        self.flush();
+    }
+
     /// A key went down or up. Order: the focused view and its ancestors (responder chain);
     /// then the window's keys (Tab, Return for the default button, Escape for cancel); then
     /// the app's shortcuts; else [`Signal::KeyUnhandled`] on the root.
@@ -3138,7 +3151,8 @@ mod tests {
             FocusKind::Control
         }
         fn event(&mut self, cx: &mut EventCx<'_>, e: &Event) -> Handled {
-            if *e == Event::Activate {
+            // Holding Alt activates it too (the modifiers test).
+            if *e == Event::Activate || *e == Event::Modifiers(Mods::ALT) {
                 cx.emit(Signal::Activated, Value::None);
                 return Handled::Yes;
             }
@@ -3340,6 +3354,17 @@ mod tests {
         let img = ui.snapshot(win, 2.0).unwrap();
         assert!(red(img.pixel(inside.0, inside.1)));
         assert!(red(img.pixel(past.0, past.1)), "drawn over the clip");
+    }
+
+    #[test]
+    fn modifier_changes_reach_the_focused_view() {
+        let (mut ui, win, _a, _b, count) = setup();
+        ui.modifiers(win, Mods::ALT);
+        assert_eq!(count.get(), 0, "nothing has the focus");
+        ui.appearance.full_keyboard_access = true;
+        ui.key(win, KeyEvent::press(Key::Tab, Mods::empty()));
+        ui.modifiers(win, Mods::ALT);
+        assert_eq!(count.get(), 1);
     }
 
     #[test]

@@ -2504,7 +2504,15 @@ impl KeyboardHandler for Platform {
         _: RawModifiers,
         _: u32,
     ) {
-        self.mods = mods_of(&modifiers);
+        let mods = mods_of(&modifiers);
+        if mods == self.mods {
+            return;
+        }
+        self.mods = mods;
+        if let Some(w) = self.keyboard_focus {
+            self.ui.now = self.start.elapsed().as_secs_f64();
+            self.ui.modifiers(w, mods);
+        }
     }
 
     fn update_repeat_info(
