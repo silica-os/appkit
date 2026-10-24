@@ -205,7 +205,11 @@ pub(crate) fn rows_of(items: &[MenuItem]) -> Vec<crate::amalfi::menus::Row> {
                 RowKind::Item
             },
             label: it.title.clone(),
-            shortcut: it.shortcut.clone(),
+            // `cmd+w` shows as `⌘W`.
+            shortcut: it.shortcut.as_deref().map(|s| {
+                crate::core::event::Shortcut::parse(s)
+                    .map_or_else(|| s.to_string(), |k| k.display())
+            }),
             icon: it.icon.clone(),
             checked: it.checked == Some(true),
             submenu: it.submenu.is_some(),
@@ -384,6 +388,17 @@ mod tests {
         assert_eq!(hits.get(), 1);
         ui.key(win, KeyEvent::press(Key::Char('n'), Mods::LOGO));
         assert_eq!(hits.get(), 2);
+    }
+
+    #[test]
+    fn menus_show_shortcuts_as_glyphs() {
+        let rows = rows_of(&[
+            MenuItem::new("Close").shortcut("cmd+w"),
+            MenuItem::new("Force Quit").shortcut("cmd+alt+escape"),
+            MenuItem::new("Odd").shortcut("cmd+"),
+        ]);
+        let shown: Vec<_> = rows.iter().map(|r| r.shortcut.as_deref()).collect();
+        assert_eq!(shown, [Some("⌘W"), Some("⌥⌘⎋"), Some("cmd+")]);
     }
 
     #[test]
