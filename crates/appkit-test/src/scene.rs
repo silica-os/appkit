@@ -432,7 +432,24 @@ impl Scene {
         };
         let kit_px = rgba(&kit).ok_or("cannot read the PNG's pixels")?;
         let our_px = rgba(&ours).ok_or("cannot read our pixels")?;
-        let a = crop(&kit_px, kw, 0, 0);
+        // A stale PNG bigger than ours carries the wider margin of the older shadows, which
+        // fall straight down: centred across, the better fit down counts.
+        let mut a = crop(&kit_px, kw, 0, 0);
+        if stale && kw >= ow && kh >= oh && (kw, kh) != (ow, oh) {
+            let mut best = u64::MAX;
+            for dy in 0..=kh - oh {
+                let k = crop(&kit_px, kw, (kw - ow) / 2, dy);
+                let d: u64 = k
+                    .iter()
+                    .zip(&our_px)
+                    .map(|(p, q)| u64::from(p.abs_diff(*q)))
+                    .sum();
+                if d < best {
+                    best = d;
+                    a = k;
+                }
+            }
+        }
         // Ours may be bigger than the kit's: the margin is at the top left (the window's
         // origin) or only right and below; the better fit counts.
         let mut offset = (0, 0);
