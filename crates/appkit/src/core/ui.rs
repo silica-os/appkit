@@ -1728,6 +1728,12 @@ impl Ui {
         ev.clone()
     }
 
+    /// Whether the pointer entering or leaving `v` repaints it: not the window's root, which
+    /// draws nothing of its own, nor a view that looks the same either way.
+    fn paints_hover(&self, v: ViewId, root: Option<ViewId>) -> bool {
+        Some(v) != root && self.tree.widget(v).is_none_or(|w| w.paints_hover())
+    }
+
     fn update_hover(&mut self, window: WindowId, pos: Option<Point>, _mods: Mods) {
         let new_chain: Vec<ViewId> = match pos.and_then(|p| self.hit_test(window, p)) {
             Some((v, _)) => {
@@ -1745,6 +1751,7 @@ impl Ui {
         if old_chain == new_chain {
             return;
         }
+        let root = self.window(window).map(|w| w.root);
         for v in old_chain.iter().rev() {
             if !new_chain.contains(v) {
                 if let Some(n) = self.tree.get_mut(*v) {
@@ -1752,7 +1759,9 @@ impl Ui {
                 }
                 self.send(*v, &Event::PointerLeave);
                 self.emit(*v, Signal::PointerExited, Value::None);
-                self.request_paint(*v);
+                if self.paints_hover(*v, root) {
+                    self.request_paint(*v);
+                }
             }
         }
         for v in &new_chain {
@@ -1762,7 +1771,9 @@ impl Ui {
                 }
                 self.send(*v, &Event::PointerEnter);
                 self.emit(*v, Signal::PointerEntered, Value::None);
-                self.request_paint(*v);
+                if self.paints_hover(*v, root) {
+                    self.request_paint(*v);
+                }
             }
         }
         if let Some(w) = self.window_mut(window) {
@@ -3224,6 +3235,37 @@ mod tests {
         assert_eq!(count.get(), 1);
         ui.key(win, KeyEvent::press(Key::Tab, Mods::SHIFT));
         assert_eq!(ui.focus(win), Some(b));
+    }
+
+    struct Backdrop;
+
+    impl Widget for Backdrop {
+        fn kind(&self) -> &'static str {
+            "Backdrop"
+        }
+        fn measure(&mut self, _cx: &mut LayoutCx<'_>, p: Proposal) -> Size {
+            p.replacing_unspecified(Size::new(200.0, 100.0))
+        }
+        fn paints_hover(&self) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn a_view_that_ignores_hover_is_not_repainted_by_the_pointer() {
+        let mut ui = Ui::new_headless();
+        let win = ui.create_window(WindowKind::Normal, Size::new(200.0, 100.0));
+        let v = ui.create(Backdrop);
+        ui.set_content(win, v);
+        ui.show_window(win);
+        ui.prepare_frame(win);
+        ui.pointer_move(win, Point::new(50.0, 50.0), Mods::empty());
+        assert!(ui.tree.flags(v).contains(NodeFlags::HOVERED));
+        assert_eq!(ui.prepare_frame(win), Rect::ZERO);
+        // A view that draws its hover still is.
+        let (mut ui, win, a, _b, _count) = setup();
+        ui.pointer_move(win, ui.tree.window_rect(a).center(), Mods::empty());
+        assert_eq!(ui.prepare_frame(win), ui.tree.window_rect(a));
     }
 
     #[test]

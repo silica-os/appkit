@@ -123,6 +123,12 @@ pub trait Widget: AsAny {
         FocusKind::None
     }
 
+    /// Whether the view looks different while the pointer is over it: when not, the pointer
+    /// entering and leaving repaints nothing (a full-screen wallpaper, a backdrop).
+    fn paints_hover(&self) -> bool {
+        true
+    }
+
     /// Whether `p` (view coordinates, within `size`) hits the view. The default: inside
     /// the bounds, for views that interact or draw a background.
     fn hit(&self, p: Point, size: Size) -> bool {
