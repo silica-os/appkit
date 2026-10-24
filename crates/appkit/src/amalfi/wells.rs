@@ -229,11 +229,12 @@ impl Widget for ColorPanel {
     fn paint(&mut self, cx: &mut PaintCx<'_>) {
         let theme = *cx.theme();
         let b = cx.bounds();
-        cx.rec.layer(
+        cx.glass(
             "Surface",
             b,
             Shape::rounded(metrics::PANEL_RADIUS),
-            theme.material_style("Glass/Regular"),
+            "Glass/Regular",
+            crate::core::display::GlassProfile::Popover,
         );
         let (l, t, _, _) = metrics::PANEL_PADDING;
         let style = theme.text(&typography::HEADLINE, theme.colors.text_primary);

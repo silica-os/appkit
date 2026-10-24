@@ -149,11 +149,12 @@ impl Widget for Tooltip {
         if fade < 1.0 {
             cx.rec.push_opacity(fade);
         }
-        cx.rec.layer(
+        cx.glass(
             "Surface",
             r,
             Shape::rounded(metrics::RADIUS),
-            theme.material_style("Glass/Regular"),
+            "Glass/Regular",
+            crate::core::display::GlassProfile::Tooltip,
         );
         let (label_w, shortcut_w, height) = self.boxes(&theme, r.width);
         let msg_style = theme.text(&typography::CALLOUT, theme.colors.text_primary);

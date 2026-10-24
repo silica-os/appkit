@@ -48,6 +48,9 @@ pub enum DisplayItem {
         material: &'static str,
         /// The compositor profile (silica-glass-v1 `profile`).
         profile: GlassProfile,
+        /// A popover's arrow: the compositor draws `rect` and `shape` as a rounded body and
+        /// the tip apart (the client paints the whole outline).
+        tip: Option<GlassTip>,
     },
     /// Laid-out text.
     Text {
@@ -168,6 +171,32 @@ pub enum GlassProfile {
     Banner = 8,
     /// Popovers.
     Popover = 9,
+}
+
+/// Where a glass tip's apex points (silica-glass-v1 tips).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TipSide {
+    /// Up: a popover below what it points at.
+    Up,
+    /// Down: a popover above it.
+    Down,
+    /// Left: a popover after it.
+    Left,
+    /// Right: a popover before it.
+    Right,
+}
+
+/// A popover's body and arrow as compositor glass: a rounded body and a tip on its edge.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GlassTip {
+    /// The body, without the arrow.
+    pub body: Rect,
+    /// The body's corner radius.
+    pub radius: f32,
+    /// The arrow's box: its base on the body's edge, its apex on the opposite side.
+    pub rect: Rect,
+    /// Where the apex points.
+    pub side: TipSide,
 }
 
 /// A recorded list of items.
@@ -307,6 +336,7 @@ impl Recorder {
     }
 
     /// A glass surface (see [`DisplayItem::Glass`]).
+    #[allow(clippy::too_many_arguments)]
     pub fn glass(
         &mut self,
         name: &str,
@@ -315,6 +345,7 @@ impl Recorder {
         style: Style,
         material: &'static str,
         profile: GlassProfile,
+        tip: Option<GlassTip>,
     ) {
         self.list.items.push(DisplayItem::Glass {
             name: Rc::from(name),
@@ -323,6 +354,7 @@ impl Recorder {
             style,
             material,
             profile,
+            tip,
         });
     }
 

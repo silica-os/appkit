@@ -164,6 +164,8 @@ pub struct GlassRegion {
     pub profile: crate::core::display::GlassProfile,
     /// Opacity.
     pub opacity: f32,
+    /// A popover's arrow, merged with this region (window coordinates).
+    pub tip: Option<(Rect, crate::core::display::TipSide)>,
 }
 
 /// A signal handler.
@@ -1017,7 +1019,8 @@ impl Ui {
         self.request_frame(window);
     }
 
-    /// Closes and destroys a window and its views.
+    /// Closes and destroys a window and its views; the [`Signal::Closed`] handlers of its root
+    /// run first.
     pub fn close_window(&mut self, window: WindowId) {
         let Some(pos) = self.windows.iter().position(|w| w.id == window) else {
             return;
@@ -1045,6 +1048,13 @@ impl Ui {
         }
         self.save_window_state(window);
         let w = self.windows.remove(pos);
+        // Whoever waits for the window to go (a popover's open binding) hears it however it
+        // goes (a click outside, Escape, the app), before its views and their handlers do.
+        if let Some(mut list) = self.handlers.remove(&(w.root, Signal::Closed)) {
+            for (_, h) in &mut list {
+                h(self, w.root, &Value::None);
+            }
+        }
         self.destroy(w.root);
         self.requests.push(Request::CloseWindow(window));
     }
@@ -2949,22 +2959,45 @@ impl Ui {
                 continue;
             }
             let origin = self.tree.window_origin(v);
+            // The view's opacity as presented (a popover fading in or out) and what it pushed
+            // around its glass (a tooltip's fade) go to the compositor with the region.
+            let presented = std::iter::once(v)
+                .chain(self.tree.ancestors(v))
+                .filter_map(|a| self.tree.get(a))
+                .map(|a| a.modifiers.opacity * a.anim.as_ref().map_or(1.0, |m| m.opacity.get()))
+                .product::<f32>();
+            let mut opacity = vec![presented];
             for item in n.display.items.iter().chain(n.display_over.items.iter()) {
-                if let crate::core::display::DisplayItem::Glass {
+                use crate::core::display::DisplayItem;
+                let alpha = opacity.last().copied().unwrap_or(1.0);
+                match item {
+                    DisplayItem::PushOpacity(o) => opacity.push(alpha * o),
+                    DisplayItem::PushClip { .. } => opacity.push(alpha),
+                    DisplayItem::Pop if opacity.len() > 1 => {
+                        opacity.pop();
+                    }
+                    _ => {}
+                }
+                if let DisplayItem::Glass {
                     rect,
                     shape,
                     material,
                     profile,
+                    tip,
                     ..
                 } = item
                 {
-                    let (radius, smoothing) = match shape {
-                        Shape::Rect { corners, smoothing } => (corners.top_left, *smoothing),
-                        Shape::Capsule => (
+                    let (rect, radius, smoothing) = match (tip, shape) {
+                        (Some(t), _) => (t.body, t.radius, crate::shape::AMALFI_SMOOTHING),
+                        (None, Shape::Rect { corners, smoothing }) => {
+                            (*rect, corners.top_left, *smoothing)
+                        }
+                        (None, Shape::Capsule) => (
+                            *rect,
                             rect.width.min(rect.height) / 2.0,
                             crate::shape::AMALFI_SMOOTHING,
                         ),
-                        _ => (0.0, 0.0),
+                        _ => (*rect, 0.0, 0.0),
                     };
                     out.push(GlassRegion {
                         rect: rect.translate(origin),
@@ -2972,7 +3005,8 @@ impl Ui {
                         smoothing,
                         material,
                         profile: *profile,
-                        opacity: n.modifiers.opacity,
+                        opacity: alpha,
+                        tip: tip.map(|t| (t.rect.translate(origin), t.side)),
                     });
                 }
             }

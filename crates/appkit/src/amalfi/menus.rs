@@ -637,13 +637,13 @@ impl Widget for Menu {
     }
 
     fn paint(&mut self, cx: &mut PaintCx<'_>) {
-        let theme = *cx.theme();
         let b = cx.bounds();
-        cx.rec.layer(
+        cx.glass(
             "Surface",
             b,
             Shape::rounded(metrics::RADIUS),
-            theme.material_style("Glass/Regular"),
+            "Glass/Regular",
+            crate::core::display::GlassProfile::Menu,
         );
     }
 

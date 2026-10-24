@@ -355,7 +355,24 @@ impl PaintCx<'_> {
         profile: crate::core::display::GlassProfile,
     ) {
         let style = self.theme.material_style(material);
-        self.rec.glass(name, rect, shape, style, material, profile);
+        self.rec
+            .glass(name, rect, shape, style, material, profile, None);
+    }
+
+    /// Records a popover's glass: `shape` is the whole outline (body and arrow) the client
+    /// paints when it draws the glass itself; the compositor draws `tip`'s body and arrow.
+    pub fn tipped_glass(
+        &mut self,
+        name: &str,
+        rect: Rect,
+        shape: crate::shape::Shape,
+        material: &'static str,
+        profile: crate::core::display::GlassProfile,
+        tip: crate::core::display::GlassTip,
+    ) {
+        let style = self.theme.material_style(material);
+        self.rec
+            .glass(name, rect, shape, style, material, profile, Some(tip));
     }
 }
 

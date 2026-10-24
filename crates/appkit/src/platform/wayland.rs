@@ -95,6 +95,7 @@ use wayland_protocols::ext::foreign_toplevel_list::v1::client::{
     ext_foreign_toplevel_list_v1::{self, ExtForeignToplevelListV1},
 };
 
+use crate::core::display::TipSide;
 use crate::core::event::{Button, Key, KeyEvent, Mods, Phase};
 use crate::core::menu::{MenuItem, PopupKind, PopupMenuRequest};
 use crate::core::ui::GlassRegion;
@@ -649,6 +650,10 @@ impl Platform {
         let shm = Shm::bind(globals, &qh).map_err(err)?;
         let mut ui = Ui::new_headless();
         ui.has_platform_clipboard = true;
+        let glass_manager: Option<SilicaGlassManagerV1> = globals.bind(&qh, 1..=9, ()).ok();
+        // Popups and shell surfaces leave their glass to the compositor, which has the
+        // backdrop; without silica-glass-v1 they paint it themselves.
+        ui.compositor_glass_available = glass_manager.is_some();
         Ok(Platform {
             ui,
             registry: RegistryState::new(globals),
@@ -678,7 +683,7 @@ impl Platform {
             launch_token: std::env::var("XDG_ACTIVATION_TOKEN")
                 .ok()
                 .filter(|t| !t.is_empty()),
-            glass_manager: globals.bind(&qh, 1..=9, ()).ok(),
+            glass_manager,
             window_manager: globals.bind(&qh, 1..=4, ()).ok(),
             menu_manager: globals.bind(&qh, 1..=2, ()).ok(),
             shell: None,
@@ -1052,18 +1057,20 @@ impl Platform {
                 let Ok(pos) = XdgPositioner::new(xdg) else {
                     return;
                 };
+                // `anchor` is where AppKit placed the popup itself (arrow, gap and clamping
+                // done): its top-left corner goes on the rectangle's top-left corner. A flip
+                // would move it off its trigger; the compositor only slides it on screen.
                 pos.set_size(size.width.max(1.0) as i32, size.height.max(1.0) as i32);
                 pos.set_anchor_rect(
-                    anchor.x as i32,
-                    anchor.y as i32,
+                    anchor.x.round() as i32,
+                    anchor.y.round() as i32,
                     anchor.width.max(1.0) as i32,
                     anchor.height.max(1.0) as i32,
                 );
-                pos.set_anchor(xdg_positioner::Anchor::BottomLeft);
+                pos.set_anchor(xdg_positioner::Anchor::TopLeft);
                 pos.set_gravity(xdg_positioner::Gravity::BottomRight);
                 pos.set_constraint_adjustment(
-                    xdg_positioner::ConstraintAdjustment::FlipY
-                        | xdg_positioner::ConstraintAdjustment::SlideX
+                    xdg_positioner::ConstraintAdjustment::SlideX
                         | xdg_positioner::ConstraintAdjustment::SlideY,
                 );
                 match Popup::from_surface(parent_xdg.as_ref(), &pos, &self.qh, wl, xdg) {
@@ -1898,6 +1905,25 @@ fn send_glass(s: &mut Surface, regions: Vec<GlassRegion>) {
         } else {
             g.add_region(x, y, w, h, f64::from(r.radius), material);
         }
+        // A popover's arrow merges with its body (same group and material).
+        if let Some((t, side)) = r.tip {
+            let (x, y) = (t.x.round() as i32, t.y.round() as i32);
+            let (w, h) = (t.width.round() as i32, t.height.round() as i32);
+            let opacity = f64::from(r.opacity);
+            match side {
+                TipSide::Down if g.version() >= 4 => g.add_tip(x, y, w, h, material, opacity),
+                TipSide::Up if g.version() >= 5 => g.add_upward_tip(x, y, w, h, material, opacity),
+                TipSide::Left | TipSide::Right if g.version() >= 6 => {
+                    let side = if side == TipSide::Left {
+                        silica_glass_v1::Side::Left
+                    } else {
+                        silica_glass_v1::Side::Right
+                    };
+                    g.add_side_tip(x, y, w, h, side, material, opacity);
+                }
+                _ => {}
+            }
+        }
     }
     s.glass_sent = regions;
 }
@@ -2235,13 +2261,6 @@ impl PopupHandler for Platform {
 
     fn done(&mut self, _: &Connection, _: &QueueHandle<Self>, popup: &Popup) {
         if let Some(id) = self.window_of(popup.wl_surface()) {
-            if let Some(root) = self.ui.window(id).map(|w| w.root) {
-                self.ui.emit(
-                    root,
-                    crate::core::value::Signal::Closed,
-                    crate::core::value::Value::None,
-                );
-            }
             self.ui.close_window(id);
         }
     }

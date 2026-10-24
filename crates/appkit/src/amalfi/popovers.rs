@@ -9,6 +9,7 @@ use crate::amalfi::callouts::CalloutShape;
 use crate::amalfi::foundation::Label;
 use crate::amalfi::tokens::typography;
 use crate::core::a11y::{A11y, Role};
+use crate::core::display::{GlassProfile, GlassTip, TipSide};
 use crate::core::layout::{Alignment, Proposal, Stack};
 use crate::core::tree::ViewId;
 use crate::core::ui::Ui;
@@ -18,7 +19,6 @@ use crate::core::window::{WindowId, WindowKind};
 use crate::geom::{Corners, Insets, Point, Rect, Size};
 use crate::render::path::Path;
 use crate::shape::{AMALFI_SMOOTHING, Shape, smooth_rect_path};
-use crate::style::Style;
 
 /// Fixed measures of the kit.
 pub mod metrics {
@@ -141,6 +141,39 @@ impl PopoverShape {
         })
     }
 
+    /// The body and the arrow in `rect` as the compositor draws them (`None` when detached).
+    pub fn glass_tip(&self, rect: Rect) -> Option<GlassTip> {
+        let edge = self.edge?;
+        let apex = self.tip(rect)?;
+        let body = self.body(rect);
+        let base = 2.0 * (metrics::ARROW_HALF_BASE + metrics::ARROW_BASE_RADIUS);
+        let depth = metrics::ARROW_DEPTH;
+        let (tip, side) = match edge {
+            Edge::Top => (
+                Rect::new(apex.x - base / 2.0, rect.y, base, depth),
+                TipSide::Up,
+            ),
+            Edge::Bottom => (
+                Rect::new(apex.x - base / 2.0, body.bottom(), base, depth),
+                TipSide::Down,
+            ),
+            Edge::Leading => (
+                Rect::new(rect.x, apex.y - base / 2.0, depth, base),
+                TipSide::Left,
+            ),
+            Edge::Trailing => (
+                Rect::new(body.right(), apex.y - base / 2.0, depth, base),
+                TipSide::Right,
+            ),
+        };
+        Some(GlassTip {
+            body,
+            radius: metrics::RADIUS,
+            rect: tip,
+            side,
+        })
+    }
+
     /// The outline in `rect`: one outline for the body and the arrow, the same as a
     /// callout's (ui-kit's SPopover draws through SCallout).
     pub fn path(&self, rect: Rect) -> Path {
@@ -231,18 +264,28 @@ impl Widget for Popover {
     }
 
     fn paint(&mut self, cx: &mut PaintCx<'_>) {
-        let theme = *cx.theme();
         let r = cx.bounds();
         let local = Rect::from_size(r.size());
         let path = self.shape.path(local);
-        let style: Style = theme.material_style("Glass/Regular");
+        let profile = GlassProfile::Popover;
         // Detached: the plain smooth rectangle (the arrowless path is the same outline).
-        let shape = if self.shape.edge.is_some() {
-            Shape::Path(path)
-        } else {
-            Shape::rounded(metrics::RADIUS)
-        };
-        cx.rec.layer(self.layer_name(), r, shape, style);
+        match self.shape.glass_tip(r) {
+            Some(tip) => cx.tipped_glass(
+                self.layer_name(),
+                r,
+                Shape::Path(path),
+                "Glass/Regular",
+                profile,
+                tip,
+            ),
+            None => cx.glass(
+                self.layer_name(),
+                r,
+                Shape::rounded(metrics::RADIUS),
+                "Glass/Regular",
+                profile,
+            ),
+        }
     }
 
     fn set_prop(&mut self, _prop: Prop, _value: &Value) -> PropChange {
@@ -477,5 +520,70 @@ mod tests {
         ui.key(popup, KeyEvent::press(Key::Escape, Mods::empty()));
         ui.advance(1.0);
         assert!(ui.window(popup).is_none());
+    }
+
+    #[test]
+    fn whoever_opened_a_popover_hears_it_close() {
+        use crate::core::event::{Key, KeyEvent, Mods};
+        use crate::core::value::Signal;
+        use std::cell::Cell;
+        use std::rc::Rc;
+        let (mut ui, win) = parent();
+        let anchor = Rect::new(100.0, 40.0, 40.0, 20.0);
+        let open = |ui: &mut Ui| {
+            let content = ui.create(Text::new("Hello"));
+            let popup = present(ui, win, anchor, content, Side::Below, 16.0);
+            let root = ui.window(popup).map(|w| w.root).expect("popup window");
+            (popup, root, content)
+        };
+        let closed = Rc::new(Cell::new(0));
+        // Escape (the popover fades, then goes), then the compositor's dismissal (a click
+        // outside the app closes the surface at once).
+        let (popup, root, content) = open(&mut ui);
+        let c = closed.clone();
+        ui.connect(root, Signal::Closed, move |_, _, _| c.set(c.get() + 1));
+        ui.set_focus(content, true);
+        ui.key(popup, KeyEvent::press(Key::Escape, Mods::empty()));
+        ui.advance(1.0);
+        assert_eq!(closed.get(), 1);
+        let (popup, root, _) = open(&mut ui);
+        let c = closed.clone();
+        ui.connect(root, Signal::Closed, move |_, _, _| c.set(c.get() + 1));
+        ui.close_window(popup);
+        ui.close_window(popup);
+        assert_eq!(closed.get(), 2);
+    }
+
+    #[test]
+    fn the_compositor_gets_the_body_and_the_arrow() {
+        use crate::core::display::{GlassProfile, TipSide};
+        let (mut ui, win) = parent();
+        ui.compositor_glass_available = true;
+        let content = ui.create(Text::new("Hello"));
+        let anchor = Rect::new(100.0, 40.0, 40.0, 20.0);
+        let popup = present(&mut ui, win, anchor, content, Side::Below, 16.0);
+        ui.prepare_frame(popup);
+        let regions = ui.glass_regions(popup);
+        assert_eq!(regions.len(), 1, "{regions:?}");
+        let r = regions[0];
+        assert_eq!(r.profile, GlassProfile::Popover);
+        assert_eq!(r.radius, metrics::RADIUS);
+        let Some((tip, side)) = r.tip else {
+            panic!("no tip: {r:?}");
+        };
+        assert_eq!(side, TipSide::Up);
+        // The arrow sits on the body's top edge and points at the anchor's centre.
+        assert_eq!(tip.bottom(), r.rect.y);
+        assert_eq!(tip.height, metrics::ARROW_DEPTH);
+        let size = ui.window(popup).map(|w| w.size).unwrap_or_default();
+        let WindowKind::Popup { anchor: at, .. } = ui
+            .window(popup)
+            .map(|w| w.kind.clone())
+            .unwrap_or(WindowKind::Normal)
+        else {
+            panic!("not a popup");
+        };
+        assert_eq!(r.rect.height, size.height - metrics::ARROW_DEPTH);
+        assert!((at.x + tip.center().x - anchor.center().x).abs() < 1.0);
     }
 }

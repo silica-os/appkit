@@ -77,7 +77,8 @@ pub enum WindowKind {
     Popup {
         /// The parent.
         parent: WindowId,
-        /// The anchor rectangle in the parent's coordinates.
+        /// Where the popup goes: its own frame in the parent's coordinates (placed by the
+        /// widget that opens it, arrow and clamping included).
         anchor: Rect,
         /// Takes a grab (closes on a click outside).
         grab: bool,
